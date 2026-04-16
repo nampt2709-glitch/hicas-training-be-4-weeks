@@ -1,0 +1,49 @@
+================================================================================
+  FILE: LogAnalyzer/LogGenerator.cs
+  MỤC ĐÍCH: Tạo file log GIẢ (dữ liệu mẫu) rất lớn để thử phân tích và benchmark
+================================================================================
+
+TẠI SAO CÓ FILE NÀY?
+  Để test hiệu năng cần file hàng triệu dòng. LogGenerator sinh file với định
+  dạng cố định: timestamp, [ERROR], một tên lỗi trong ErrorCatalog (chọn ngẫu
+  nhiên), thêm Module và Code cho giống log thật.
+
+  Tên file luôn có "ErrorLog" -> Analyzer.DetectMode sẽ chọn chế độ Error.
+
+
+--------------------------------------------------------------------------------
+CLASS: LogGenerator (static)
+--------------------------------------------------------------------------------
+
+  PHƯƠNG THỨC: Generate(lineCount, selectedTypeCount, progress)
+
+  THAM SỐ:
+  - lineCount: số dòng cần ghi (mặc định 1_000_000).
+  - selectedTypeCount: số LOẠI lỗi khác nhau sẽ xuất hiện ngẫu nhiên (lấy mẫu
+    từ 200 term trong ErrorCatalog).
+  - progress: hàm callback - gọi theo tiến độ (~5%) để in console.
+
+  KIỂM TRA ĐẦU VÀO: lineCount và selectedTypeCount phải > 0.
+
+  ĐƯỜNG DẪN: thư mục Logs cạnh executable.
+  Tên file: ErrorLog_yyyyMMdd_HHmmss_fff.log
+
+  CHUẨN BỊ:
+  - selectedTypes = ErrorCatalog.GetRandomSample(selectedTypeCount).
+  - modules: mảng tên module cố định (Auth, Api, ...) chỉ để trang trí.
+
+  GHI FILE:
+  - FileStream buffer ~1MB, StreamWriter UTF-8.
+
+  VÒNG LẶP: mỗi i là một dòng
+  - timestamp tăng theo i (baseTime + i ms).
+  - errorType ngẫu nhiên từ selectedTypes.
+  - Định dạng: yyyyMMdd HH:mm:ss.fff [ERROR] <lỗi> Module=... Code=...
+
+  TRẢ VỀ: đường dẫn file .log vừa tạo.
+
+LIÊN KẾT
+  ErrorCatalog: 200 thuật ngữ và GetRandomSample.
+  Analyzer.ExtractErrorTerms nhận diện token trùng catalog trong file này.
+
+================================================================================

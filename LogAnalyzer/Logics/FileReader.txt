@@ -1,0 +1,34 @@
+================================================================================
+  FILE: LogAnalyzer/FileReader.cs
+  MỤC ĐÍCH: Đọc toàn bộ nội dung một file văn bản vào bộ nhớ (một string)
+================================================================================
+
+TẠI SAO CÓ FILE NÀY?
+  Chương trình phân tích log đọc HẾT file một lần thành một chuỗi lớn, rồi dùng
+  Regex và thuật toán đếm trên chuỗi đó. FileReader là "lớp bọc" quanh hàm có sẵn của .NET để:
+  - Tách riêng xử lý I/O (đọc đĩa).
+  - So sánh hai kiểu đọc: đồng bộ vs bất đồng bộ trong benchmark.
+
+
+--------------------------------------------------------------------------------
+CLASS: FileReader (static - gọi thẳng FileReader.Read...)
+--------------------------------------------------------------------------------
+
+ PHƯƠNG THỨC: ReadSync(string path)
+  - Đầu vào: đường dẫn file (path).
+  - Đầu ra: toàn bộ nội dung file dạng string.
+  - Cách hoạt động: gọi File.ReadAllText(path).
+  - "Đồng bộ": luồng đang chạy phải CHỜ đọc xong mới chạy tiếp lệnh sau.
+
+
+ PHƯƠNG THỨC: ReadAsync(string path)
+  - Đầu vào: path.
+  - Đầu ra: Task<string> - hứa sẽ có chuỗi khi đọc xong.
+  - Cách hoạt động: gọi File.ReadAllTextAsync(path).
+  - Trong project: dùng để SO SÁNH thời gian với ReadSync trong BenchmarkRunner.
+
+
+LIÊN KẾT
+  BenchmarkRunner gọi FileReader trước khi Analyzer/Counter xử lý.
+
+================================================================================
