@@ -1,12 +1,12 @@
-using CommentAPI.DTOs.Posts;
+using CommentAPI.DTOs;
 
-namespace CommentAPI.Services;
+namespace CommentAPI.Interfaces;
 
 public interface IPostService
 {
     Task<List<PostDto>> GetAllAsync();
     Task<PostDto?> GetByIdAsync(Guid id);
-    Task<PostDto> CreateAsync(CreatePostDto dto);
+    Task<PostDto?> CreateAsync(CreatePostDto dto);
     Task<bool> UpdateAsync(Guid id, UpdatePostDto dto);
     Task<bool> DeleteAsync(Guid id);
 }

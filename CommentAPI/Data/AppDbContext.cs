@@ -1,11 +1,15 @@
 using CommentAPI.Entities;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
-namespace CommentAPI.Infrastructure;
+namespace CommentAPI.Data;
 
-public class AppDbContext : DbContext
+/// <summary>
+/// DbContext Identity + nghiệp vụ: bảng Users (ASP.NET Identity), Posts, Comments.
+/// </summary>
+public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
 {
-    public DbSet<User> Users => Set<User>();
     public DbSet<Post> Posts => Set<Post>();
     public DbSet<Comment> Comments => Set<Comment>();
 
@@ -17,9 +21,10 @@ public class AppDbContext : DbContext
     {
         base.OnModelCreating(modelBuilder);
 
+        // Giữ tên bảng Users cho thực thể Identity User.
         modelBuilder.Entity<User>(entity =>
         {
-            entity.HasKey(x => x.Id);
+            entity.ToTable("Users");
             entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
             entity.Property(x => x.CreatedAt).IsRequired();
         });

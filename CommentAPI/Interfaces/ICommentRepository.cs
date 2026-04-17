@@ -1,7 +1,7 @@
-using CommentAPI.DTOs.Comments;
+using CommentAPI.DTOs;
 using CommentAPI.Entities;
 
-namespace CommentAPI.Repositories;
+namespace CommentAPI.Interfaces;
 
 public interface ICommentRepository
 {
@@ -16,5 +16,9 @@ public interface ICommentRepository
     Task<bool> UserExistsAsync(Guid userId);
     Task<bool> ParentExistsAsync(Guid parentId, Guid postId);
     Task<List<CommentFlatDto>> GetTreeRowsByCteAsync(Guid postId);
+
+    /// <summary>CTE đệ quy trên toàn bộ comment (mọi post); join ParentId kèm PostId.</summary>
+    Task<List<CommentFlatDto>> GetTreeRowsByCteAllAsync();
+
     Task SaveChangesAsync();
 }

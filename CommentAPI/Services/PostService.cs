@@ -1,7 +1,7 @@
 using AutoMapper;
-using CommentAPI.DTOs.Posts;
+using CommentAPI.DTOs;
 using CommentAPI.Entities;
-using CommentAPI.Repositories;
+using CommentAPI.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace CommentAPI.Services;
@@ -9,11 +9,13 @@ namespace CommentAPI.Services;
 public class PostService : IPostService
 {
     private readonly IPostRepository _repository;
+    private readonly IUserRepository _userRepository;
     private readonly IMapper _mapper;
 
-    public PostService(IPostRepository repository, IMapper mapper)
+    public PostService(IPostRepository repository, IUserRepository userRepository, IMapper mapper)
     {
         _repository = repository;
+        _userRepository = userRepository;
         _mapper = mapper;
     }
 
@@ -29,8 +31,13 @@ public class PostService : IPostService
         return entity is null ? null : _mapper.Map<PostDto>(entity);
     }
 
-    public async Task<PostDto> CreateAsync(CreatePostDto dto)
+    public async Task<PostDto?> CreateAsync(CreatePostDto dto)
     {
+        if (!await _userRepository.ExistsAsync(dto.UserId))
+        {
+            return null;
+        }
+
         var entity = _mapper.Map<Post>(dto);
         entity.Id = Guid.NewGuid();
 

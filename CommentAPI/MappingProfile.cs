@@ -1,17 +1,14 @@
 using AutoMapper;
-using CommentAPI.DTOs.Comments;
-using CommentAPI.DTOs.Posts;
-using CommentAPI.DTOs.Users;
+using CommentAPI.DTOs;
 using CommentAPI.Entities;
 
-namespace CommentAPI.Mappings;
+namespace CommentAPI;
 
 public class MappingProfile : Profile
 {
     public MappingProfile()
     {
         CreateMap<User, UserDto>();
-        CreateMap<CreateUserDto, User>();
         CreateMap<UpdateUserDto, User>();
 
         CreateMap<Post, PostDto>();

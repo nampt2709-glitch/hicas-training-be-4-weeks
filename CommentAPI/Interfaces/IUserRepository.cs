@@ -1,6 +1,6 @@
 using CommentAPI.Entities;
 
-namespace CommentAPI.Repositories;
+namespace CommentAPI.Interfaces;
 
 public interface IUserRepository
 {

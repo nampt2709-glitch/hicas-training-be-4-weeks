@@ -1,7 +1,7 @@
 using AutoMapper;
-using CommentAPI.DTOs.Comments;
+using CommentAPI.DTOs;
 using CommentAPI.Entities;
-using CommentAPI.Repositories;
+using CommentAPI.Interfaces;
 
 namespace CommentAPI.Services;
 
@@ -67,6 +67,11 @@ public class CommentService : ICommentService
             return false;
         }
 
+        if (!await _repository.PostExistsAsync(entity.PostId))
+        {
+            return false;
+        }
+
         entity.Content = dto.Content;
         _repository.Update(entity);
         await _repository.SaveChangesAsync();
@@ -77,6 +82,11 @@ public class CommentService : ICommentService
     {
         var entity = await _repository.GetByIdAsync(id);
         if (entity is null)
+        {
+            return false;
+        }
+
+        if (!await _repository.PostExistsAsync(entity.PostId))
         {
             return false;
         }
@@ -110,24 +120,112 @@ public class CommentService : ICommentService
         return true;
     }
 
-    public async Task<List<CommentDto>> GetFlatByPostIdAsync(Guid postId)
+    public async Task<List<CommentDto>?> GetFlatByPostIdAsync(Guid postId)
     {
+        if (!await _repository.PostExistsAsync(postId))
+        {
+            return null;
+        }
+
         var entities = await _repository.GetByPostIdAsync(postId);
         return entities.Select(_mapper.Map<CommentDto>).ToList();
     }
 
-    public async Task<List<CommentTreeDto>> GetTreeByPostIdAsync(Guid postId)
+    public async Task<List<CommentTreeDto>?> GetTreeByPostIdAsync(Guid postId)
     {
+        if (!await _repository.PostExistsAsync(postId))
+        {
+            return null;
+        }
+
         var flat = await _repository.GetByPostIdAsync(postId);
-        return BuildTree(flat);
+        return BuildTreeFromComments(flat);
     }
 
-    public async Task<List<CommentFlatDto>> GetTreeByPostIdCteAsync(Guid postId)
+    public async Task<List<CommentFlatDto>?> GetCteFlatByPostIdAsync(Guid postId)
     {
+        if (!await _repository.PostExistsAsync(postId))
+        {
+            return null;
+        }
+
         return await _repository.GetTreeRowsByCteAsync(postId);
     }
 
-    private static List<CommentTreeDto> BuildTree(List<Comment> comments)
+    public async Task<List<CommentTreeDto>?> GetCteTreeByPostIdAsync(Guid postId)
+    {
+        if (!await _repository.PostExistsAsync(postId))
+        {
+            return null;
+        }
+
+        var flat = await _repository.GetTreeRowsByCteAsync(postId);
+        return BuildTreeFromFlatDtosForOnePost(flat);
+    }
+
+    public async Task<List<CommentDto>> GetAllFlatAsync()
+    {
+        // All comments via EF, stable order: PostId, then CreatedAt, then Id.
+        var entities = await _repository.GetAllAsync();
+        return entities
+            .OrderBy(x => x.PostId)
+            .ThenBy(x => x.CreatedAt)
+            .ThenBy(x => x.Id)
+            .Select(_mapper.Map<CommentDto>)
+            .ToList();
+    }
+
+    public async Task<List<CommentTreeDto>> GetAllTreeAsync()
+    {
+        // One tree per post; concatenate roots into a single forest list.
+        var entities = await _repository.GetAllAsync();
+        return BuildForestFromComments(entities);
+    }
+
+    public async Task<List<CommentFlatDto>> GetAllCteFlatAsync()
+    {
+        // Global CTE: flat rows with Level; SQL orders by PostId first.
+        return await _repository.GetTreeRowsByCteAllAsync();
+    }
+
+    public async Task<List<CommentTreeDto>> GetAllCteTreeAsync()
+    {
+        var flat = await _repository.GetTreeRowsByCteAllAsync();
+        return BuildForestFromFlatDtos(flat);
+    }
+
+    public async Task<List<CommentFlatDto>> GetFlattenedFromEfAsync()
+    {
+        // Build forest from EF, then preorder DFS flatten with Level (unroll recursion in memory).
+        var forest = await GetAllTreeAsync();
+        return FlattenForestPreorder(forest);
+    }
+
+    public async Task<List<CommentFlatDto>> GetFlattenedFromCteAsync()
+    {
+        // Same as global CTE flat: SQL already returns depth-first flat rows with Level.
+        return await _repository.GetTreeRowsByCteAllAsync();
+    }
+
+    private static List<CommentTreeDto> BuildForestFromComments(List<Comment> comments)
+    {
+        return comments
+            .GroupBy(c => c.PostId)
+            .OrderBy(g => g.Key)
+            .SelectMany(g => BuildTreeFromComments(g.ToList()))
+            .ToList();
+    }
+
+    private static List<CommentTreeDto> BuildForestFromFlatDtos(List<CommentFlatDto> rows)
+    {
+        return rows
+            .GroupBy(r => r.PostId)
+            .OrderBy(g => g.Key)
+            .SelectMany(g => BuildTreeFromFlatDtosForOnePost(g.ToList()))
+            .ToList();
+    }
+
+    private static List<CommentTreeDto> BuildTreeFromComments(List<Comment> comments)
     {
         var lookup = comments.ToDictionary(
             x => x.Id,
@@ -136,6 +234,7 @@ public class CommentService : ICommentService
                 Id = x.Id,
                 Content = x.Content,
                 CreatedAt = x.CreatedAt,
+                PostId = x.PostId,
                 ParentId = x.ParentId
             });
 
@@ -157,7 +256,7 @@ public class CommentService : ICommentService
                 continue;
             }
 
-            if (CreatesCycle(comment.Id, comments))
+            if (CreatesCycleFromComments(comment.Id, comments))
             {
                 roots.Add(node);
                 continue;
@@ -169,7 +268,7 @@ public class CommentService : ICommentService
         return roots;
     }
 
-    private static bool CreatesCycle(Guid commentId, List<Comment> comments)
+    private static bool CreatesCycleFromComments(Guid commentId, List<Comment> comments)
     {
         var map = comments.ToDictionary(x => x.Id, x => x);
         var visited = new HashSet<Guid>();
@@ -193,6 +292,115 @@ public class CommentService : ICommentService
             }
 
             currentParentId = current.ParentId;
+        }
+
+        return false;
+    }
+
+    private static List<CommentTreeDto> BuildTreeFromFlatDtosForOnePost(List<CommentFlatDto> rows)
+    {
+        var lookup = rows.ToDictionary(
+            x => x.Id,
+            x => new CommentTreeDto
+            {
+                Id = x.Id,
+                Content = x.Content,
+                CreatedAt = x.CreatedAt,
+                PostId = x.PostId,
+                ParentId = x.ParentId
+            });
+
+        var roots = new List<CommentTreeDto>();
+
+        foreach (var row in rows.OrderBy(x => x.Level).ThenBy(x => x.CreatedAt).ThenBy(x => x.Id))
+        {
+            var node = lookup[row.Id];
+
+            if (row.ParentId is null)
+            {
+                roots.Add(node);
+                continue;
+            }
+
+            if (!lookup.TryGetValue(row.ParentId.Value, out var parent))
+            {
+                roots.Add(node);
+                continue;
+            }
+
+            if (CreatesCycleFromFlatRows(row.Id, rows))
+            {
+                roots.Add(node);
+                continue;
+            }
+
+            parent.Children.Add(node);
+        }
+
+        return roots;
+    }
+
+    private static List<CommentFlatDto> FlattenForestPreorder(List<CommentTreeDto> roots)
+    {
+        var result = new List<CommentFlatDto>();
+        foreach (var root in roots
+                     .OrderBy(r => r.PostId)
+                     .ThenBy(r => r.CreatedAt)
+                     .ThenBy(r => r.Id))
+        {
+            VisitPreorder(root, 0, result);
+        }
+
+        return result;
+    }
+
+    private static void VisitPreorder(CommentTreeDto node, int level, List<CommentFlatDto> sink)
+    {
+        sink.Add(new CommentFlatDto
+        {
+            Id = node.Id,
+            Content = node.Content,
+            CreatedAt = node.CreatedAt,
+            PostId = node.PostId,
+            ParentId = node.ParentId,
+            Level = level
+        });
+
+        foreach (var child in node.Children.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id))
+        {
+            VisitPreorder(child, level + 1, sink);
+        }
+    }
+
+    private static bool CreatesCycleFromFlatRows(Guid commentId, List<CommentFlatDto> rows)
+    {
+        var parentById = rows.ToDictionary(x => x.Id, x => x.ParentId);
+        if (!parentById.ContainsKey(commentId))
+        {
+            return false;
+        }
+
+        var visited = new HashSet<Guid>();
+        Guid? parentId = parentById[commentId];
+
+        while (parentId is not null)
+        {
+            if (parentId == commentId)
+            {
+                return true;
+            }
+
+            if (!visited.Add(parentId.Value))
+            {
+                return true;
+            }
+
+            if (!parentById.TryGetValue(parentId.Value, out var nextParent))
+            {
+                return false;
+            }
+
+            parentId = nextParent;
         }
 
         return false;

@@ -1,4 +1,4 @@
-namespace CommentAPI.DTOs.Posts;
+namespace CommentAPI.DTOs;
 
 public class CreatePostDto
 {

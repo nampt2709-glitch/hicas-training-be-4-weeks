@@ -1,5 +1,6 @@
 using CommentAPI.Entities;
-using CommentAPI.Infrastructure;
+using CommentAPI.Interfaces;
+using CommentAPI.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace CommentAPI.Repositories;
