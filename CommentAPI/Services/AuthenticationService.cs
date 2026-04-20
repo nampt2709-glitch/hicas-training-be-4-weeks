@@ -5,6 +5,7 @@ using CommentAPI;
 using CommentAPI.DTOs;
 using CommentAPI.Entities;
 using CommentAPI.Interfaces;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
@@ -25,48 +26,66 @@ public class AuthenticationService : IAuthenticationService
         _jwt = jwtOptions.Value;
     }
 
-    public async Task<TokenResponseDto?> LoginAsync(LoginRequestDto request, CancellationToken cancellationToken = default)
+    public async Task<TokenResponseDto> LoginAsync(LoginRequestDto request, CancellationToken cancellationToken = default)
     {
         var user = await _authRepository.GetByUserNameAsync(request.UserName, cancellationToken);
         if (user is null)
         {
-            return null;
+            throw new ApiException(
+                StatusCodes.Status401Unauthorized,
+                ApiErrorCodes.LoginFailed,
+                ApiMessages.LoginFailed);
         }
 
         if (!await _authRepository.ValidatePasswordAsync(user, request.Password, cancellationToken))
         {
-            return null;
+            throw new ApiException(
+                StatusCodes.Status401Unauthorized,
+                ApiErrorCodes.LoginFailed,
+                ApiMessages.LoginFailed);
         }
 
         var roles = await _authRepository.GetRoleNamesAsync(user, cancellationToken);
         return await CreateTokenPairAsync(user, roles, cancellationToken);
     }
 
-    public async Task<TokenResponseDto?> RefreshAsync(RefreshRequestDto request, CancellationToken cancellationToken = default)
+    public async Task<TokenResponseDto> RefreshAsync(RefreshRequestDto request, CancellationToken cancellationToken = default)
     {
         var principal = ValidateRefreshTokenPrincipal(request.RefreshToken);
         if (principal is null)
         {
-            return null;
+            throw new ApiException(
+                StatusCodes.Status401Unauthorized,
+                ApiErrorCodes.RefreshFailed,
+                ApiMessages.RefreshFailed);
         }
 
         var sub = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
         if (sub is null || !Guid.TryParse(sub, out var userId))
         {
-            return null;
+            throw new ApiException(
+                StatusCodes.Status401Unauthorized,
+                ApiErrorCodes.RefreshFailed,
+                ApiMessages.RefreshFailed);
         }
 
         var user = await _authRepository.GetByIdAsync(userId, cancellationToken);
         if (user is null)
         {
-            return null;
+            throw new ApiException(
+                StatusCodes.Status401Unauthorized,
+                ApiErrorCodes.RefreshFailed,
+                ApiMessages.RefreshFailed);
         }
 
         var stampInToken = principal.FindFirstValue(JwtOptions.SecurityStampClaimType);
         var currentStamp = await _authRepository.GetSecurityStampAsync(user, cancellationToken);
         if (string.IsNullOrEmpty(stampInToken) || stampInToken != currentStamp)
         {
-            return null;
+            throw new ApiException(
+                StatusCodes.Status401Unauthorized,
+                ApiErrorCodes.RefreshFailed,
+                ApiMessages.RefreshFailed);
         }
 
         var roles = await _authRepository.GetRoleNamesAsync(user, cancellationToken);
@@ -87,8 +106,10 @@ public class AuthenticationService : IAuthenticationService
         var stamp = await _authRepository.GetSecurityStampAsync(user, cancellationToken);
         if (string.IsNullOrEmpty(stamp))
         {
-            throw new InvalidOperationException(
-                "Cannot issue tokens: the account is missing session information (security stamp).");
+            throw new ApiException(
+                StatusCodes.Status500InternalServerError,
+                ApiErrorCodes.TokenIssueFailed,
+                ApiMessages.TokenIssueFailed);
         }
 
         var accessExpires = DateTime.UtcNow.AddMinutes(_jwt.AccessTokenMinutes);

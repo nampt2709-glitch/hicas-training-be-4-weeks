@@ -1,7 +1,9 @@
 using AutoMapper;
+using CommentAPI;
 using CommentAPI.DTOs;
 using CommentAPI.Entities;
 using CommentAPI.Interfaces;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 
 namespace CommentAPI.Services;
@@ -31,17 +33,28 @@ public class UserService : IUserService
         return list;
     }
 
-    public async Task<UserDto?> GetByIdAsync(Guid id)
+    public async Task<UserDto> GetByIdAsync(Guid id)
     {
         var entity = await _repository.GetByIdAsync(id);
-        return entity is null ? null : await MapToDtoAsync(entity);
+        if (entity is null)
+        {
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.UserNotFound,
+                ApiMessages.UserNotFound);
+        }
+
+        return await MapToDtoAsync(entity);
     }
 
-    public async Task<UserDto?> CreateAsync(CreateUserDto dto)
+    public async Task<UserDto> CreateAsync(CreateUserDto dto)
     {
         if (await _userManager.FindByNameAsync(dto.UserName) != null)
         {
-            return null;
+            throw new ApiException(
+                StatusCodes.Status409Conflict,
+                ApiErrorCodes.UserNameConflict,
+                ApiMessages.UserNameTaken);
         }
 
         var email = string.IsNullOrWhiteSpace(dto.Email)
@@ -61,37 +74,53 @@ public class UserService : IUserService
         var result = await _userManager.CreateAsync(entity, dto.Password);
         if (!result.Succeeded)
         {
-            throw new InvalidOperationException(string.Join(" ", result.Errors.Select(e => e.Description)));
+            var detail = string.Join(" ", result.Errors.Select(e => e.Description));
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                ApiErrorCodes.UserCreateFailed,
+                string.IsNullOrWhiteSpace(detail) ? ApiMessages.UserCreateFailed : detail);
         }
 
         await _userManager.AddToRoleAsync(entity, "User");
         return await MapToDtoAsync(entity);
     }
 
-    public async Task<bool> UpdateAsync(Guid id, UpdateUserDto dto)
+    public async Task UpdateAsync(Guid id, UpdateUserDto dto)
     {
         var entity = await _repository.GetByIdAsync(id);
         if (entity is null)
         {
-            return false;
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.UserNotFound,
+                ApiMessages.UserNotFound);
         }
 
         entity.Name = dto.Name;
         _repository.Update(entity);
         await _repository.SaveChangesAsync();
-        return true;
     }
 
-    public async Task<bool> DeleteAsync(Guid id)
+    public async Task DeleteAsync(Guid id)
     {
         var entity = await _repository.GetByIdAsync(id);
         if (entity is null)
         {
-            return false;
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.UserNotFound,
+                ApiMessages.UserNotFound);
         }
 
         var result = await _userManager.DeleteAsync(entity);
-        return result.Succeeded;
+        if (!result.Succeeded)
+        {
+            var detail = string.Join(" ", result.Errors.Select(e => e.Description));
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                ApiErrorCodes.UserDeleteFailed,
+                string.IsNullOrWhiteSpace(detail) ? ApiMessages.UserDeleteFailed : detail);
+        }
     }
 
     private async Task<UserDto> MapToDtoAsync(User entity)

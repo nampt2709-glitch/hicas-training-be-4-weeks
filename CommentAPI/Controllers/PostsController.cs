@@ -31,7 +31,7 @@ public class PostsController : ControllerBase
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await _service.GetByIdAsync(id);
-        return result is null ? NotFound() : Ok(new { message = ApiMessages.PostGetSuccess, data = result });
+        return Ok(new { message = ApiMessages.PostGetSuccess, data = result });
     }
 
     [HttpPost]
@@ -39,11 +39,6 @@ public class PostsController : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreatePostDto dto)
     {
         var result = await _service.CreateAsync(dto);
-        if (result is null)
-        {
-            return BadRequest(new { code = ApiErrorCodes.UserNotFound, message = ApiMessages.UserNotFoundMessage });
-        }
-
         return CreatedAtAction(
             nameof(GetById),
             new { id = result.Id },
@@ -54,15 +49,15 @@ public class PostsController : ControllerBase
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdatePostDto dto)
     {
-        var updated = await _service.UpdateAsync(id, dto);
-        return updated ? Ok(new { message = ApiMessages.PostUpdateSuccess }) : NotFound();
+        await _service.UpdateAsync(id, dto);
+        return Ok(new { message = ApiMessages.PostUpdateSuccess });
     }
 
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = "Admin")]
     public async Task<IActionResult> Delete(Guid id)
     {
-        var deleted = await _service.DeleteAsync(id);
-        return deleted ? Ok(new { message = ApiMessages.PostDeleteSuccess }) : NotFound();
+        await _service.DeleteAsync(id);
+        return Ok(new { message = ApiMessages.PostDeleteSuccess });
     }
 }

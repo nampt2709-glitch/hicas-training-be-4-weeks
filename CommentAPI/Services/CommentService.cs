@@ -1,7 +1,9 @@
 using AutoMapper;
+using CommentAPI;
 using CommentAPI.DTOs;
 using CommentAPI.Entities;
 using CommentAPI.Interfaces;
+using Microsoft.AspNetCore.Http;
 
 namespace CommentAPI.Services;
 
@@ -22,22 +24,36 @@ public class CommentService : ICommentService
         return entities.Select(_mapper.Map<CommentDto>).ToList();
     }
 
-    public async Task<CommentDto?> GetByIdAsync(Guid id)
+    public async Task<CommentDto> GetByIdAsync(Guid id)
     {
         var entity = await _repository.GetByIdAsync(id);
-        return entity is null ? null : _mapper.Map<CommentDto>(entity);
+        if (entity is null)
+        {
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.CommentNotFound,
+                ApiMessages.CommentNotFound);
+        }
+
+        return _mapper.Map<CommentDto>(entity);
     }
 
-    public async Task<CommentDto?> CreateAsync(CreateCommentDto dto)
+    public async Task<CommentDto> CreateAsync(CreateCommentDto dto)
     {
         if (!await _repository.PostExistsAsync(dto.PostId))
         {
-            return null;
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.PostNotFound,
+                ApiMessages.PostNotFound);
         }
 
         if (!await _repository.UserExistsAsync(dto.UserId))
         {
-            return null;
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.UserNotFound,
+                ApiMessages.UserNotFound);
         }
 
         if (dto.ParentId is not null)
@@ -45,7 +61,10 @@ public class CommentService : ICommentService
             var parentExists = await _repository.ParentExistsAsync(dto.ParentId.Value, dto.PostId);
             if (!parentExists)
             {
-                return null;
+                throw new ApiException(
+                    StatusCodes.Status400BadRequest,
+                    ApiErrorCodes.CommentParentInvalid,
+                    ApiMessages.CommentParentInvalid);
             }
         }
 
@@ -59,36 +78,47 @@ public class CommentService : ICommentService
         return _mapper.Map<CommentDto>(entity);
     }
 
-    public async Task<bool> UpdateAsync(Guid id, UpdateCommentDto dto)
+    public async Task UpdateAsync(Guid id, UpdateCommentDto dto)
     {
         var entity = await _repository.GetByIdAsync(id);
         if (entity is null)
         {
-            return false;
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.CommentNotFound,
+                ApiMessages.CommentNotFound);
         }
 
         if (!await _repository.PostExistsAsync(entity.PostId))
         {
-            return false;
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.PostNotFound,
+                ApiMessages.PostNotFound);
         }
 
         entity.Content = dto.Content;
         _repository.Update(entity);
         await _repository.SaveChangesAsync();
-        return true;
     }
 
-    public async Task<bool> DeleteAsync(Guid id)
+    public async Task DeleteAsync(Guid id)
     {
         var entity = await _repository.GetByIdAsync(id);
         if (entity is null)
         {
-            return false;
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.CommentNotFound,
+                ApiMessages.CommentNotFound);
         }
 
         if (!await _repository.PostExistsAsync(entity.PostId))
         {
-            return false;
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.PostNotFound,
+                ApiMessages.PostNotFound);
         }
 
         var allCommentsInPost = await _repository.GetByPostIdAsync(entity.PostId);
@@ -117,55 +147,37 @@ public class CommentService : ICommentService
         }
 
         await _repository.SaveChangesAsync();
-        return true;
     }
 
-    public async Task<List<CommentDto>?> GetFlatByPostIdAsync(Guid postId)
+    public async Task<List<CommentDto>> GetFlatByPostIdAsync(Guid postId)
     {
-        if (!await _repository.PostExistsAsync(postId))
-        {
-            return null;
-        }
-
+        await EnsurePostExistsAsync(postId);
         var entities = await _repository.GetByPostIdAsync(postId);
         return entities.Select(_mapper.Map<CommentDto>).ToList();
     }
 
-    public async Task<List<CommentTreeDto>?> GetTreeByPostIdAsync(Guid postId)
+    public async Task<List<CommentTreeDto>> GetTreeByPostIdAsync(Guid postId)
     {
-        if (!await _repository.PostExistsAsync(postId))
-        {
-            return null;
-        }
-
+        await EnsurePostExistsAsync(postId);
         var flat = await _repository.GetByPostIdAsync(postId);
         return BuildTreeFromComments(flat);
     }
 
-    public async Task<List<CommentFlatDto>?> GetCteFlatByPostIdAsync(Guid postId)
+    public async Task<List<CommentFlatDto>> GetCteFlatByPostIdAsync(Guid postId)
     {
-        if (!await _repository.PostExistsAsync(postId))
-        {
-            return null;
-        }
-
+        await EnsurePostExistsAsync(postId);
         return await _repository.GetTreeRowsByCteAsync(postId);
     }
 
-    public async Task<List<CommentTreeDto>?> GetCteTreeByPostIdAsync(Guid postId)
+    public async Task<List<CommentTreeDto>> GetCteTreeByPostIdAsync(Guid postId)
     {
-        if (!await _repository.PostExistsAsync(postId))
-        {
-            return null;
-        }
-
+        await EnsurePostExistsAsync(postId);
         var flat = await _repository.GetTreeRowsByCteAsync(postId);
         return BuildTreeFromFlatDtosForOnePost(flat);
     }
 
     public async Task<List<CommentDto>> GetAllFlatAsync()
     {
-        // All comments via EF, stable order: PostId, then CreatedAt, then Id.
         var entities = await _repository.GetAllAsync();
         return entities
             .OrderBy(x => x.PostId)
@@ -177,14 +189,12 @@ public class CommentService : ICommentService
 
     public async Task<List<CommentTreeDto>> GetAllTreeAsync()
     {
-        // One tree per post; concatenate roots into a single forest list.
         var entities = await _repository.GetAllAsync();
         return BuildForestFromComments(entities);
     }
 
     public async Task<List<CommentFlatDto>> GetAllCteFlatAsync()
     {
-        // Global CTE: flat rows with Level; SQL orders by PostId first.
         return await _repository.GetTreeRowsByCteAllAsync();
     }
 
@@ -196,15 +206,35 @@ public class CommentService : ICommentService
 
     public async Task<List<CommentFlatDto>> GetFlattenedFromEfAsync()
     {
-        // Build forest from EF, then preorder DFS flatten with Level (unroll recursion in memory).
         var forest = await GetAllTreeAsync();
         return FlattenForestPreorder(forest);
     }
 
+    public Task<List<CommentFlatDto>> GetFlattenedForestAsync()
+    {
+        return GetFlattenedFromEfAsync();
+    }
+
+    public async Task<List<CommentFlatDto>> GetFlattenedTreeByPostIdAsync(Guid postId)
+    {
+        var tree = await GetTreeByPostIdAsync(postId);
+        return FlattenForestPreorder(tree);
+    }
+
     public async Task<List<CommentFlatDto>> GetFlattenedFromCteAsync()
     {
-        // Same as global CTE flat: SQL already returns depth-first flat rows with Level.
         return await _repository.GetTreeRowsByCteAllAsync();
+    }
+
+    private async Task EnsurePostExistsAsync(Guid postId)
+    {
+        if (!await _repository.PostExistsAsync(postId))
+        {
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.PostNotFound,
+                ApiMessages.PostNotFound);
+        }
     }
 
     private static List<CommentTreeDto> BuildForestFromComments(List<Comment> comments)
