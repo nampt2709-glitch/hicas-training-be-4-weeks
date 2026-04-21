@@ -23,6 +23,7 @@ public sealed class ForbiddenHandler : IAuthorizationMiddlewareResultHandler
             context.Response.Headers.Append(CorrelationMiddleware.HeaderName, correlationId);
             CorrelationMiddleware.AppendErrorSourceHeader(context,
                 $"{nameof(ForbiddenHandler)} (authorization policy forbids this request)");
+            CorrelationMiddleware.TryAppendSqlQueryCountHeader(context);
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             context.Response.ContentType = "application/json";
             await context.Response

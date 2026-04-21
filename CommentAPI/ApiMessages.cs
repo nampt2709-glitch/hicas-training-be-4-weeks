@@ -1,4 +1,4 @@
-﻿namespace CommentAPI;
+namespace CommentAPI;
 
 // =============================================================================
 // ApiMessages.cs — chuỗi JSON: thành công / lỗi khi client gọi API.
@@ -34,6 +34,7 @@ public static class ApiErrorCodes
     public const string UserDeleteFailed = "USER_DELETE_FAILED";
     public const string TokenIssueFailed = "TOKEN_ISSUE_FAILED";
     public const string RequestAborted = "REQUEST_ABORTED";
+    public const string SearchTermRequired = "SEARCH_TERM_REQUIRED";
 }
 
 #endregion
@@ -63,6 +64,8 @@ public static partial class ApiMessages
     public const string CommentCteFlatByPostSuccess = "Flat comments (CTE) for the post retrieved successfully.";
     public const string CommentTreeByPostSuccess = "Comment tree (from flat query) for the post retrieved successfully.";
     public const string CommentCteTreeByPostSuccess = "Comment tree (from CTE) for the post retrieved successfully.";
+    public const string CommentFlattenCteTreeByPostSuccess =
+        "Comment tree (CTE) for the post unrolled to a flat list (preorder DFS).";
     public const string CommentAllFlatSuccess = "All comments (flat, EF) retrieved successfully.";
     public const string CommentAllTreeSuccess = "All comments (tree, EF) retrieved successfully.";
     public const string CommentAllCteFlatSuccess = "All comments (flat, CTE) retrieved successfully.";
@@ -73,6 +76,40 @@ public static partial class ApiMessages
     public const string CommentFlattenTreeByPostSuccess =
         "Comment tree for the post unrolled to a flat list (EF + preorder DFS).";
     public const string CommentFlattenCteSuccess = "All comments flattened (CTE) retrieved successfully.";
+
+    public const string CommentDemoLazyLoadingSuccess =
+        "Comment demo: related data loaded via lazy loading (proxies on navigation access).";
+
+    public const string CommentDemoEagerLoadingSuccess =
+        "Comment demo: related data loaded via eager loading (Include / AsSplitQuery).";
+
+    public const string CommentDemoExplicitLoadingSuccess =
+        "Comment demo: related data loaded via explicit loading (Entry().Reference / Collection LoadAsync).";
+
+    public const string CommentDemoLazyLoadingListSuccess =
+        "Comments demo (paged): related data loaded via lazy loading per row (proxies).";
+
+    public const string CommentDemoEagerLoadingListSuccess =
+        "Comments demo (paged): related data loaded via eager loading (Include / AsSplitQuery).";
+
+    public const string CommentDemoExplicitLoadingListSuccess =
+        "Comments demo (paged): related data loaded via explicit loading per row (Entry LoadAsync).";
+
+    public const string CommentDemoProjectionSuccess =
+        "Comment demo: shape built in SQL via Select (projection), no navigation property load on client.";
+
+    public const string CommentDemoProjectionListSuccess =
+        "Comments demo (paged): rows built in SQL via Select (projection / server-side join).";
+
+    public const string UserSearchByNameSuccess = "Users matching the display name filter retrieved successfully.";
+    public const string UserSearchByUserNameSuccess = "Users matching the username filter retrieved successfully.";
+    public const string PostSearchByTitleSuccess = "Posts matching the title filter retrieved successfully.";
+    public const string CommentSearchByContentSuccess = "Comments matching the content filter retrieved successfully.";
+
+    public const string CommentSearchByIdInPostSuccess = "Comment in the post retrieved by id successfully.";
+
+    public const string CommentSearchByContentInPostSuccess =
+        "Comments in the post matching the content filter retrieved successfully.";
 
     public const string LogoutSucceeded = "Signed out successfully.";
 }
@@ -148,6 +185,9 @@ public static partial class ApiMessages
 
     public const string RequestCancelled =
         "The request was cancelled or timed out.";
+
+    public const string SearchTermRequired =
+        "Search term is required and cannot be empty.";
 }
 
 #endregion

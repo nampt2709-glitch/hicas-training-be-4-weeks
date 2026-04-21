@@ -1,5 +1,6 @@
 namespace CommentAPI.Entities;
 
+/// <summary>Bài viết; navigation <c>virtual</c> phục vụ lazy-loading proxies khi load từ <see cref="Comment"/>.</summary>
 public class Post
 {
     public Guid Id { get; set; }
@@ -8,7 +9,7 @@ public class Post
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public Guid UserId { get; set; }
-    public User? User { get; set; }
+    public virtual User? User { get; set; }
 
-    public List<Comment> Comments { get; set; } = new();
+    public virtual ICollection<Comment> Comments { get; set; } = new List<Comment>();
 }

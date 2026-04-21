@@ -12,6 +12,8 @@ public class User : IdentityUser<Guid>
     public string Name { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-    public List<Post> Posts { get; set; } = new();
-    public List<Comment> Comments { get; set; } = new();
+    /// <summary>Navigation ảo cho lazy load từ <see cref="Comment"/> / <see cref="Post"/>.</summary>
+    public virtual ICollection<Post> Posts { get; set; } = new List<Post>();
+
+    public virtual ICollection<Comment> Comments { get; set; } = new List<Comment>();
 }

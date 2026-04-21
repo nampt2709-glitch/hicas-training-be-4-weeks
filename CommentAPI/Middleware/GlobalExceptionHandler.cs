@@ -45,6 +45,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
         CorrelationMiddleware.AppendErrorSourceHeader(
             httpContext,
             ResolveThrowingDescriptor(exception) ?? exception.GetType().FullName ?? "Exception");
+        CorrelationMiddleware.TryAppendSqlQueryCountHeader(httpContext);
 
         if (exception is ApiException app)
         {

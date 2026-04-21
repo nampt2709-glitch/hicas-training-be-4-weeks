@@ -18,8 +18,11 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
 
@@ -30,9 +33,62 @@ builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptio
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
  ?? throw new InvalidOperationException("Jwt configuration is missing in appsettings.");
 
-// DbContext: user Identity, bài post và comment.
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+var sqlConnectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is missing.");
+
+// Cấu hình TTL cache entity và chọn Redis nếu ping được, ngược lại dùng memory distributed cache.
+builder.Services.Configure<CacheOptions>(builder.Configuration.GetSection(CacheOptions.SectionName));
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+var useRedis = false;
+if (!string.IsNullOrWhiteSpace(redisConnectionString))
+{
+    try
+    {
+        var redisOptions = ConfigurationOptions.Parse(redisConnectionString);
+        redisOptions.ConnectTimeout = 2000;
+        redisOptions.SyncTimeout = 2000;
+        redisOptions.AbortOnConnectFail = true;
+        using var mux = ConnectionMultiplexer.Connect(redisOptions);
+        mux.GetDatabase().Ping();
+        useRedis = true;
+    }
+    catch (Exception ex)
+    {
+        using var lf = LoggerFactory.Create(logging =>
+        {
+            logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
+            logging.AddConsole();
+        });
+        lf.CreateLogger("CommentAPI.Cache").LogWarning(ex, "Không kết nối được Redis; dùng cache trong bộ nhớ.");
+    }
+}
+
+if (useRedis)
+{
+    builder.Services.AddStackExchangeRedisCache(options =>
+    {
+        options.Configuration = redisConnectionString;
+        options.InstanceName = "CommentAPI:";
+    });
+}
+else
+{
+    builder.Services.AddDistributedMemoryCache();
+}
+
+builder.Services.AddSingleton(new CacheBackendDescriptor(useRedis ? "redis" : "memory"));
+builder.Services.AddScoped<CacheResponseTracker>();
+builder.Services.AddScoped<IEntityResponseCache, EntityResponseCache>();
+
+// HttpContext cho interceptor đo thời gian SQL theo từng request.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<RequestTimingDbCommandInterceptor>();
+
+// DbContext: user Identity, bài post và comment; interceptor cộng dồn thời gian lệnh SQL.
+builder.Services.AddDbContext<AppDbContext>((sp, options) =>
+    options.UseLazyLoadingProxies()
+        .UseSqlServer(sqlConnectionString)
+        .AddInterceptors(sp.GetRequiredService<RequestTimingDbCommandInterceptor>()));
 
 // Identity: băm mật khẩu qua UserManager; vai trò trong AspNetRoles / AspNetUserRoles.
 builder.Services.AddIdentityCore<User>(options =>
@@ -119,6 +175,7 @@ builder.Services
                 context.Response.Headers.Append(CorrelationMiddleware.HeaderName, cid);
                 CorrelationMiddleware.AppendErrorSourceHeader(context.HttpContext,
                     "JwtBearerEvents.OnChallenge (Bearer challenge: missing or invalid token)");
+                CorrelationMiddleware.TryAppendSqlQueryCountHeader(context.HttpContext);
                 await context.Response.WriteAsJsonAsync(new
                 {
                     code = ApiErrorCodes.Unauthenticated,
@@ -150,6 +207,7 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
         var modelSource = context.ActionDescriptor?.DisplayName ?? "ApiController:ModelState";
         CorrelationMiddleware.AppendErrorSourceHeader(http,
             $"Model binding / ModelState ({modelSource})");
+        CorrelationMiddleware.TryAppendSqlQueryCountHeader(http);
         var errors = context.ModelState
             .Where(p => p.Value != null && p.Value!.Errors.Count > 0)
             .ToDictionary(

@@ -1,5 +1,8 @@
 namespace CommentAPI.Entities;
 
+/// <summary>
+/// Thực thể Comment; navigation <c>virtual</c> + <see cref="ICollection{T}"/> để EF Core lazy-loading proxies hoạt động (route demo).
+/// </summary>
 public class Comment
 {
     public Guid Id { get; set; }
@@ -7,12 +10,13 @@ public class Comment
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public Guid PostId { get; set; }
-    public Post? Post { get; set; }
+    public virtual Post? Post { get; set; }
 
     public Guid UserId { get; set; }
-    public User? User { get; set; }
+    public virtual User? User { get; set; }
 
     public Guid? ParentId { get; set; }
-    public Comment? Parent { get; set; }
-    public List<Comment> Children { get; set; } = new();
+    public virtual Comment? Parent { get; set; }
+
+    public virtual ICollection<Comment> Children { get; set; } = new List<Comment>();
 }
