@@ -1,0 +1,38 @@
+================================================================================
+  FILE: LogAnalyzer/Services/ResultWriterService.cs (interface: IResultWriter)
+  MỤC ĐÍCH: Ghi báo cáo (metadata + PERFORMANCE + Top 50) ra file .txt
+================================================================================
+
+TẠI SAO CÓ FILE NÀY?
+  Sau khi BenchmarkRunnerService (IBenchmarkRunner) chạy xong 6 lần thử, ta có BenchmarkReport gồm:
+  - Chế độ (Word hay Error).
+  - Đường dẫn file nguồn.
+  - 6 dòng PERFORMANCE: nhãn (Sync/Async + Sequential/Parallel/PLINQ) và Time(ms).
+  - TopItems: các từ/lỗi đã đếm (để in top 50).
+
+  ResultWriterService (IResultWriter) biến dữ liệu trong bộ nhớ thành file văn bản.
+  Nội dung PERFORMANCE khớp bảng in trên console trong Program.
+
+
+--------------------------------------------------------------------------------
+CLASS: ResultWriterService
+--------------------------------------------------------------------------------
+
+  PHƯƠNG THỨC: Write(BenchmarkReport report)
+
+  (1) Thư mục Results cạnh AppContext.BaseDirectory.
+
+  (2) Tên file theo thời gian: Result_yyyyMMdd_HHmmss_fff.txt
+
+  (3) Phần đầu: Mode, Source File, Generated At.
+
+  (4) Phần ===== PERFORMANCE ===== và bảng hai cột từ report.Runs.
+
+  (5) Phần TOP 50 WORDS / ERRORS hoặc thông báo không có dữ liệu.
+
+  (6) Encoding UTF-8.
+
+LIÊN KẾT
+  Program dùng DI: IBenchmarkRunner + IResultWriter. Models: Core/AnalysisModels.cs.
+
+================================================================================

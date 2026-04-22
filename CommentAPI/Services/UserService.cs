@@ -1,159 +1,225 @@
-using AutoMapper;
+using AutoMapper; 
 using CommentAPI;
 using CommentAPI.DTOs;
-using CommentAPI.Entities;
-using CommentAPI.Interfaces;
+using CommentAPI.Entities; 
+using CommentAPI.Interfaces; 
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity; 
 
-namespace CommentAPI.Services;
+namespace CommentAPI.Services; 
 
-public class UserService : IUserService
+public class UserService : IUserService // Triển khai use-case user + cache.
 {
-    private readonly IUserRepository _repository;
-    private readonly UserManager<User> _userManager;
-    private readonly IMapper _mapper;
-    private readonly IEntityResponseCache _cache;
+    private readonly IUserRepository _repository; // Truy cập dữ liệu user/role batch.
+    private readonly UserManager<User> _userManager; // Tạo/xóa user Identity, roles.
+    private readonly RoleManager<IdentityRole<Guid>> _roleManager; // Kiểm tra role tồn tại trước khi gán.
+    private readonly IMapper _mapper; // Ánh xạ User → UserDto cơ bản.
+    private readonly IEntityResponseCache _cache; // Cache-aside JSON.
 
-    public UserService(
-        IUserRepository repository,
-        UserManager<User> userManager,
-        IMapper mapper,
-        IEntityResponseCache cache)
+    public UserService( // Constructor DI.
+        IUserRepository repository, // Repo.
+        UserManager<User> userManager, // Identity user.
+        RoleManager<IdentityRole<Guid>> roleManager, // Identity role.
+        IMapper mapper, // AutoMapper.
+        IEntityResponseCache cache) // Distributed cache wrapper.
     {
-        _repository = repository;
-        _userManager = userManager;
-        _mapper = mapper;
-        _cache = cache;
+        _repository = repository; // Assign.
+        _userManager = userManager; // Assign.
+        _roleManager = roleManager; // Assign.
+        _mapper = mapper; // Assign.
+        _cache = cache; // Assign.
     }
 
-    public async Task<PagedResult<UserDto>> GetPagedAsync(
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default)
+    public async Task<PagedResult<UserDto>> GetPagedAsync( // Trang user + tổng.
+        int page, // Số trang 1-based.
+        int pageSize, // Kích thước trang.
+        CancellationToken cancellationToken = default) // Hủy.
     {
-        var cacheKey = EntityCacheKeys.UsersPaged(page, pageSize);
-        var cached = await _cache.GetJsonAsync<PagedResult<UserDto>>(cacheKey, cancellationToken);
-        if (cached is not null)
+        var cacheKey = EntityCacheKeys.UsersPaged(page, pageSize); // Khóa list cố định theo trang.
+        var cached = await _cache.GetJsonAsync<PagedResult<UserDto>>(cacheKey, cancellationToken); // Thử đọc cache.
+        if (cached is not null) // Hit.
         {
-            return cached;
+            return cached; // Trả ngay DTO phân trang.
         }
 
         // Lấy một trang user và map kèm vai trò (giữ nguyên cách MapToDtoAsync).
-        var (items, total) = await _repository.GetPagedAsync(page, pageSize, cancellationToken);
-        var ids = items.ConvertAll(x => x.Id);
-        var rolesByUser = await _repository.GetRoleNamesByUserIdsAsync(ids, cancellationToken);
-        var list = new List<UserDto>(items.Count);
-        foreach (var row in items)
+        var (items, total) = await _repository.GetPagedAsync(page, pageSize, cancellationToken); // Projection UserPageRow + count.
+        var ids = items.ConvertAll(x => x.Id); // Danh sách id để batch roles.
+        var rolesByUser = await _repository.GetRoleNamesByUserIdsAsync(ids, cancellationToken); // Một query join roles.
+        var list = new List<UserDto>(items.Count); // Dự đoán dung lượng.
+        foreach (var row in items) // Ghép từng dòng.
         {
-            list.Add(ToUserDto(row, rolesByUser));
+            list.Add(ToUserDto(row, rolesByUser)); // Static helper gán Roles.
         }
 
-        var result = new PagedResult<UserDto>
+        var result = new PagedResult<UserDto> // Gói phản hồi phân trang.
         {
-            Items = list,
-            Page = page,
-            PageSize = pageSize,
-            TotalCount = total
+            Items = list, // Dòng trang hiện tại.
+            Page = page, // Chỉ số trang.
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = total // Tổng bản ghi khớp filter (ở đây toàn bộ users).
         };
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken);
-        return result;
+        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache TTL.
+        return result; // Trả cho controller.
     }
 
-    public async Task<PagedResult<UserDto>> SearchByNamePagedAsync(
-        string? name,
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default)
+    public async Task<PagedResult<UserDto>> SearchByNamePagedAsync( // Tìm theo Name chứa.
+        string? name, // Term (service chuẩn hóa qua RequireSearchTerm).
+        int page, // Trang.
+        int pageSize, // Size.
+        CancellationToken cancellationToken = default) // CT.
     {
-        var term = RequireSearchTerm(name);
-        var cacheKey = EntityCacheKeys.UsersSearchName(EntityCacheHash.SearchTerm(term), page, pageSize);
-        var cached = await _cache.GetJsonAsync<PagedResult<UserDto>>(cacheKey, cancellationToken);
-        if (cached is not null)
+        var term = RequireSearchTerm(name); // 400 nếu rỗng.
+        var cacheKey = EntityCacheKeys.UsersSearchName(EntityCacheHash.SearchTerm(term), page, pageSize); // Key có hash term.
+        var cached = await _cache.GetJsonAsync<PagedResult<UserDto>>(cacheKey, cancellationToken); // Read cache.
+        if (cached is not null) // Hit.
         {
-            return cached;
+            return cached; // Short circuit.
         }
 
-        var (items, total) = await _repository.SearchByNamePagedAsync(term, page, pageSize, cancellationToken);
-        var ids = items.ConvertAll(x => x.Id);
-        var rolesByUser = await _repository.GetRoleNamesByUserIdsAsync(ids, cancellationToken);
-        var list = new List<UserDto>(items.Count);
-        foreach (var row in items)
+        var (items, total) = await _repository.SearchByNamePagedAsync(term, page, pageSize, cancellationToken); // DB.
+        var ids = items.ConvertAll(x => x.Id); // Ids.
+        var rolesByUser = await _repository.GetRoleNamesByUserIdsAsync(ids, cancellationToken); // Roles map.
+        var list = new List<UserDto>(items.Count); // List.
+        foreach (var row in items) // Loop.
         {
-            list.Add(ToUserDto(row, rolesByUser));
+            list.Add(ToUserDto(row, rolesByUser)); // Map row.
         }
 
-        var result = new PagedResult<UserDto>
+        var result = new PagedResult<UserDto> // Result.
         {
-            Items = list,
-            Page = page,
-            PageSize = pageSize,
-            TotalCount = total
+            Items = list, // Items.
+            Page = page, // Page.
+            PageSize = pageSize, // Size.
+            TotalCount = total // Total.
         };
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken);
-        return result;
+        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Set cache.
+        return result; // Return.
     }
 
-    public async Task<PagedResult<UserDto>> SearchByUserNamePagedAsync(
-        string? userName,
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default)
+    public async Task<PagedResult<UserDto>> SearchByUserNamePagedAsync( // Tìm theo UserName chứa.
+        string? userName, // Term.
+        int page, // Page.
+        int pageSize, // Size.
+        CancellationToken cancellationToken = default) // CT.
     {
-        var term = RequireSearchTerm(userName);
-        var cacheKey = EntityCacheKeys.UsersSearchUserName(EntityCacheHash.SearchTerm(term), page, pageSize);
-        var cached = await _cache.GetJsonAsync<PagedResult<UserDto>>(cacheKey, cancellationToken);
-        if (cached is not null)
+        var term = RequireSearchTerm(userName); // Validate term.
+        var cacheKey = EntityCacheKeys.UsersSearchUserName(EntityCacheHash.SearchTerm(term), page, pageSize); // Key.
+        var cached = await _cache.GetJsonAsync<PagedResult<UserDto>>(cacheKey, cancellationToken); // Get.
+        if (cached is not null) // Hit.
         {
-            return cached;
+            return cached; // Return cached.
         }
 
-        var (items, total) = await _repository.SearchByUserNamePagedAsync(term, page, pageSize, cancellationToken);
-        var ids = items.ConvertAll(x => x.Id);
-        var rolesByUser = await _repository.GetRoleNamesByUserIdsAsync(ids, cancellationToken);
-        var list = new List<UserDto>(items.Count);
-        foreach (var row in items)
+        var (items, total) = await _repository.SearchByUserNamePagedAsync(term, page, pageSize, cancellationToken); // DB.
+        var ids = items.ConvertAll(x => x.Id); // Ids.
+        var rolesByUser = await _repository.GetRoleNamesByUserIdsAsync(ids, cancellationToken); // Roles.
+        var list = new List<UserDto>(items.Count); // List.
+        foreach (var row in items) // Each.
         {
-            list.Add(ToUserDto(row, rolesByUser));
+            list.Add(ToUserDto(row, rolesByUser)); // DTO.
         }
 
-        var result = new PagedResult<UserDto>
+        var result = new PagedResult<UserDto> // Wrap.
         {
-            Items = list,
-            Page = page,
-            PageSize = pageSize,
-            TotalCount = total
+            Items = list, // Items.
+            Page = page, // Page.
+            PageSize = pageSize, // Size.
+            TotalCount = total // Total.
         };
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken);
-        return result;
+        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Cache write.
+        return result; // Out.
     }
 
-    private static string RequireSearchTerm(string? raw)
+    private static string RequireSearchTerm(string? raw) // Chuẩn hóa và bắt buộc có text tìm.
     {
-        var t = raw?.Trim();
-        if (string.IsNullOrEmpty(t))
+        var t = raw?.Trim(); // Loại khoảng trắng đầu cuối.
+        if (string.IsNullOrEmpty(t)) // Không có term hợp lệ.
         {
-            throw new ApiException(
-                StatusCodes.Status400BadRequest,
-                ApiErrorCodes.SearchTermRequired,
-                ApiMessages.SearchTermRequired);
+            throw new ApiException( // Lỗi 400 có mã.
+                StatusCodes.Status400BadRequest, // HTTP 400.
+                ApiErrorCodes.SearchTermRequired, // Code.
+                ApiMessages.SearchTermRequired); // Message.
         }
 
-        return t;
+        return t; // Term đã trim.
     }
 
-    public async Task<UserDto> GetByIdAsync(Guid id)
+    public async Task<UserDto> GetByIdAsync(Guid id) // Chi tiết một user.
     {
         // Cache-aside: đọc DTO từ Redis/memory trước; miss thì truy DB rồi ghi lại cache.
-        var cacheKey = EntityCacheKeys.User(id);
-        var cached = await _cache.GetJsonAsync<UserDto>(cacheKey, CancellationToken.None);
-        if (cached is not null)
+        var cacheKey = EntityCacheKeys.User(id); // Key theo id.
+        var cached = await _cache.GetJsonAsync<UserDto>(cacheKey, CancellationToken.None); // Đọc (không truyền CT từ caller ở đây).
+        if (cached is not null) // Hit.
         {
-            return cached;
+            return cached; // Trả DTO đầy đủ roles (đã snapshot lúc set).
         }
 
-        var entity = await _repository.GetByIdAsync(id);
-        if (entity is null)
+        var entity = await _repository.GetByIdAsync(id); // Tracked/ không tracking tùy repo — một user.
+        if (entity is null) // Không tồn tại.
+        {
+            throw new ApiException( // 404.
+                StatusCodes.Status404NotFound, // Not found.
+                ApiErrorCodes.UserNotFound, // Code.
+                ApiMessages.UserNotFound); // Message.
+        }
+
+        var dto = await MapToDtoAsync(entity); // UserManager roles live.
+        await _cache.SetJsonAsync(cacheKey, dto, default); // Populate cache.
+        return dto; // Return.
+    }
+
+    public async Task<UserDto> CreateAsync(CreateUserDto dto) // Tạo user + role User mặc định.
+    {
+        if (await _userManager.FindByNameAsync(dto.UserName) != null) // Trùng username.
+        {
+            throw new ApiException( // 409 conflict.
+                StatusCodes.Status409Conflict, // Conflict.
+                ApiErrorCodes.UserNameConflict, // Code.
+                ApiMessages.UserNameTaken); // Message.
+        }
+
+        var email = string.IsNullOrWhiteSpace(dto.Email) // Email rỗng → placeholder nội bộ.
+            ? $"{dto.UserName}@users.local" // Synthetic email để thỏa Identity.
+            : dto.Email!.Trim(); // Email thật đã trim.
+
+        var entity = new User // Thực thể trước khi hash password.
+        {
+            Id = Guid.NewGuid(), // PK client-generated.
+            UserName = dto.UserName, // Login.
+            Name = dto.Name, // Display.
+            Email = email, // Email lưu DB.
+            EmailConfirmed = true, // Bỏ qua flow xác nhận trong demo/training.
+            CreatedAt = DateTime.UtcNow // Timestamp UTC.
+        };
+
+        var result = await _userManager.CreateAsync(entity, dto.Password); // Hash + lưu user.
+        if (!result.Succeeded) // Identity validation errors.
+        {
+            var detail = string.Join(" ", result.Errors.Select(e => e.Description)); // Gộp mô tả.
+            throw new ApiException( // 400 với chi tiết.
+                StatusCodes.Status400BadRequest, // Bad request.
+                ApiErrorCodes.UserCreateFailed, // Code.
+                string.IsNullOrWhiteSpace(detail) ? ApiMessages.UserCreateFailed : detail); // Fallback message.
+        }
+
+        await _userManager.AddToRoleAsync(entity, "User"); // Gán role mặc định.
+        return await MapToDtoAsync(entity); // DTO kèm roles.
+    }
+
+    // User thường: chỉ đổi Name; id phải trùng JWT (chặn sửa hộ user khác).
+    public async Task UpdateAsSelfAsync(Guid id, UpdateUserDto dto, Guid currentUserId)
+    {
+        if (id != currentUserId) // Không cho chỉnh profile người khác qua endpoint này.
+        {
+            throw new ApiException(
+                StatusCodes.Status403Forbidden,
+                ApiErrorCodes.NotResourceAuthor,
+                ApiMessages.NotResourceAuthor);
+        }
+
+        var entity = await _repository.GetByIdAsync(id); // Load user (tracked).
+        if (entity is null) // Missing.
         {
             throw new ApiException(
                 StatusCodes.Status404NotFound,
@@ -161,14 +227,40 @@ public class UserService : IUserService
                 ApiMessages.UserNotFound);
         }
 
-        var dto = await MapToDtoAsync(entity);
-        await _cache.SetJsonAsync(cacheKey, dto, default);
-        return dto;
+        entity.Name = dto.Name; // Chỉ cập nhật tên hiển thị.
+        _repository.Update(entity);
+        await _repository.SaveChangesAsync();
+
+        await _cache.RemoveAsync(EntityCacheKeys.User(id), default);
     }
 
-    public async Task<UserDto> CreateAsync(CreateUserDto dto)
+    // Admin: Name, UserName, Email, roles thay thế hoàn toàn, mật khẩu tùy chọn — chống trùng login/email và gỡ Admin khỏi admin cuối.
+    public async Task UpdateAsAdminAsync(Guid id, AdminUpdateUserDto dto)
     {
-        if (await _userManager.FindByNameAsync(dto.UserName) != null)
+        var user = await _repository.GetByIdAsync(id);
+        if (user is null)
+        {
+            throw new ApiException(
+                StatusCodes.Status404NotFound,
+                ApiErrorCodes.UserNotFound,
+                ApiMessages.UserNotFound);
+        }
+
+        var normalizedRoles = NormalizeAdminRolesOrThrow(dto.Roles);
+        foreach (var role in normalizedRoles)
+        {
+            if (!await _roleManager.RoleExistsAsync(role))
+            {
+                throw new ApiException(
+                    StatusCodes.Status400BadRequest,
+                    ApiErrorCodes.UserInvalidRoles,
+                    ApiMessages.UserInvalidRoles);
+            }
+        }
+
+        var trimmedUserName = dto.UserName.Trim();
+        var otherByName = await _userManager.FindByNameAsync(trimmedUserName);
+        if (otherByName is not null && otherByName.Id != id)
         {
             throw new ApiException(
                 StatusCodes.Status409Conflict,
@@ -176,96 +268,172 @@ public class UserService : IUserService
                 ApiMessages.UserNameTaken);
         }
 
-        var email = string.IsNullOrWhiteSpace(dto.Email)
-            ? $"{dto.UserName}@users.local"
+        var emailToStore = string.IsNullOrWhiteSpace(dto.Email)
+            ? $"{trimmedUserName}@users.local"
             : dto.Email!.Trim();
 
-        var entity = new User
+        var otherByEmail = await _userManager.FindByEmailAsync(emailToStore);
+        if (otherByEmail is not null && otherByEmail.Id != id)
         {
-            Id = Guid.NewGuid(),
-            UserName = dto.UserName,
-            Name = dto.Name,
-            Email = email,
-            EmailConfirmed = true,
-            CreatedAt = DateTime.UtcNow
-        };
-
-        var result = await _userManager.CreateAsync(entity, dto.Password);
-        if (!result.Succeeded)
-        {
-            var detail = string.Join(" ", result.Errors.Select(e => e.Description));
             throw new ApiException(
-                StatusCodes.Status400BadRequest,
-                ApiErrorCodes.UserCreateFailed,
-                string.IsNullOrWhiteSpace(detail) ? ApiMessages.UserCreateFailed : detail);
+                StatusCodes.Status409Conflict,
+                ApiErrorCodes.UserEmailConflict,
+                ApiMessages.UserEmailTaken);
         }
 
-        await _userManager.AddToRoleAsync(entity, "User");
-        return await MapToDtoAsync(entity);
-    }
-
-    public async Task UpdateAsync(Guid id, UpdateUserDto dto)
-    {
-        var entity = await _repository.GetByIdAsync(id);
-        if (entity is null)
+        var currentRoles = (await _userManager.GetRolesAsync(user)).ToList();
+        var hadAdmin = currentRoles.Any(r => r.Equals("Admin", StringComparison.OrdinalIgnoreCase));
+        var keepsAdmin = normalizedRoles.Contains("Admin");
+        if (hadAdmin && !keepsAdmin)
         {
-            throw new ApiException(
-                StatusCodes.Status404NotFound,
-                ApiErrorCodes.UserNotFound,
-                ApiMessages.UserNotFound);
+            var admins = await _userManager.GetUsersInRoleAsync("Admin");
+            if (admins.Count == 1 && admins[0].Id == id)
+            {
+                throw new ApiException(
+                    StatusCodes.Status400BadRequest,
+                    ApiErrorCodes.UserLastAdminProtected,
+                    ApiMessages.UserLastAdminProtected);
+            }
         }
 
-        entity.Name = dto.Name;
-        _repository.Update(entity);
-        await _repository.SaveChangesAsync();
+        user.Name = dto.Name.Trim();
 
-        // Dữ liệu user đổi — xóa cache theo id để lần sau không trả bản cũ.
-        await _cache.RemoveAsync(EntityCacheKeys.User(id), default);
-    }
+        ThrowUnlessSucceeded(
+            await _userManager.SetUserNameAsync(user, trimmedUserName));
 
-    public async Task DeleteAsync(Guid id)
-    {
-        var entity = await _repository.GetByIdAsync(id);
-        if (entity is null)
+        user.EmailConfirmed = true;
+        ThrowUnlessSucceeded(
+            await _userManager.SetEmailAsync(user, emailToStore));
+
+        ThrowUnlessSucceeded(
+            await _userManager.RemoveFromRolesAsync(user, currentRoles));
+        ThrowUnlessSucceeded(
+            await _userManager.AddToRolesAsync(user, normalizedRoles));
+
+        if (!string.IsNullOrWhiteSpace(dto.NewPassword))
         {
-            throw new ApiException(
-                StatusCodes.Status404NotFound,
-                ApiErrorCodes.UserNotFound,
-                ApiMessages.UserNotFound);
+            var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+            ThrowUnlessSucceeded(
+                await _userManager.ResetPasswordAsync(user, token, dto.NewPassword!));
         }
 
         await _cache.RemoveAsync(EntityCacheKeys.User(id), default);
+    }
 
-        var result = await _userManager.DeleteAsync(entity);
-        if (!result.Succeeded)
+    // Chuẩn hóa danh sách role (Admin/User, không trùng); rỗng sau lọc → lỗi 400.
+    private static List<string> NormalizeAdminRolesOrThrow(IReadOnlyList<string> roles)
+    {
+        if (roles is null || roles.Count == 0)
         {
-            var detail = string.Join(" ", result.Errors.Select(e => e.Description));
             throw new ApiException(
                 StatusCodes.Status400BadRequest,
-                ApiErrorCodes.UserDeleteFailed,
-                string.IsNullOrWhiteSpace(detail) ? ApiMessages.UserDeleteFailed : detail);
+                ApiErrorCodes.UserInvalidRoles,
+                ApiMessages.UserInvalidRoles);
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        foreach (var raw in roles)
+        {
+            var t = raw?.Trim() ?? "";
+            if (t.Length == 0)
+            {
+                continue;
+            }
+
+            string canon;
+            if (t.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+            {
+                canon = "Admin";
+            }
+            else if (t.Equals("User", StringComparison.OrdinalIgnoreCase))
+            {
+                canon = "User";
+            }
+            else
+            {
+                throw new ApiException(
+                    StatusCodes.Status400BadRequest,
+                    ApiErrorCodes.UserInvalidRoles,
+                    ApiMessages.UserInvalidRoles);
+            }
+
+            if (seen.Add(canon))
+            {
+                result.Add(canon);
+            }
+        }
+
+        if (result.Count == 0)
+        {
+            throw new ApiException(
+                StatusCodes.Status400BadRequest,
+                ApiErrorCodes.UserInvalidRoles,
+                ApiMessages.UserInvalidRoles);
+        }
+
+        result.Sort(StringComparer.Ordinal);
+        return result;
+    }
+
+    // IdentityResult không Success → 400 với mã UserUpdateFailed (chi tiết từ Identity nếu có).
+    private static void ThrowUnlessSucceeded(IdentityResult result)
+    {
+        if (result.Succeeded)
+        {
+            return;
+        }
+
+        var detail = string.Join(" ", result.Errors.Select(e => e.Description));
+        throw new ApiException(
+            StatusCodes.Status400BadRequest,
+            ApiErrorCodes.UserUpdateFailed,
+            string.IsNullOrWhiteSpace(detail) ? ApiMessages.UserUpdateFailed : detail);
+    }
+
+    public async Task DeleteAsync(Guid id) // Xóa user Identity.
+    {
+        var entity = await _repository.GetByIdAsync(id); // Find.
+        if (entity is null) // Not found.
+        {
+            throw new ApiException( // 404.
+                StatusCodes.Status404NotFound, // 404.
+                ApiErrorCodes.UserNotFound, // Code.
+                ApiMessages.UserNotFound); // Msg.
+        }
+
+        await _cache.RemoveAsync(EntityCacheKeys.User(id), default); // Xóa cache trước khi xóa user (tránh stale read).
+
+        var result = await _userManager.DeleteAsync(entity); // Cascade theo cấu hình Identity/EF.
+        if (!result.Succeeded) // Identity error.
+        {
+            var detail = string.Join(" ", result.Errors.Select(e => e.Description)); // Details.
+            throw new ApiException( // 400.
+                StatusCodes.Status400BadRequest, // 400.
+                ApiErrorCodes.UserDeleteFailed, // Code.
+                string.IsNullOrWhiteSpace(detail) ? ApiMessages.UserDeleteFailed : detail); // Msg.
         }
     }
 
-    private async Task<UserDto> MapToDtoAsync(User entity)
+    private async Task<UserDto> MapToDtoAsync(User entity) // Map + đồng bộ roles từ UserManager.
     {
-        var dto = _mapper.Map<UserDto>(entity);
-        var roles = await _userManager.GetRolesAsync(entity);
-        dto.Roles = roles.OrderBy(r => r).ToList();
-        return dto;
+        var dto = _mapper.Map<UserDto>(entity); // Trường scalar.
+        var roles = await _userManager.GetRolesAsync(entity); // Danh sách role hiện tại.
+        dto.Roles = roles.OrderBy(r => r).ToList(); // Ổn định thứ tự trả API.
+        return dto; // DTO đầy đủ.
     }
 
-    /// <summary>Ghép hàng projection <see cref="UserPageRow"/> với role đã batch-load.</summary>
-    private static UserDto ToUserDto(UserPageRow row, IReadOnlyDictionary<Guid, List<string>> rolesByUser)
+    // Ghép hàng projection UserPageRow với role đã batch-load.
+    private static UserDto ToUserDto(UserPageRow row, IReadOnlyDictionary<Guid, List<string>> rolesByUser) // Không gọi UserManager từng dòng.
     {
-        return new UserDto
+        return new UserDto // Manual projection.
         {
-            Id = row.Id,
-            Name = row.Name,
-            UserName = row.UserName,
-            Email = row.Email,
-            CreatedAt = row.CreatedAt,
-            Roles = rolesByUser.TryGetValue(row.Id, out var r) ? r : new List<string>()
+            Id = row.Id, // PK.
+            Name = row.Name, // Display name.
+            UserName = row.UserName, // Login.
+            Email = row.Email, // Email.
+            CreatedAt = row.CreatedAt, // Audit.
+            Roles = rolesByUser.TryGetValue(row.Id, out var r) ? r : new List<string>() // Roles hoặc rỗng.
         };
     }
 }

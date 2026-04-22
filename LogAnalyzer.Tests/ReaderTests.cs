@@ -17,7 +17,8 @@ public class ReaderTests
 
         try
         {
-            var actual = FileReader.ReadSync(tempFile);
+            IFileReader reader = new FileReaderService();
+            var actual = reader.ReadSync(tempFile);
 
             Assert.Equal(expected, actual);
         }
@@ -41,7 +42,8 @@ public class ReaderTests
 
         try
         {
-            var actual = await FileReader.ReadAsync(tempFile);
+            IFileReader reader = new FileReaderService();
+            var actual = await reader.ReadAsync(tempFile);
 
             Assert.Equal(expected, actual);
         }

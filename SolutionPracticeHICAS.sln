@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CommentAPI", "CommentAPI\Co
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CommentAPI.RecordGenerator", "CommentAPI.RecordGenerator\CommentAPI.RecordGenerator.csproj", "{5A98D9B9-450D-49D2-809F-E1D8E7A87ACF}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CommentAPI.Tests", "CommentAPI.Tests\CommentAPI.Tests.csproj", "{C45565CF-30D8-464A-9C4B-BCD166E8A185}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -69,6 +71,18 @@ Global
 		{5A98D9B9-450D-49D2-809F-E1D8E7A87ACF}.Release|x64.Build.0 = Release|Any CPU
 		{5A98D9B9-450D-49D2-809F-E1D8E7A87ACF}.Release|x86.ActiveCfg = Release|Any CPU
 		{5A98D9B9-450D-49D2-809F-E1D8E7A87ACF}.Release|x86.Build.0 = Release|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Debug|x64.Build.0 = Debug|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Debug|x86.Build.0 = Debug|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Release|x64.ActiveCfg = Release|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Release|x64.Build.0 = Release|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Release|x86.ActiveCfg = Release|Any CPU
+		{C45565CF-30D8-464A-9C4B-BCD166E8A185}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

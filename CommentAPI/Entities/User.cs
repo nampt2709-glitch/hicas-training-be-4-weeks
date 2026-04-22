@@ -1,19 +1,19 @@
-using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity; // Namespace chứa IdentityUser<TKey> dùng làm cơ sở cho tài khoản.
 
+// Entity ánh xạ bảng dùng chung với Identity (cùng khóa Guid).
 namespace CommentAPI.Entities;
 
-/// <summary>
-/// Một thực thể User duy nhất, map một bảng <c>Users</c> trên SQL Server.
-/// Kế thừa <see cref="IdentityUser{TKey}"/> nên có sẵn UserName, Email, SecurityStamp, PasswordHash (cùng bảng).
-/// Vai trò (Admin/User) nằm ở bảng liên kết <c>AspNetUserRoles</c> / <c>AspNetRoles</c>, không phải bảng user thứ hai.
-/// </summary>
+// Tài khoản: kế thừa IdentityUser<Guid> (UserName, Email, SecurityStamp, PasswordHash, v.v.); thêm Name, CreatedAt, quan hệ Post/Comment.
 public class User : IdentityUser<Guid>
 {
+    // Tên hiển thị tùy nghiệp vụ, không bắt buộc trùng UserName.
     public string Name { get; set; } = string.Empty;
+    // Mốc tạo bản ghi hồ sơ bổ sung, UTC.
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-    /// <summary>Navigation ảo cho lazy load từ <see cref="Comment"/> / <see cref="Post"/>.</summary>
+    // Các bài user đăng; virtual cho lazy nếu bật proxy.
     public virtual ICollection<Post> Posts { get; set; } = new List<Post>();
 
+    // Các bình luận user viết; virtual cho lazy/INCLUDE từ phía user.
     public virtual ICollection<Comment> Comments { get; set; } = new List<Comment>();
 }

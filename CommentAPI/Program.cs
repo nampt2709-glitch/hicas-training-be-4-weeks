@@ -18,65 +18,30 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
-using StackExchange.Redis;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
 
+// Tạo builder web app (hosting, Kestrel, cấu hình JSON, biến môi trường).
 var builder = WebApplication.CreateBuilder(args);
 
-// Đọc cấu hình JWT (issuer, audience, signing key, thời gian sống token).
+// Mã hóa UTF-8 cho console: log tiếng Việt không bị thành dấu ch? trên Windows cmd/PowerShell mặc định.
+Console.OutputEncoding = new UTF8Encoding(false);
+
+// Bind cấu hình JWT từ section tương ứng (IOptions<JwtOptions> dùng ở AuthenticationService, v.v.).
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
+// Đọc mạnh JWT để tạo SymmetricSecurityKey; thiếu cấu hình thì dừng sớm (lỗi rõ tại startup).
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
  ?? throw new InvalidOperationException("Jwt configuration is missing in appsettings.");
 
+// Chuỗi kết nối SQL Server cho EF Core; bắt buộc có trong appsettings/secret.
 var sqlConnectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is missing.");
 
-// Cấu hình TTL cache entity và chọn Redis nếu ping được, ngược lại dùng memory distributed cache.
-builder.Services.Configure<CacheOptions>(builder.Configuration.GetSection(CacheOptions.SectionName));
-var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
-var useRedis = false;
-if (!string.IsNullOrWhiteSpace(redisConnectionString))
-{
-    try
-    {
-        var redisOptions = ConfigurationOptions.Parse(redisConnectionString);
-        redisOptions.ConnectTimeout = 2000;
-        redisOptions.SyncTimeout = 2000;
-        redisOptions.AbortOnConnectFail = true;
-        using var mux = ConnectionMultiplexer.Connect(redisOptions);
-        mux.GetDatabase().Ping();
-        useRedis = true;
-    }
-    catch (Exception ex)
-    {
-        using var lf = LoggerFactory.Create(logging =>
-        {
-            logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
-            logging.AddConsole();
-        });
-        lf.CreateLogger("CommentAPI.Cache").LogWarning(ex, "Không kết nối được Redis; dùng cache trong bộ nhớ.");
-    }
-}
-
-if (useRedis)
-{
-    builder.Services.AddStackExchangeRedisCache(options =>
-    {
-        options.Configuration = redisConnectionString;
-        options.InstanceName = "CommentAPI:";
-    });
-}
-else
-{
-    builder.Services.AddDistributedMemoryCache();
-}
-
-builder.Services.AddSingleton(new CacheBackendDescriptor(useRedis ? "redis" : "memory"));
+// Cấu hình IDistributedCache: ưu tiên Redis, bộ nhớ dự phòng; xem CommentApiDistributedCaching.cs.
+builder.AddCommentApiDistributedCache();
 builder.Services.AddScoped<CacheResponseTracker>();
 builder.Services.AddScoped<IEntityResponseCache, EntityResponseCache>();
 
@@ -100,50 +65,57 @@ builder.Services.AddIdentityCore<User>(options =>
     .AddRoles<IdentityRole<Guid>>()
     .AddEntityFrameworkStores<AppDbContext>();
 
+// Tạo khóa ký từ chuỗi bí mật UTF-8 — độ dài bit phụ thuộc nội dung chuỗi (HMAC thường dùng 256+ bit secret).
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.SigningKey));
 
-// Bearer JWT: chỉ access token (token_type = access) được gọi API.
+// Schemes: Authenticate/Challenge mặc định dùng JWT Bearer; cấu hình validate + sự kiện sau khi par token hợp lệ.
 builder.Services
     .AddAuthentication(options =>
     {
+        // Khi [Authorize] xác thực, mặc định dùng scheme JWT Bearer.
         options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        // Khi 401/Challenge, cùng scheme Bearer.
         options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
     })
     .AddJwtBearer(options =>
     {
+        // Tham số validate chữ ký, issuer, audience, lifetime; map role/name id claim.
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = signingKey,
-            ValidateIssuer = true,
-            ValidIssuer = jwt.Issuer,
-            ValidateAudience = true,
-            ValidAudience = jwt.Audience,
-            ValidateLifetime = true,
-            ClockSkew = TimeSpan.Zero,
-            RoleClaimType = System.Security.Claims.ClaimTypes.Role,
-            NameClaimType = System.Security.Claims.ClaimTypes.NameIdentifier
+            ValidateIssuerSigningKey = true, // Bắt buộc ký bằng signingKey
+            IssuerSigningKey = signingKey, // Khóa HMAC từ appsettings
+            ValidateIssuer = true, // Bật kiểm tra iss
+            ValidIssuer = jwt.Issuer, // Giá trị iss hợp lệ
+            ValidateAudience = true, // Bật kiểm tra aud
+            ValidAudience = jwt.Audience, // Giá trị aud hợp lệ
+            ValidateLifetime = true, // exp/nbf
+            ClockSkew = TimeSpan.Zero, // Không dung sai nhiều phút
+            RoleClaimType = System.Security.Claims.ClaimTypes.Role, // Tên claim map role
+            NameClaimType = System.Security.Claims.ClaimTypes.NameIdentifier // Tên claim map user id (thường từ sub)
         };
+        // Sự kiện: lọc loại token, đối chiếu security stamp với DB; OnChallenge trả JSON thống nhất.
         options.Events = new JwtBearerEvents
         {
             OnTokenValidated = async context =>
             {
+                // Chỉ access token mới gọi API; refresh tách endpoint riêng.
                 var tokenType = context.Principal?.FindFirstValue("token_type");
                 if (tokenType != "access")
                 {
-                    context.Fail("Invalid token type.");
+                    context.Fail("Invalid token type."); // Từ chối refresh/khác loại
                     return;
                 }
 
-                // Sau khi JWT hợp lệ, "sub" thường map sang NameIdentifier.
+                // Lấy id user: NameIdentifier (map từ sub) hoặc claim sub thuần JWT.
                 var userId = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier)
                     ?? context.Principal?.FindFirstValue(JwtRegisteredClaimNames.Sub);
                 if (string.IsNullOrEmpty(userId))
                 {
-                    context.Fail("User identifier is missing from the token.");
+                    context.Fail("User identifier is missing from the token."); // Không định danh để tiếp tục
                     return;
                 }
 
+                // Đọc security stamp tùy chỉnh để vô hiệu token cũ khi user đổi mật/đổi stamp.
                 var stampInToken = context.Principal?.FindFirstValue(JwtOptions.SecurityStampClaimType);
                 if (string.IsNullOrEmpty(stampInToken))
                 {
@@ -151,63 +123,69 @@ builder.Services
                     return;
                 }
 
+                // So khớp với bảng AspNetUsers qua UserManager.
                 var userManager = context.HttpContext.RequestServices.GetRequiredService<UserManager<User>>();
                 var user = await userManager.FindByIdAsync(userId);
                 if (user is null)
                 {
-                    context.Fail("Account does not exist.");
+                    context.Fail("Account does not exist."); // User đã xoá/sai id
                     return;
                 }
 
                 var currentStamp = await userManager.GetSecurityStampAsync(user);
                 if (currentStamp != stampInToken)
                 {
-                    context.Fail("Session is no longer valid.");
+                    context.Fail("Session is no longer valid."); // Token lệch với server (logout, đổi mk, v.v.)
                     return;
                 }
             },
             OnChallenge = async context =>
             {
-                context.HandleResponse();
+                context.HandleResponse(); // Tự ghi body JSON, không dùng body mặc định trống
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 context.Response.ContentType = "application/json";
-                var cid = CorrelationMiddleware.GetCorrelationId(context.HttpContext);
-                context.Response.Headers.Append(CorrelationMiddleware.HeaderName, cid);
-                CorrelationMiddleware.AppendErrorSourceHeader(context.HttpContext,
+                var cid = RequestPerformanceMiddleware.GetCorrelationId(context.HttpContext);
+                context.Response.Headers.Append(RequestPerformanceMiddleware.HeaderName, cid);
+                RequestPerformanceMiddleware.AppendErrorSourceHeader(context.HttpContext,
                     "JwtBearerEvents.OnChallenge (Bearer challenge: missing or invalid token)");
-                CorrelationMiddleware.TryAppendSqlQueryCountHeader(context.HttpContext);
+                RequestPerformanceMiddleware.TryAppendSqlQueryCountHeader(context.HttpContext);
                 await context.Response.WriteAsJsonAsync(new
                 {
-                    code = ApiErrorCodes.Unauthenticated,
+                    code = ApiErrorCodes.Unauthenticated, // Mã ổn định cho client
                     type = "AuthenticationFailed",
-                    message = ApiMessages.Unauthenticated
+                    message = ApiMessages.Unauthenticated // Chuỗi thân thiện client
                 });
             }
         };
     });
 
+// Bật hệ thống [Authorize] trên controller/action.
 builder.Services.AddAuthorization();
 
+// 403 có body JSON: khi xác thực ok nhưng policy cấm (role), thay vì 403 rỗng mặc định.
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, ForbiddenHandler>();
 
 // ProblemDetails + IExceptionHandler bắt buộc trên .NET 8 cho cấu hình exception middleware này.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
+// Tự chạy validator FluentValidation theo từng request (gắn với model).
 builder.Services.AddFluentValidationAutoValidation();
+// Quét mọi validator trong assembly có CreateUserValidator (cùng project CommentAPI).
 builder.Services.AddValidatorsFromAssemblyContaining<CreateUserValidator>();
 
+// Chuẩn hoá 400: ModelState lỗi trả JSON có correlation id + từ điển lỗi từng field.
 builder.Services.Configure<ApiBehaviorOptions>(options =>
 {
     options.InvalidModelStateResponseFactory = context =>
     {
         var http = context.HttpContext;
-        var cid = CorrelationMiddleware.GetCorrelationId(http);
-        http.Response.Headers.Append(CorrelationMiddleware.HeaderName, cid);
+        var cid = RequestPerformanceMiddleware.GetCorrelationId(http);
+        http.Response.Headers.Append(RequestPerformanceMiddleware.HeaderName, cid);
         var modelSource = context.ActionDescriptor?.DisplayName ?? "ApiController:ModelState";
-        CorrelationMiddleware.AppendErrorSourceHeader(http,
+        RequestPerformanceMiddleware.AppendErrorSourceHeader(http,
             $"Model binding / ModelState ({modelSource})");
-        CorrelationMiddleware.TryAppendSqlQueryCountHeader(http);
+        RequestPerformanceMiddleware.TryAppendSqlQueryCountHeader(http);
         var errors = context.ModelState
             .Where(p => p.Value != null && p.Value!.Errors.Count > 0)
             .ToDictionary(
@@ -217,7 +195,7 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
                     .ToArray());
         return new BadRequestObjectResult(new
         {
-            code = ApiErrorCodes.ModelValidationFailed,
+            code = ApiErrorCodes.ModelValidationFailed, // Tách mã lỗi với ngoại lệ Fluent
             type = "ModelStateValidation",
             message = ApiMessages.ValidationFailed,
             errors
@@ -225,7 +203,9 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
     };
 });
 
+// Kích hoạt controller convention + routing attribute.
 builder.Services.AddControllers();
+// Tối thiểu cho Swashbuckle: khám phá endpoint tạo OpenAPI.
 builder.Services.AddEndpointsApiExplorer();
 
 // Swagger: bỏ ví dụ; thêm bảo mật Bearer cho try-it-out.
@@ -253,8 +233,10 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// Đăng ký bản đồ AutoMapper: MappingProfile trong assembly.
 builder.Services.AddAutoMapper(cfg => cfg.AddProfile<MappingProfile>());
 
+// Thời gian sống theo request: mỗi HTTP request = một scope, một DbContext, một bộ service/repo.
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<IPostRepository, PostRepository>();
 builder.Services.AddScoped<ICommentRepository, CommentRepository>();
@@ -265,39 +247,45 @@ builder.Services.AddScoped<IPostService, PostService>();
 builder.Services.AddScoped<ICommentService, CommentService>();
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 
+// Dựng pipeline: host, middleware, endpoint — chưa lắng nghe.
 var app = builder.Build();
 
-// Chạy migration và seed vai trò (không tạo user mặc định — tạo admin trong database).
+// Một lần khi start: tạo scope, ApplyPendingMigration, seed role Admin/User nếu chưa có.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.MigrateAsync();
-    await SeedData.SeedAsync(scope.ServiceProvider);
+    await db.Database.MigrateAsync(); // Áp mọi migration còn treo
+    await SeedData.SeedAsync(scope.ServiceProvider); // Vai trò, không seed user demo tùy implement
 }
 
-app.UseCorrelationId();
+// Header hiệu năng (thời gian, SQL, cache) + X-Correlation-ID; phải sớm trong pipeline.
+app.UseRequestPerformance();
+// IExceptionHandler pipeline: bắt mọi exception chưa xử, trả JSON; delegate rỗng nếu dùng cấu hình mặc định.
 app.UseExceptionHandler(_ => { });
 
+// OpenAPI JSON + UI; chỉ bật khi cần (dev/staging) — ở đây luôn bật tùy môi trường deploy.
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// Thứ tự: routing → xác thực JWT → cổng JWT API → phân quyền theo role trên controller.
+// Bắt buộc: UseRouting trước UseAuthentication/Authorization; custom JWT sau UseAuthentication.
 app.UseRouting();
-app.UseAuthentication();
-app.UseJwtAuthentication();
-app.UseAuthorization();
+app.UseAuthentication(); // Đọc Bearer, gắn HttpContext.User
+app.UseJwtAuthentication(); // Bắt buộc API /api (trừ login/refresh) có user đã xác thực
+app.UseAuthorization(); // Áp dụng [Authorize], role, policy
 
+// Trang gốc chuyển tới Swagger UI để thử nhanh API.
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 
+// Map controller attribute [Route], [ApiController], v.v.
 app.MapControllers();
 
+// Chạy Kestrel / IIS in-process, chặn cho tới khi process dừng.
 app.Run();
 
-/// <summary>
-/// Xóa ví dụ khỏi OpenAPI để Swagger UI không điền sẵn giá trị mẫu.
-/// </summary>
+// Bộ lọc tài liệu OpenAPI: gỡ Example/Examples/Default khỏi path và schema tránh Swagger tự điền sẵn mẫu.
 internal sealed class RemoveSwaggerExamplesDocumentFilter : IDocumentFilter
 {
+    // Sau khi Swashbuckle tạo document, duyệt mọi operation và mọi schema, xoá mọi trường gợi ý mẫu.
     public void Apply(OpenApiDocument swaggerDoc, DocumentFilterContext context)
     {
         if (swaggerDoc.Paths != null)
@@ -313,7 +301,7 @@ internal sealed class RemoveSwaggerExamplesDocumentFilter : IDocumentFilter
 
         if (swaggerDoc.Components?.Schemas == null)
         {
-            return;
+            return; // Không có schema bổ sung thì xong
         }
 
         foreach (var schema in swaggerDoc.Components.Schemas.Values)
@@ -322,14 +310,15 @@ internal sealed class RemoveSwaggerExamplesDocumentFilter : IDocumentFilter
         }
     }
 
+    // Gỡ ví dụ ở tham số, body, từng mã trả; đệ quy qua schema lồng.
     private static void ClearOperationExamples(OpenApiOperation operation)
     {
         if (operation.Parameters != null)
         {
             foreach (var p in operation.Parameters)
             {
-                p.Example = null;
-                p.Examples = null;
+                p.Example = null; // Một giá trị mẫu duy nhất
+                p.Examples = null; // Nhiều tên mẫu
                 if (p.Schema != null)
                 {
                     ClearSchemaExamples(p.Schema);
@@ -359,7 +348,7 @@ internal sealed class RemoveSwaggerExamplesDocumentFilter : IDocumentFilter
         {
             if (response.Content == null)
             {
-                continue;
+                continue; // 204, redirect, v.v.
             }
 
             foreach (var media in response.Content.Values)
@@ -374,9 +363,16 @@ internal sealed class RemoveSwaggerExamplesDocumentFilter : IDocumentFilter
         }
     }
 
-    private static void ClearSchemaExamples(OpenApiSchema schema)
+    private static void ClearSchemaExamples(OpenApiSchema? schema)
     {
+        if (schema is null)
+        {
+            return; // Bỏ qua tham chiếu rỗng trong cấu trúc oneOf/anyof.
+        }
+
+        // Bỏ example và default để form Try it out trên Swagger không gợi sẵn (chuỗi mẫu, Guid=0000…, v.v.).
         schema.Example = null;
+        schema.Default = null;
 
         if (schema.Properties != null)
         {

@@ -6,6 +6,7 @@ WITH CommentTree AS (
         c.CreatedAt,
         c.ParentId,
         c.PostId,
+        c.UserId,
         0 AS Level
     FROM Comments c
     WHERE c.PostId = @postId
@@ -19,6 +20,7 @@ WITH CommentTree AS (
         c.CreatedAt,
         c.ParentId,
         c.PostId,
+        c.UserId,
         ct.Level + 1
     FROM Comments c
     INNER JOIN CommentTree ct
@@ -32,6 +34,7 @@ SELECT
     CreatedAt,
     ParentId,
     PostId,
+    UserId,
     Level
 FROM CommentTree
 ORDER BY Level, CreatedAt, Id

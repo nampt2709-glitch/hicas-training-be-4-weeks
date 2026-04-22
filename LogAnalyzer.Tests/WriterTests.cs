@@ -6,7 +6,6 @@ namespace LogAnalyzer.Tests;
 
 public class WriterTests
 {
-    // Kiểm tra xem ResultWriter tạo file kết quả đúng hay không
     [Fact]
     public void WTT01_ShouldCreateResultFile_InResultsFolder()
     {
@@ -28,7 +27,8 @@ public class WriterTests
                 new("world", 2)
             });
 
-        var outputPath = ResultWriter.Write(report);
+        IResultWriter writer = new ResultWriterService();
+        var outputPath = writer.Write(report);
 
         try
         {
@@ -54,7 +54,6 @@ public class WriterTests
         }
     }
 
-    // Kiểm tra xem ResultWriter viết "No words found." khi không có từ
     [Fact]
     public void WTT02_ShouldWriteNoWordsFound_WhenTopItemsEmpty()
     {
@@ -72,7 +71,8 @@ public class WriterTests
             },
             Array.Empty<FrequencyItem>());
 
-        var outputPath = ResultWriter.Write(report);
+        IResultWriter writer = new ResultWriterService();
+        var outputPath = writer.Write(report);
 
         try
         {
@@ -89,7 +89,6 @@ public class WriterTests
         }
     }
 
-    // Kiểm tra xem ResultWriter viết "No error-related terms found." khi không có exception
     [Fact]
     public void WTT03_ShouldWriteNoErrorTermsFound_WhenTopItemsEmpty()
     {
@@ -107,7 +106,8 @@ public class WriterTests
             },
             Array.Empty<FrequencyItem>());
 
-        var outputPath = ResultWriter.Write(report);
+        IResultWriter writer = new ResultWriterService();
+        var outputPath = writer.Write(report);
 
         try
         {

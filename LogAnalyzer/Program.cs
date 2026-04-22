@@ -1,44 +1,49 @@
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace LogAnalyzer;
 
-/// <summary>
-/// Entry point: infinite console menu until the user exits.
-/// Three flows: analyze an existing file, generate error log only, or generate then analyze.
-/// </summary>
+// Điểm vào: cấu hình DI, sau đó menu console (các thao tác dùng interface đã đăng ký).
 public static class Program
 {
     public static async Task Main(string[] args)
     {
-        // UTF-8 so Vietnamese and special characters print correctly on the console.
         Console.OutputEncoding = Encoding.UTF8;
 
-        // Register process-wide handlers (background threads, unobserved tasks) before any work runs.
         GlobalExceptionHandling.Register();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IFileReader, FileReaderService>();
+        services.AddSingleton<IResultWriter, ResultWriterService>();
+        services.AddSingleton<ILogGenerator, LogGeneratorService>();
+        services.AddSingleton<IBenchmarkRunner, BenchmarkRunnerService>();
+
+        await using var provider = services.BuildServiceProvider();
+
+        var benchmarkRunner = provider.GetRequiredService<IBenchmarkRunner>();
+        var resultWriter = provider.GetRequiredService<IResultWriter>();
+        var logGenerator = provider.GetRequiredService<ILogGenerator>();
 
         try
         {
-            await RunMenuLoopAsync();
+            await RunMenuLoopAsync(benchmarkRunner, resultWriter, logGenerator);
         }
         catch (Exception ex)
         {
-            // Any exception that escapes the menu loop is treated as fatal; set a non-zero exit code.
             GlobalExceptionHandling.WriteExceptionBlock("Fatal error — exiting", ex, includeStackTrace: true);
             Environment.ExitCode = 1;
         }
     }
 
-    /// <summary>
-    /// Menu loop isolated so <see cref="Main"/> can wrap it in an outer try/catch.
-    /// </summary>
-    private static async Task RunMenuLoopAsync()
+    private static async Task RunMenuLoopAsync(
+        IBenchmarkRunner benchmarkRunner,
+        IResultWriter resultWriter,
+        ILogGenerator logGenerator)
     {
-        // After each successful action the user can return to the menu or type exit.
         while (true)
         {
             try
             {
-                // --- Show menu and read choice ---
                 Console.WriteLine();
                 Console.WriteLine("========================================");
                 Console.WriteLine("LogAnalyzer");
@@ -51,29 +56,24 @@ public static class Program
 
                 var choice = (Console.ReadLine() ?? string.Empty).Trim();
 
-                // Exit immediately on 0 or "exit" (case-insensitive).
                 if (choice.Equals("0", StringComparison.OrdinalIgnoreCase) ||
                     choice.Equals("exit", StringComparison.OrdinalIgnoreCase))
                 {
                     break;
                 }
 
-                // --- Branch: each case runs a different pipeline ---
                 switch (choice)
                 {
                     case "1":
-                        // User path: read file, run 6-way benchmark, write report.
-                        await AnalyzeExistingFileAsync();
+                        await AnalyzeExistingFileAsync(benchmarkRunner, resultWriter);
                         break;
 
                     case "2":
-                        // Generate a large sample log (1M lines) for manual testing or option 1.
-                        await GenerateOnlyAsync();
+                        await GenerateOnlyAsync(logGenerator);
                         break;
 
                     case "3":
-                        // Generate sample log then run the same benchmark pipeline as option 1.
-                        await GenerateAndAnalyzeAsync();
+                        await GenerateAndAnalyzeAsync(benchmarkRunner, resultWriter, logGenerator);
                         break;
 
                     default:
@@ -81,7 +81,6 @@ public static class Program
                         continue;
                 }
 
-                // --- After one action: Enter returns to menu, exit quits ---
                 Console.WriteLine();
                 Console.WriteLine("Press Enter to continue, or type exit to quit.");
                 var next = (Console.ReadLine() ?? string.Empty).Trim();
@@ -92,7 +91,6 @@ public static class Program
             }
             catch (Exception ex)
             {
-                // Keep the app alive: print full details (including stack) then return to the menu.
                 GlobalExceptionHandling.WriteExceptionBlock("Error in menu (press Enter to continue)", ex, includeStackTrace: true);
                 Console.WriteLine("Press Enter to return to menu...");
                 Console.ReadLine();
@@ -100,11 +98,11 @@ public static class Program
         }
     }
 
-    private static async Task AnalyzeExistingFileAsync()
+    private static async Task AnalyzeExistingFileAsync(
+        IBenchmarkRunner benchmarkRunner,
+        IResultWriter resultWriter)
     {
-        // --- Ask for file path ---
         Console.Write("Enter file path: ");
-        // Trim and strip quotes (Windows paths copied as "C:\...").
         var inputPath = (Console.ReadLine() ?? string.Empty).Trim().Trim('"');
 
         if (string.IsNullOrWhiteSpace(inputPath))
@@ -119,7 +117,6 @@ public static class Program
             return;
         }
 
-        // --- Infer analysis mode from file name ("ErrorLog" => error-term catalog mode) ---
         var mode = Analyzer.DetectMode(Path.GetFileName(inputPath));
 
         Console.WriteLine();
@@ -128,23 +125,34 @@ public static class Program
         Console.WriteLine($"File: {inputPath}");
         Console.WriteLine();
 
-        // --- Benchmark: sync/async read × Sequential / Parallel.ForEach / PLINQ ---
-        var report = await BenchmarkRunner.RunAsync(
+        var report = await benchmarkRunner.RunAsync(
             inputPath,
             mode,
             message => Console.WriteLine(message));
 
+        PrintPerformanceTableToConsole(report);
+
         Console.WriteLine();
         Console.WriteLine("Writing result file...");
 
-        // --- Write timings + top 50 to Results folder ---
-        var resultPath = ResultWriter.Write(report);
+        var resultPath = resultWriter.Write(report);
 
         Console.WriteLine("Done. Result saved to:");
         Console.WriteLine(resultPath);
     }
 
-    private static Task GenerateOnlyAsync()
+    private static void PrintPerformanceTableToConsole(BenchmarkReport report)
+    {
+        Console.WriteLine();
+        Console.WriteLine("===== PERFORMANCE =====");
+        Console.WriteLine($"{"Mode",-30}{"Time(ms)",12}");
+        foreach (var run in report.Runs)
+        {
+            Console.WriteLine($"{run.Label,-30}{run.ElapsedMilliseconds,12}");
+        }
+    }
+
+    private static Task GenerateOnlyAsync(ILogGenerator logGenerator)
     {
         Console.WriteLine();
         Console.WriteLine("Generating error log...");
@@ -152,8 +160,7 @@ public static class Program
         Console.WriteLine("Selected types: 100 random items from 200 predefined error terms");
         Console.WriteLine();
 
-        // Synthetic log: timestamp, [ERROR], random error type from catalog, module, code.
-        var generatedPath = LogGenerator.Generate(
+        var generatedPath = logGenerator.Generate(
             lineCount: 1_000_000,
             selectedTypeCount: 100,
             progress: message => Console.WriteLine(message));
@@ -164,7 +171,10 @@ public static class Program
         return Task.CompletedTask;
     }
 
-    private static async Task GenerateAndAnalyzeAsync()
+    private static async Task GenerateAndAnalyzeAsync(
+        IBenchmarkRunner benchmarkRunner,
+        IResultWriter resultWriter,
+        ILogGenerator logGenerator)
     {
         Console.WriteLine();
         Console.WriteLine("Generating error log...");
@@ -172,8 +182,7 @@ public static class Program
         Console.WriteLine("Selected types: 100 random items from 200 predefined error terms");
         Console.WriteLine();
 
-        // Step 1: create log; name contains "ErrorLog" so DetectMode picks Error mode.
-        var generatedPath = LogGenerator.Generate(
+        var generatedPath = logGenerator.Generate(
             lineCount: 1_000_000,
             selectedTypeCount: 100,
             progress: message => Console.WriteLine(message));
@@ -190,16 +199,17 @@ public static class Program
         Console.WriteLine($"File: {generatedPath}");
         Console.WriteLine();
 
-        // Step 2: same benchmark path as AnalyzeExistingFileAsync.
-        var report = await BenchmarkRunner.RunAsync(
+        var report = await benchmarkRunner.RunAsync(
             generatedPath,
             mode,
             message => Console.WriteLine(message));
 
+        PrintPerformanceTableToConsole(report);
+
         Console.WriteLine();
         Console.WriteLine("Writing result file...");
 
-        var resultPath = ResultWriter.Write(report);
+        var resultPath = resultWriter.Write(report);
 
         Console.WriteLine("Done. Result saved to:");
         Console.WriteLine(resultPath);

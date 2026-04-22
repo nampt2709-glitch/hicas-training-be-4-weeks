@@ -1,6 +1,6 @@
 ================================================================================
-  FILE: LogAnalyzer/LogGenerator.cs
-  MỤC ĐÍCH: Tạo file log GIẢ (dữ liệu mẫu) rất lớn để thử phân tích và benchmark
+  FILE: LogAnalyzer/Services/LogGeneratorService.cs (ILogGenerator)
+  MỤC ĐÍCH: Tạo file log GIẢ (dữ liệu mẫu) rất lớn để thử phân tích
 ================================================================================
 
 TẠI SAO CÓ FILE NÀY?
@@ -12,7 +12,7 @@ TẠI SAO CÓ FILE NÀY?
 
 
 --------------------------------------------------------------------------------
-CLASS: LogGenerator (static)
+CLASS: LogGeneratorService (ILogGenerator)
 --------------------------------------------------------------------------------
 
   PHƯƠNG THỨC: Generate(lineCount, selectedTypeCount, progress)

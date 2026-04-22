@@ -1,0 +1,80 @@
+================================================================================
+  LOG ANALYZER - BẢN ĐỒ HỆ THỐNG (đọc file này trước)
+Hình dung toàn bộ chương trình chạy như thế nào
+================================================================================
+
+1. CHƯƠNG TRÌNH LÀM GÌ (MỤC ĐÍCH TỔNG QUÁT)?
+   - Đọc một file văn bản (thường là file log).
+   - Tách ra các "token" (mảnh chữ/số có nghĩa - ví dụ từ, tên lỗi).
+   - Đếm xem mỗi token xuất hiện bao nhiêu lần (tần suất).
+   - So sánh thời gian: đọc sync/async × (Sequential, Parallel.ForEach, PLINQ) — 6 lần đo; console và file Result đều có bảng PERFORMANCE.
+   - Có thể sinh file log giả rất lớn để thử nghiệm.
+
+  Lưu ý: Program.cs là menu console và đăng ký DI (interface -> implementation).
+  Tài liệu Logics KHÔNG mô tả từng dòng CodeBehind. Cấu trúc thư mục:
+  - Interfaces/    (hợp đồng C# — tên cũ: Abstractions/)
+  - Services/      (triển khai interface, inject được)
+  - Core/          (mô hình dữ liệu, Analyzer, Counter, xử lý exception toàn cục)
+
+  Tài liệu cấu trúc chi tiết (từng folder, từng file, quan hệ Core–Service): xem
+  CAU_TRUC_PROJECT_CHI_TIET.txt trong cùng thư mục Logics/.
+
+
+2. LUỒNG XỬ LÝ CHÍNH (từ file đến kết quả)
+
+   Bước A - ĐỌC FILE
+   - IFileReader / FileReaderService: đọc toàn bộ nội dung file thành một chuỗi (string) trong bộ nhớ.
+     + ReadSync: đọc xong mới làm bước tiếp (chặn luồng).
+     + ReadAsync: đọc bất đồng bộ (dùng trong BenchmarkRunner cho nhánh Async).
+
+   Bước B - CHỌN "CHẾ ĐỘ" PHÂN TÍCH (AnalysisMode)
+   - Analyzer.DetectMode: nhìn tên file (ví dụ có chữ "ErrorLog") để đoán:
+     + Word: đếm mọi từ (token chữ/số) trong file.
+     + Error: chỉ đếm các token trùng danh mục cố định (ErrorCatalog).
+
+   Bước C - TÁCH TOKEN
+   - Analyzer: dùng biểu thức chính quy (Regex) tìm các đoạn liền ký tự chữ/số.
+   - ExtractWords / ExtractErrorTerms: trả về từng token một (lazy).
+   - MaterializeTokens: gom hết token vào List một lần (cho đếm song song hiệu quả).
+
+   Bước D - ĐẾM TẦN SUẤT
+   - Counter: Sequential, Parallel.ForEach, Plinq.
+
+   Bước E - SO SÁNH 6 LẦN (IBenchmarkRunner / BenchmarkRunnerService — không dùng gói BenchmarkDotNet)
+   - Chạy 6 biến thể: Sync/Async đọc file × ba cách đếm; đo thời gian (ms); gói BenchmarkReport.
+   - Program in bảng PERFORMANCE (tiếng Anh) và IResultWriter ghi file Result.
+
+   Bước F - GHI FILE KẾT QUẢ
+   - ResultWriter: metadata + bảng PERFORMANCE + top 50 từ/lỗi.
+
+   Bước G (tùy chọn) - SINH LOG GIẢ
+   - LogGenerator: tạo file log mẫu hàng triệu dòng để test.
+
+
+3. CÁC FILE TXT CHI TIẾT TRONG THƯ MỤC Logics
+
+   00_BAN_DO_HE_THONG.txt          - Bản đồ tổng quan (luồng nghiệp vụ)
+   CAU_TRUC_PROJECT_CHI_TIET.txt    - Cấu trúc mã: từng folder/file .cs, quan hệ Core/Service/Interfaces
+   FileReader.txt                   - Đọc file (IFileReader / FileReaderService)
+   Analyzer.txt                     - Chế độ Word/Error, Regex, Catalog lỗi
+   Counter.txt                      - Đếm tần suất; Benchmark: BenchmarkRunnerService
+   ResultWriter.txt                 - Xuất báo cáo .txt
+   LogGenerator.txt                 - Sinh file log giả
+
+
+4. KHÁI NIỆM CẦN NHỚ
+   - Token: một "mảnh" chuỗi được coi là một đơn vị đếm.
+   - Tần suất: số lần xuất hiện của token trong file.
+   - Tuần tự (sequential): xử lý từng phần một trên một luồng.
+   - Song song (parallel): chia việc cho nhiều luồng CPU.
+   - Benchmark (trong project): đo thời gian 6 lần chạy để so sánh cách đọc và cách đếm.
+
+
+5. GỢI Ý CÁCH HỌC
+
+   - Đọc lần lượt các file .txt trong Logics theo thứ tự bản đồ.
+   - Mở song song file .cs tương ứng trong IDE để đối chiếu.
+   - Vẽ sơ đồ: Hộp "File" -> "Chuỗi text" -> "Danh sách token" -> "Bảng đếm"
+     -> "File kết quả".
+
+================================================================================

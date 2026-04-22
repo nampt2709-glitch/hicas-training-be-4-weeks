@@ -1,3 +1,4 @@
+using System.Linq;
 using LogAnalyzer;
 using Xunit;
 
@@ -5,7 +6,7 @@ namespace LogAnalyzer.Tests;
 
 public class BenchmarkTests
 {
-    // Kiểm tra xem BenchmarkRunner chạy đúng hay không cho mode Word
+    // Kiểm tra BenchmarkRunner chạy đủ 6 lần cho chế độ Word.
     [Fact]
     public async Task BT01_ShouldRunAllSixModes_ForWordMode()
     {
@@ -14,7 +15,8 @@ public class BenchmarkTests
 
         try
         {
-            var report = await BenchmarkRunner.RunAsync(tempFile, AnalysisMode.Word);
+            IBenchmarkRunner runner = new BenchmarkRunnerService(new FileReaderService());
+            var report = await runner.RunAsync(tempFile, AnalysisMode.Word);
 
             Assert.NotNull(report);
             Assert.Equal(AnalysisMode.Word, report.Mode);
@@ -31,7 +33,7 @@ public class BenchmarkTests
         }
     }
 
-    // Kiểm tra xem BenchmarkRunner chạy đúng hay không cho mode Error
+    // Kiểm tra BenchmarkRunner chạy đủ 6 lần cho chế độ Error.
     [Fact]
     public async Task BT02_ShouldRunAllSixModes_ForErrorMode()
     {
@@ -40,7 +42,8 @@ public class BenchmarkTests
 
         try
         {
-            var report = await BenchmarkRunner.RunAsync(tempFile, AnalysisMode.Error);
+            IBenchmarkRunner runner = new BenchmarkRunnerService(new FileReaderService());
+            var report = await runner.RunAsync(tempFile, AnalysisMode.Error);
 
             Assert.NotNull(report);
             Assert.Equal(AnalysisMode.Error, report.Mode);

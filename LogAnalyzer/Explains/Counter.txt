@@ -1,0 +1,50 @@
+================================================================================
+  FILE: LogAnalyzer/Core/Counter.cs; BenchmarkRunner: Services/BenchmarkRunnerService.cs
+  MỤC ĐÍCH: Counter (record nằm ở Core/AnalysisModels.cs; Benchmark: Services/BenchmarkRunnerService.cs)
+================================================================================
+
+File này gồm:
+  - (Models) FrequencyItem, BenchmarkRun, BenchmarkReport: Core/AnalysisModels.cs
+  - BenchmarkRunnerService: 6 lần đo (IBenchmarkRunner)
+  - Counter (static): Sequential, Parallel.ForEach, PLINQ
+
+
+================================================================================
+PHẦN 1 - CÁC RECORD
+================================================================================
+
+--- FrequencyItem (Name, Count) ---
+  - Dùng cho bảng tần suất và Top 50.
+
+--- BenchmarkRun (Label, ElapsedMilliseconds, Items) ---
+  - Một lần đo: nhãn cách chạy, thời gian ms, danh sách đếm.
+
+--- BenchmarkReport (Mode, SourceFile, Runs, TopItems) ---
+  - Runs: 6 BenchmarkRun.
+  - TopItems: lấy từ lần chạy đầu tiên có dữ liệu (cho ResultWriter).
+
+
+================================================================================
+PHẦN 2 - BenchmarkRunnerService (IBenchmarkRunner, nhận IFileReader qua constructor)
+================================================================================
+
+--- RunAsync(path, mode, progress?) ---
+  - Chuỗi progress tiếng Anh (Preparing..., Running..., Completed..., Benchmark finished.).
+  - Trả về BenchmarkReport. Đăng ký DI: Program.cs (AddSingleton).
+
+
+================================================================================
+PHẦN 3 - class Counter
+================================================================================
+
+(Xem chi tiết thuật toán đếm trong file .cs — Sequential, ParallelForEach, Plinq.)
+
+
+================================================================================
+TÓM TẮT LUỒNG
+================================================================================
+
+  File --FileReader--> text --Analyzer--> token --Counter--> tần suất
+  (lặp 6 cách trong BenchmarkRunner) --> BenchmarkReport --> ResultWriter + console
+
+================================================================================

@@ -1,17 +1,17 @@
 ================================================================================
-  FILE: LogAnalyzer/FileReader.cs
+  FILE: LogAnalyzer/Services/FileReaderService.cs (interface: Interfaces/IFileReader.cs)
   MỤC ĐÍCH: Đọc toàn bộ nội dung một file văn bản vào bộ nhớ (một string)
 ================================================================================
 
 TẠI SAO CÓ FILE NÀY?
   Chương trình phân tích log đọc HẾT file một lần thành một chuỗi lớn, rồi dùng
-  Regex và thuật toán đếm trên chuỗi đó. FileReader là "lớp bọc" quanh hàm có sẵn của .NET để:
-  - Tách riêng xử lý I/O (đọc đĩa).
-  - So sánh hai kiểu đọc: đồng bộ vs bất đồng bộ trong benchmark.
+  Regex và thuật toán đếm trên chuỗi đó. FileReaderService triển khai IFileReader — quanh
+  File.ReadAllText / File.ReadAllTextAsync. BenchmarkRunnerService inject IFileReader
+  so sánh ReadSync với ReadAsync.
 
 
 --------------------------------------------------------------------------------
-CLASS: FileReader (static - gọi thẳng FileReader.Read...)
+CLASS: FileReaderService (triển khai IFileReader)
 --------------------------------------------------------------------------------
 
  PHƯƠNG THỨC: ReadSync(string path)
@@ -25,10 +25,10 @@ CLASS: FileReader (static - gọi thẳng FileReader.Read...)
   - Đầu vào: path.
   - Đầu ra: Task<string> - hứa sẽ có chuỗi khi đọc xong.
   - Cách hoạt động: gọi File.ReadAllTextAsync(path).
-  - Trong project: dùng để SO SÁNH thời gian với ReadSync trong BenchmarkRunner.
+  - Dùng cho các nhánh "Async + ..." trong BenchmarkRunner.
 
 
 LIÊN KẾT
-  BenchmarkRunner gọi FileReader trước khi Analyzer/Counter xử lý.
+  BenchmarkRunnerService dùng IFileReader trước khi Analyzer/Counter xử lý.
 
 ================================================================================

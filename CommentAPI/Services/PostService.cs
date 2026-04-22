@@ -1,169 +1,211 @@
-using AutoMapper;
-using CommentAPI;
-using CommentAPI.DTOs;
-using CommentAPI.Entities;
+using AutoMapper; 
+using CommentAPI; 
+using CommentAPI.DTOs; 
+using CommentAPI.Entities; 
 using CommentAPI.Interfaces;
-using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http; 
 
-namespace CommentAPI.Services;
+namespace CommentAPI.Services; 
 
-public class PostService : IPostService
+public class PostService : IPostService // CRUD + search + author/admin update paths.
 {
-    private readonly IPostRepository _repository;
-    private readonly IUserRepository _userRepository;
-    private readonly IMapper _mapper;
-    private readonly IEntityResponseCache _cache;
+    private readonly IPostRepository _repository; // Post persistence.
+    private readonly IUserRepository _userRepository; // Kiểm tra FK UserId.
+    private readonly IMapper _mapper; // AutoMapper.
+    private readonly IEntityResponseCache _cache; // Response cache.
 
-    public PostService(
-        IPostRepository repository,
-        IUserRepository userRepository,
-        IMapper mapper,
-        IEntityResponseCache cache)
+    public PostService( // DI ctor.
+        IPostRepository repository, // Post repo.
+        IUserRepository userRepository, // User existence.
+        IMapper mapper, // Mapper.
+        IEntityResponseCache cache) // Cache.
     {
-        _repository = repository;
-        _userRepository = userRepository;
-        _mapper = mapper;
-        _cache = cache;
+        _repository = repository; // Field.
+        _userRepository = userRepository; // Field.
+        _mapper = mapper; // Field.
+        _cache = cache; // Field.
     }
 
-    public async Task<PagedResult<PostDto>> GetPagedAsync(
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default)
+    public async Task<PagedResult<PostDto>> GetPagedAsync( // List posts paged.
+        int page, // Page index.
+        int pageSize, // Page size.
+        CancellationToken cancellationToken = default) // CT.
     {
-        var cacheKey = EntityCacheKeys.PostsPaged(page, pageSize);
-        var cached = await _cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken);
-        if (cached is not null)
+        var cacheKey = EntityCacheKeys.PostsPaged(page, pageSize); // Cache key.
+        var cached = await _cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken); // Try cache.
+        if (cached is not null) // Hit.
         {
-            return cached;
+            return cached; // Fast path.
         }
 
-        var (items, total) = await _repository.GetPagedAsync(page, pageSize, cancellationToken);
-        var result = new PagedResult<PostDto>
+        var (items, total) = await _repository.GetPagedAsync(page, pageSize, cancellationToken); // DB projection already PostDto.
+        var result = new PagedResult<PostDto> // Wrap.
         {
-            Items = items,
-            Page = page,
-            PageSize = pageSize,
-            TotalCount = total
+            Items = items, // Page rows.
+            Page = page, // Page.
+            PageSize = pageSize, // Size.
+            TotalCount = total // Count.
         };
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken);
-        return result;
+        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Store.
+        return result; // Out.
     }
 
-    public async Task<PagedResult<PostDto>> SearchByTitlePagedAsync(
-        string? title,
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default)
+    public async Task<PagedResult<PostDto>> SearchByTitlePagedAsync( // Search title contains.
+        string? title, // Raw term.
+        int page, // Page.
+        int pageSize, // Size.
+        CancellationToken cancellationToken = default) // CT.
     {
-        var term = RequireSearchTerm(title);
-        var cacheKey = EntityCacheKeys.PostsSearchTitle(EntityCacheHash.SearchTerm(term), page, pageSize);
-        var cached = await _cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken);
-        if (cached is not null)
+        var term = RequireSearchTerm(title); // Non-empty.
+        var cacheKey = EntityCacheKeys.PostsSearchTitle(EntityCacheHash.SearchTerm(term), page, pageSize); // Key.
+        var cached = await _cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken); // Get.
+        if (cached is not null) // Hit.
         {
-            return cached;
+            return cached; // Cached list.
         }
 
-        var (items, total) = await _repository.SearchByTitlePagedAsync(term, page, pageSize, cancellationToken);
-        var result = new PagedResult<PostDto>
+        var (items, total) = await _repository.SearchByTitlePagedAsync(term, page, pageSize, cancellationToken); // Query.
+        var result = new PagedResult<PostDto> // Result.
         {
-            Items = items,
-            Page = page,
-            PageSize = pageSize,
-            TotalCount = total
+            Items = items, // Items.
+            Page = page, // Page.
+            PageSize = pageSize, // Size.
+            TotalCount = total // Total.
         };
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken);
-        return result;
+        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Save.
+        return result; // Return.
     }
 
-    private static string RequireSearchTerm(string? raw)
+    private static string RequireSearchTerm(string? raw) // Validate search string.
     {
-        var t = raw?.Trim();
-        if (string.IsNullOrEmpty(t))
+        var t = raw?.Trim(); // Trim.
+        if (string.IsNullOrEmpty(t)) // Empty.
         {
-            throw new ApiException(
-                StatusCodes.Status400BadRequest,
-                ApiErrorCodes.SearchTermRequired,
-                ApiMessages.SearchTermRequired);
+            throw new ApiException( // 400.
+                StatusCodes.Status400BadRequest, // 400.
+                ApiErrorCodes.SearchTermRequired, // Code.
+                ApiMessages.SearchTermRequired); // Msg.
         }
 
-        return t;
+        return t; // Term.
     }
 
-    public async Task<PostDto> GetByIdAsync(Guid id)
+    public async Task<PostDto> GetByIdAsync(Guid id) // Single post read.
     {
-        var cacheKey = EntityCacheKeys.Post(id);
-        var cached = await _cache.GetJsonAsync<PostDto>(cacheKey, default);
-        if (cached is not null)
+        var cacheKey = EntityCacheKeys.Post(id); // Key by id.
+        var cached = await _cache.GetJsonAsync<PostDto>(cacheKey, default); // Read cache.
+        if (cached is not null) // Hit.
         {
-            return cached;
+            return cached; // DTO.
         }
 
-        var dto = await _repository.GetByIdForReadAsync(id, default);
-        if (dto is null)
+        var dto = await _repository.GetByIdForReadAsync(id, default); // No-tracking projection.
+        if (dto is null) // Not found.
         {
-            throw new ApiException(
-                StatusCodes.Status404NotFound,
-                ApiErrorCodes.PostNotFound,
-                ApiMessages.PostNotFound);
+            throw new ApiException( // 404.
+                StatusCodes.Status404NotFound, // 404.
+                ApiErrorCodes.PostNotFound, // Code.
+                ApiMessages.PostNotFound); // Msg.
         }
 
-        await _cache.SetJsonAsync(cacheKey, dto, default);
-        return dto;
+        await _cache.SetJsonAsync(cacheKey, dto, default); // Populate cache.
+        return dto; // DTO.
     }
 
-    public async Task<PostDto> CreateAsync(CreatePostDto dto)
+    public async Task<PostDto> CreateAsync(CreatePostDto dto) // Insert post.
     {
-        if (!await _userRepository.ExistsAsync(dto.UserId))
+        if (!await _userRepository.ExistsAsync(dto.UserId)) // FK guard.
         {
-            throw new ApiException(
-                StatusCodes.Status404NotFound,
-                ApiErrorCodes.UserNotFound,
-                ApiMessages.UserNotFound);
+            throw new ApiException( // User missing.
+                StatusCodes.Status404NotFound, // 404.
+                ApiErrorCodes.UserNotFound, // Code.
+                ApiMessages.UserNotFound); // Msg.
         }
 
-        var entity = _mapper.Map<Post>(dto);
-        entity.Id = Guid.NewGuid();
+        var entity = _mapper.Map<Post>(dto); // Map scalar fields.
+        entity.Id = Guid.NewGuid(); // New PK.
 
-        await _repository.AddAsync(entity);
-        await _repository.SaveChangesAsync();
+        await _repository.AddAsync(entity); // Stage insert.
+        await _repository.SaveChangesAsync(); // Commit.
 
-        return _mapper.Map<PostDto>(entity);
+        return _mapper.Map<PostDto>(entity); // Return mapped DTO (client nhận id mới).
     }
 
-    public async Task UpdateAsync(Guid id, UpdatePostDto dto)
+    // User: chỉ chủ bài (UserId trùng JWT) được cập nhật tiêu đề/nội dung.
+    public async Task UpdateAsAuthorAsync(Guid id, UpdatePostDto dto, Guid currentUserId) // Author path.
     {
-        var entity = await _repository.GetByIdAsync(id);
-        if (entity is null)
+        var entity = await _repository.GetByIdAsync(id); // Load for update.
+        if (entity is null) // Missing post.
         {
-            throw new ApiException(
-                StatusCodes.Status404NotFound,
-                ApiErrorCodes.PostNotFound,
-                ApiMessages.PostNotFound);
+            throw new ApiException( // 404.
+                StatusCodes.Status404NotFound, // 404.
+                ApiErrorCodes.PostNotFound, // Code.
+                ApiMessages.PostNotFound); // Msg.
         }
 
-        entity.Title = dto.Title;
-        entity.Content = dto.Content;
-        _repository.Update(entity);
-        await _repository.SaveChangesAsync();
+        if (entity.UserId != currentUserId) // Not owner.
+        {
+            throw new ApiException( // 403 business rule.
+                StatusCodes.Status403Forbidden, // Forbidden.
+                ApiErrorCodes.NotResourceAuthor, // Code.
+                ApiMessages.NotResourceAuthor); // Msg.
+        }
 
-        await _cache.RemoveAsync(EntityCacheKeys.Post(id), default);
+        entity.Title = dto.Title; // Apply title.
+        entity.Content = dto.Content; // Apply body.
+        _repository.Update(entity); // Mark modified.
+        await _repository.SaveChangesAsync(); // Persist.
+
+        await _cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Invalidate read model.
     }
 
-    public async Task DeleteAsync(Guid id)
+    // Admin: cập nhật tiêu đề/nội dung, tùy chọn đổi UserId nếu gửi giá trị.
+    public async Task UpdateAsAdminAsync(Guid id, AdminUpdatePostDto dto) // Admin path.
     {
-        var entity = await _repository.GetByIdAsync(id);
-        if (entity is null)
+        var entity = await _repository.GetByIdAsync(id); // Load.
+        if (entity is null) // Not found.
         {
-            throw new ApiException(
-                StatusCodes.Status404NotFound,
-                ApiErrorCodes.PostNotFound,
-                ApiMessages.PostNotFound);
+            throw new ApiException( // 404.
+                StatusCodes.Status404NotFound, // 404.
+                ApiErrorCodes.PostNotFound, // Code.
+                ApiMessages.PostNotFound); // Msg.
         }
 
-        await _cache.RemoveAsync(EntityCacheKeys.Post(id), default);
+        if (dto.UserId is { } u) // Nullable pattern: có gửi UserId mới.
+        {
+            if (!await _userRepository.ExistsAsync(u)) // Target user must exist.
+            {
+                throw new ApiException( // 404.
+                    StatusCodes.Status404NotFound, // 404.
+                    ApiErrorCodes.UserNotFound, // Code.
+                    ApiMessages.UserNotFound); // Msg.
+            }
 
-        _repository.Remove(entity);
-        await _repository.SaveChangesAsync();
+            entity.UserId = u; // Reassign owner.
+        }
+
+        entity.Title = dto.Title; // Title.
+        entity.Content = dto.Content; // Content.
+        _repository.Update(entity); // Modified.
+        await _repository.SaveChangesAsync(); // Save.
+
+        await _cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Invalidate cache entry.
+    }
+
+    public async Task DeleteAsync(Guid id) // Remove post.
+    {
+        var entity = await _repository.GetByIdAsync(id); // Find tracked entity.
+        if (entity is null) // Missing.
+        {
+            throw new ApiException( // 404.
+                StatusCodes.Status404NotFound, // 404.
+                ApiErrorCodes.PostNotFound, // Code.
+                ApiMessages.PostNotFound); // Msg.
+        }
+
+        await _cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Drop cache before delete.
+
+        _repository.Remove(entity); // Stage delete.
+        await _repository.SaveChangesAsync(); // Commit cascade rules theo model.
     }
 }

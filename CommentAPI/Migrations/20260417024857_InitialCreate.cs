@@ -1,14 +1,14 @@
-﻿using System;
-using Microsoft.EntityFrameworkCore.Migrations;
+﻿using System; // Cụm using chuẩn migration ban đầu, — giữ nguyên cấu trúc tệp công cụ.
+using Microsoft.EntityFrameworkCore.Migrations; // MigrationBuilder, tạo bảng/ cột, — base cho Up/Down.
 
 #nullable disable
 
 namespace CommentAPI.Migrations
 {
-    /// <inheritdoc />
+    // Kế thừa mô tả từ lớp Migration (EF Core tự sinh).
     public partial class InitialCreate : Migration
     {
-        /// <inheritdoc />
+        // Kế thừa mô tả từ lớp Migration (EF Core tự sinh).
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.CreateTable(
@@ -97,7 +97,7 @@ namespace CommentAPI.Migrations
                 column: "UserId");
         }
 
-        /// <inheritdoc />
+        // Kế thừa mô tả từ lớp Migration (EF Core tự sinh).
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(

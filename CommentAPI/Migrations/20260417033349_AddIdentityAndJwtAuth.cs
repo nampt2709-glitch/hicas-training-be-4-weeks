@@ -1,14 +1,14 @@
-﻿using System;
-using Microsoft.EntityFrameworkCore.Migrations;
+﻿using System; // Dùng cho kiểu hệ thống nếu migration sinh, — giữ cấu trúc chuẩn EF mặc định.
+using Microsoft.EntityFrameworkCore.Migrations; // Lớp Migration, MigrationBuilder, cơ sở cho Up/Down.
 
 #nullable disable
 
 namespace CommentAPI.Migrations
 {
-    /// <inheritdoc />
+    // Kế thừa mô tả từ lớp Migration (EF Core tự sinh).
     public partial class AddIdentityAndJwtAuth : Migration
     {
-        /// <inheritdoc />
+        // Kế thừa mô tả từ lớp Migration (EF Core tự sinh).
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.AddColumn<int>(
@@ -264,7 +264,7 @@ namespace CommentAPI.Migrations
                 column: "RoleId");
         }
 
-        /// <inheritdoc />
+        // Kế thừa mô tả từ lớp Migration (EF Core tự sinh).
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(

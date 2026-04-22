@@ -4,26 +4,13 @@ using System.Text.RegularExpressions;
 
 namespace LogAnalyzer;
 
-// Chia làm 2 chế độ: 
-// Word = đếm tần suất từ (token chữ/số);
-// Error = chỉ đếm các token trùng với catalog lỗi cố định.
-public enum AnalysisMode
-{
-    Word = 0,
-    Error = 1
-}
-
-// <summary>
-// Tách token từ một dòng/chuỗi lớn: hoặc là "từ" tổng quát, hoặc là "thuật ngữ lỗi" đã chuẩn hoá theo ErrorCatalog.
-// </summary>
+// Tách token từ chuỗi lớn: Word (regex) hoặc Error (mapping catalog).
 public static class Analyzer
 {
-    // Biểu thức chính quy: dãy liền ký tự chữ (Unicode Letter), số (Number), và dấu nháy đơn — mỗi match là một token.
     private static readonly Regex WordRegex = new(
         @"[\p{L}\p{N}']+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    // Nếu tên file chứa "ErrorLog" (không phân biệt hoa thường) thì giả định file log lỗi -> chế độ Error; ngược lại Word.
     public static AnalysisMode DetectMode(string fileName)
     {
         return fileName.Contains("ErrorLog", StringComparison.OrdinalIgnoreCase)
@@ -31,7 +18,6 @@ public static class Analyzer
             : AnalysisMode.Word;
     }
 
-    // Mot lan WordRegex.Matches + vong for: cung quy tac ExtractWords/ExtractErrorTerms; list san cho Parallel/PLINQ.
     public static List<string> MaterializeTokens(string text, AnalysisMode mode)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -66,7 +52,7 @@ public static class Analyzer
                 continue;
             }
 
-            if (ErrorCatalog.TryGetCanonical(token, out var canonical))
+            if (ErrorCatalog.TryGetCanonicalForTrimmed(token, out var canonical))
             {
                 errorList.Add(canonical);
             }
@@ -75,7 +61,6 @@ public static class Analyzer
         return errorList;
     }
 
-    // Lay tat ca token tu text, chuyen ve chu thuong, bo token rong — dung cho dem tu trong file van ban bat ky.
     public static IEnumerable<string> ExtractWords(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -95,8 +80,6 @@ public static class Analyzer
         }
     }
 
-    // Với mỗi token, nếu nằm trong ErrorCatalog thì xuất ra dạng chuẩn (canonical); token không thuộc catalog bỏ qua.
-    // Như vậy đếm Error chỉ tính các lỗi đã định nghĩa, bỏ qua "Module", "Code", số, v.v.
     public static IEnumerable<string> ExtractErrorTerms(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -120,24 +103,23 @@ public static class Analyzer
     }
 }
 
-// <summary>
-// Catalog cố định 200 thuật ngữ lỗi + từ điển tra cứu không phân biệt hoa thường + hàm lấy mẫu ngẫu nhiên.
-// </summary>
 public static class ErrorCatalog
 {
     public static readonly IReadOnlyList<string> AllTerms = BuildAllTerms();
 
-    // Từ điển: key và value cùng là term (lookup nhanh token -> dạng chuẩn).
     private static readonly IReadOnlyDictionary<string, string> Lookup =
         AllTerms.ToDictionary(term => term, term => term, StringComparer.OrdinalIgnoreCase);
 
-    // Tra cứu token (trim) trong catalog; trả về true và canonical nếu có.
     public static bool TryGetCanonical(string token, out string canonical)
     {
         return Lookup.TryGetValue(token.Trim(), out canonical!);
     }
 
-    // Lấy count phần tử ngẫu nhiên không lặp từ pool 200: xáo Fisher-Yates trên mảng copy, lấy count phần tử đầu.
+    internal static bool TryGetCanonicalForTrimmed(string trimmedToken, out string canonical)
+    {
+        return Lookup.TryGetValue(trimmedToken, out canonical!);
+    }
+
     public static string[] GetRandomSample(int count, Random? random = null)
     {
         random ??= Random.Shared;
@@ -156,7 +138,6 @@ public static class ErrorCatalog
         return result;
     }
 
-    // Xây dựng đúng 200 term: ~50 tên exception + 10 prefix × 15 biến số = 150 -> tổng 200 (kiểm tra assert).
     private static IReadOnlyList<string> BuildAllTerms()
     {
         var terms = new List<string>(200);

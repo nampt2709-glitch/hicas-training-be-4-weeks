@@ -1,5 +1,5 @@
 ================================================================================
-  FILE: LogAnalyzer/Analyzer.cs
+  FILE: LogAnalyzer/Core/Analyzer.cs
   MỤC ĐÍCH: Hiểu CHẾ ĐỘ phân tích, tách TOKEN từ chuỗi lớn, và CATALOG lỗi cố định
 ================================================================================
 
@@ -61,7 +61,7 @@ PHẦN B - class Analyzer (static)
   - Trả về IEnumerable<string> (lazy - yield).
   - Cùng logic tách như Materialize Word mode nhưng từng phần tử một: tiết kiệm
     bộ nhớ khi đếm tuần tự (Sequential) vì không tạo List chứa hết token.
-  - Dùng trong BenchmarkRunner.AnalyzeText cho nhanh Sequential/Async Sequential.
+  - Dùng trong BenchmarkRunner (nhánh Sequential) cùng ExtractWords/ExtractErrorTerms.
 
 --- ExtractErrorTerms(string text) ---
   - Tương tự ExtractWords nhưng chỉ yield khi token có trong catalog (canonical).
