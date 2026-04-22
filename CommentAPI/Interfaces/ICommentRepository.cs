@@ -128,6 +128,18 @@ public interface ICommentRepository
         int pageSize,
         CancellationToken cancellationToken = default);
 
+    // Toàn bộ comment + lazy: không Skip/Take; cùng thứ tự sắp với demo phân trang (PostId, CreatedAt, Id).
+    Task<List<CommentLoadingDemoDto>> GetAllCommentsLazyLoadingDemoAsync(CancellationToken cancellationToken = default);
+
+    // Toàn bộ comment + eager: Include Post, User, Children, AsSplitQuery.
+    Task<List<CommentLoadingDemoDto>> GetAllCommentsEagerLoadingDemoAsync(CancellationToken cancellationToken = default);
+
+    // Toàn bộ comment + explicit: SELECT tất cả comment rồi LoadAsync Post/User/Children từng dòng.
+    Task<List<CommentLoadingDemoDto>> GetAllCommentsExplicitLoadingDemoAsync(CancellationToken cancellationToken = default);
+
+    // Toàn bộ comment + projection: một truy vấn Select danh sách DTO (không Include graph).
+    Task<List<CommentLoadingDemoDto>> GetAllCommentsProjectionDemoAsync(CancellationToken cancellationToken = default);
+
     // Lưu mọi thay đổi đang treo (insert/update/delete) xuống cơ sở dữ liệu.
     Task SaveChangesAsync();
 }

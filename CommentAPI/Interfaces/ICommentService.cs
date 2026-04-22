@@ -162,4 +162,13 @@ public interface ICommentService
         int page,
         int pageSize,
         CancellationToken cancellationToken = default);
+
+    // Demo toàn bộ comment (không phân trang): cùng chiến lược nạp với bản paged; dữ liệu lớn có thể tốn bộ nhớ và nhiều round-trip.
+    Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsLazyLoadingDemoAsync(CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsEagerLoadingDemoAsync(CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsExplicitLoadingDemoAsync(CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsProjectionDemoAsync(CancellationToken cancellationToken = default);
 }

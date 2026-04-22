@@ -40,8 +40,8 @@ var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOption
 var sqlConnectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is missing.");
 
-// Cấu hình IDistributedCache: ưu tiên Redis, bộ nhớ dự phòng; xem CommentApiDistributedCaching.cs.
-builder.AddCommentApiDistributedCache();
+// Cấu hình IDistributedCache: ưu tiên Redis, bộ nhớ dự phòng; xem DistributedCaching.cs.
+builder.AddDistributedCaching();
 builder.Services.AddScoped<CacheResponseTracker>();
 builder.Services.AddScoped<IEntityResponseCache, EntityResponseCache>();
 

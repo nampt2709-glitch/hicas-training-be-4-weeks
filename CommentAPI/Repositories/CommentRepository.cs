@@ -356,6 +356,11 @@ public class CommentRepository : ICommentRepository
         }; // Kết thúc khởi tạo DTO.
     } // Kết thúc MapCommentFlatRow.
 
+    // --- Demo loading (lazy / eager / explicit / projection) ---
+    // Hợp đồng chung: cùng một CommentLoadingDemoDto — chỉ cần Post.Title, User.UserName, và số Children trực tiếp.
+    // Không nạp Parent: DTO không hiển thị cha; nạp Parent ở một nhánh làm lệch số round-trip và mục tiêu so sánh.
+    // Phân trang: cùng COUNT toàn bảng, cùng OrderBy PostId → CreatedAt → Id, cùng Skip/Take.
+
     public async Task<CommentLoadingDemoDto?> GetCommentLazyLoadingDemoAsync(Guid id, CancellationToken cancellationToken = default) // Demo lazy.
     { // Mở khối.
         var comment = await _context.Comments // DbSet không AsNoTracking → entity tracked.
@@ -365,9 +370,10 @@ public class CommentRepository : ICommentRepository
             return null; // Báo không có dữ liệu demo.
         } // Kết thúc if.
 
+        // Thứ tự giống explicit: Post → User → Children (mỗi bước một round-trip lazy khi proxy bật).
         var postTitle = comment.Post?.Title; // Truy cập Post có thể phát sinh thêm SELECT lazy (proxy).
         var authorUserName = comment.User?.UserName; // Truy cập User có thể phát sinh thêm SELECT.
-        var childrenCount = comment.Children.Count; // Đếm con có thể phát sinh SELECT nạp collection.
+        var childrenCount = comment.Children.Count; // Đếm con: lazy tương đương một truy vấn tới Children như explicit LoadAsync collection.
 
         return new CommentLoadingDemoDto // Gói kết quả demo (không phải truy vấn SQL).
         { // Mở initializer.
@@ -388,8 +394,7 @@ public class CommentRepository : ICommentRepository
         var comment = await _context.Comments // DbSet.
             .Include(c => c.Post) // Yêu cầu JOIN/nạp Post trong truy vấn (hoặc truy vấn split).
             .Include(c => c.User) // Nạp User.
-            .Include(c => c.Parent) // Nạp Parent.
-            .Include(c => c.Children) // Nạp tập con.
+            .Include(c => c.Children) // Nạp tập con (cùng phạm vi với lazy: không Include Parent vì DTO không dùng).
             .AsSplitQuery() // Tách thành nhiều SELECT để tránh nhân bản hàng.
             .AsNoTracking() // Không track sau khi đọc.
             .FirstOrDefaultAsync(c => c.Id == id, cancellationToken); // Thực thi chuỗi Include + điều kiện Id.
@@ -421,13 +426,9 @@ public class CommentRepository : ICommentRepository
             return null; // Null.
         } // Kết thúc if.
 
+        // Cùng thứ tự nạp với thứ tự lazy kích hoạt: Post → User → Children (bỏ Parent — khớp DTO).
         await _context.Entry(comment).Reference(c => c.Post).LoadAsync(cancellationToken); // SELECT nạp Post theo FK.
         await _context.Entry(comment).Reference(c => c.User).LoadAsync(cancellationToken); // SELECT nạp User.
-        if (comment.ParentId.HasValue) // Có cha mới cần nạp Parent.
-        { // Mở khối.
-            await _context.Entry(comment).Reference(c => c.Parent).LoadAsync(cancellationToken); // SELECT nạp Parent.
-        } // Kết thúc if Parent.
-
         await _context.Entry(comment).Collection(c => c.Children).LoadAsync(cancellationToken); // SELECT nạp danh sách con.
 
         return new CommentLoadingDemoDto // DTO sau khi nạp rõ ràng.
@@ -511,8 +512,7 @@ public class CommentRepository : ICommentRepository
         var rows = await baseQuery // Cùng base không Include cho count, nhưng đây là query mới từ cùng baseQuery.
             .Include(c => c.Post) // Nạp Post.
             .Include(c => c.User) // Nạp User.
-            .Include(c => c.Parent) // Nạp Parent.
-            .Include(c => c.Children) // Nạp Children.
+            .Include(c => c.Children) // Nạp Children (không Include Parent — đồng bộ demo).
             .AsSplitQuery() // Tách query.
             .OrderBy(c => c.PostId) // Sắp trang.
             .ThenBy(c => c.CreatedAt) // Thời gian.
@@ -556,13 +556,9 @@ public class CommentRepository : ICommentRepository
         var list = new List<CommentLoadingDemoDto>(rows.Count); // Danh sách đích.
         foreach (var comment in rows) // Từng dòng trang.
         { // Mở khối.
+            // Mỗi comment: 3 lần LoadAsync — tương ứng 3 lần lazy (Post, User, Children) trên cùng một trang.
             await _context.Entry(comment).Reference(c => c.Post).LoadAsync(cancellationToken); // SQL: nạp Post.
             await _context.Entry(comment).Reference(c => c.User).LoadAsync(cancellationToken); // SQL: nạp User.
-            if (comment.ParentId.HasValue) // Có cha.
-            { // Mở khối.
-                await _context.Entry(comment).Reference(c => c.Parent).LoadAsync(cancellationToken); // SQL: nạp Parent nếu có.
-            } // Kết thúc if.
-
             await _context.Entry(comment).Collection(c => c.Children).LoadAsync(cancellationToken); // SQL: nạp Children.
 
             list.Add(new CommentLoadingDemoDto // Thêm DTO sau khi nạp.
@@ -612,6 +608,114 @@ public class CommentRepository : ICommentRepository
 
         return (items, total); // Trả trang DTO và tổng.
     } // Kết thúc GetCommentsProjectionDemoPagedAsync.
+
+    // --- Demo loading: toàn bộ comment (không phân trang); cùng OrderBy và cùng phạm vi Post/User/Children như bản paged. ---
+    public async Task<List<CommentLoadingDemoDto>> GetAllCommentsLazyLoadingDemoAsync(CancellationToken cancellationToken = default) // Lazy, mọi dòng.
+    { // Mở khối.
+        var rows = await _context.Comments // Tracked để proxy lazy.
+            .OrderBy(c => c.PostId) // Đồng bộ với demo phân trang.
+            .ThenBy(c => c.CreatedAt) // Thời gian.
+            .ThenBy(c => c.Id) // Id.
+            .ToListAsync(cancellationToken); // Một SELECT toàn bộ comment.
+
+        var list = new List<CommentLoadingDemoDto>(rows.Count); // Danh sách đích.
+        foreach (var comment in rows) // Mỗi dòng: Post, User, Children qua lazy.
+        { // Mở foreach.
+            list.Add(new CommentLoadingDemoDto // DTO một dòng.
+            { // Mở initializer.
+                LoadingStrategy = "lazy", // Nhãn.
+                CommentId = comment.Id, // Id.
+                Content = comment.Content, // Nội dung.
+                PostId = comment.PostId, // Post FK.
+                PostTitle = comment.Post?.Title, // Lazy Post.
+                UserId = comment.UserId, // User FK.
+                AuthorUserName = comment.User?.UserName, // Lazy User.
+                ParentId = comment.ParentId, // Cha (scalar).
+                ChildrenCount = comment.Children.Count // Lazy Children.
+            }); // Kết thúc Add.
+        } // Kết thúc foreach.
+
+        return list; // Toàn bộ DTO.
+    } // Kết thúc GetAllCommentsLazyLoadingDemoAsync.
+
+    public async Task<List<CommentLoadingDemoDto>> GetAllCommentsEagerLoadingDemoAsync(CancellationToken cancellationToken = default) // Eager, mọi dòng.
+    { // Mở khối.
+        var rows = await _context.Comments // DbSet.
+            .AsNoTracking() // Không track.
+            .Include(c => c.Post) // Nạp Post.
+            .Include(c => c.User) // Nạp User.
+            .Include(c => c.Children) // Nạp Children.
+            .AsSplitQuery() // Tách SELECT.
+            .OrderBy(c => c.PostId) // Sắp giống lazy/explicit.
+            .ThenBy(c => c.CreatedAt) // Thời gian.
+            .ThenBy(c => c.Id) // Id.
+            .ToListAsync(cancellationToken); // Thực thi chuỗi Include + split.
+
+        return rows.ConvertAll(comment => new CommentLoadingDemoDto // Ánh xạ RAM.
+        { // Mở initializer.
+            LoadingStrategy = "eager", // Nhãn.
+            CommentId = comment.Id, // Id.
+            Content = comment.Content, // Nội dung.
+            PostId = comment.PostId, // Post.
+            PostTitle = comment.Post?.Title, // Đã Include.
+            UserId = comment.UserId, // User.
+            AuthorUserName = comment.User?.UserName, // Đã Include.
+            ParentId = comment.ParentId, // Cha.
+            ChildrenCount = comment.Children.Count // Collection đã nạp.
+        }); // Kết thúc ConvertAll.
+    } // Kết thúc GetAllCommentsEagerLoadingDemoAsync.
+
+    public async Task<List<CommentLoadingDemoDto>> GetAllCommentsExplicitLoadingDemoAsync(CancellationToken cancellationToken = default) // Explicit, mọi dòng.
+    { // Mở khối.
+        var rows = await _context.Comments // Tracked.
+            .OrderBy(c => c.PostId) // Sắp đồng nhất.
+            .ThenBy(c => c.CreatedAt) // Thời gian.
+            .ThenBy(c => c.Id) // Id.
+            .ToListAsync(cancellationToken); // SELECT tất cả comment.
+
+        var list = new List<CommentLoadingDemoDto>(rows.Count); // Đích.
+        foreach (var comment in rows) // Từng entity.
+        { // Mở foreach.
+            await _context.Entry(comment).Reference(c => c.Post).LoadAsync(cancellationToken); // Nạp Post.
+            await _context.Entry(comment).Reference(c => c.User).LoadAsync(cancellationToken); // Nạp User.
+            await _context.Entry(comment).Collection(c => c.Children).LoadAsync(cancellationToken); // Nạp Children.
+
+            list.Add(new CommentLoadingDemoDto // DTO sau LoadAsync.
+            { // Mở initializer.
+                LoadingStrategy = "explicit", // Nhãn.
+                CommentId = comment.Id, // Id.
+                Content = comment.Content, // Nội dung.
+                PostId = comment.PostId, // Post.
+                PostTitle = comment.Post?.Title, // Đã Load.
+                UserId = comment.UserId, // User.
+                AuthorUserName = comment.User?.UserName, // Đã Load.
+                ParentId = comment.ParentId, // Cha.
+                ChildrenCount = comment.Children.Count // Đã Load collection.
+            }); // Kết thúc Add.
+        } // Kết thúc foreach.
+
+        return list; // Danh sách đầy đủ.
+    } // Kết thúc GetAllCommentsExplicitLoadingDemoAsync.
+
+    public Task<List<CommentLoadingDemoDto>> GetAllCommentsProjectionDemoAsync(CancellationToken cancellationToken = default) => // Projection một truy vấn danh sách.
+        _context.Comments // DbSet.
+            .AsNoTracking() // Không track.
+            .OrderBy(c => c.PostId) // Sắp đồng nhất các demo.
+            .ThenBy(c => c.CreatedAt) // Thời gian.
+            .ThenBy(c => c.Id) // Id.
+            .Select(c => new CommentLoadingDemoDto // Chiếu DTO trên server.
+            { // Mở initializer.
+                LoadingStrategy = "projection", // Nhãn.
+                CommentId = c.Id, // Id.
+                Content = c.Content, // Nội dung.
+                PostId = c.PostId, // Post.
+                PostTitle = c.Post != null ? c.Post.Title : null, // Join Post.
+                UserId = c.UserId, // User.
+                AuthorUserName = c.User != null ? c.User.UserName : null, // Join User.
+                ParentId = c.ParentId, // Cha.
+                ChildrenCount = c.Children.Count() // COUNT con trong SQL.
+            }) // Kết thúc Select.
+            .ToListAsync(cancellationToken); // Thực thi một pipeline projection.
 
     public async Task SaveChangesAsync() // Flush thay đổi tracked xuống database.
     { // Mở khối.

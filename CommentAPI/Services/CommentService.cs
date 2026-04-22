@@ -848,6 +848,34 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         }; // Kết thúc initializer.
     } // Kết thúc GetCommentsProjectionDemoPagedAsync.
 
+    // Demo toàn bộ comment + lazy: không COUNT/Skip/Take; ủy quyền repository (cảnh báo dữ liệu lớn).
+    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsLazyLoadingDemoAsync(CancellationToken cancellationToken = default) // Mọi dòng lazy.
+    { // Mở khối.
+        var items = await _repository.GetAllCommentsLazyLoadingDemoAsync(cancellationToken); // SELECT all + lazy nav.
+        return items; // List → IReadOnlyList.
+    } // Kết thúc GetAllCommentsLazyLoadingDemoAsync.
+
+    // Demo toàn bộ comment + eager.
+    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsEagerLoadingDemoAsync(CancellationToken cancellationToken = default) // Mọi dòng eager.
+    { // Mở khối.
+        var items = await _repository.GetAllCommentsEagerLoadingDemoAsync(cancellationToken); // Include + split.
+        return items; // Trả danh sách.
+    } // Kết thúc GetAllCommentsEagerLoadingDemoAsync.
+
+    // Demo toàn bộ comment + explicit.
+    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsExplicitLoadingDemoAsync(CancellationToken cancellationToken = default) // Mọi dòng explicit.
+    { // Mở khối.
+        var items = await _repository.GetAllCommentsExplicitLoadingDemoAsync(cancellationToken); // LoadAsync từng quan hệ.
+        return items; // Trả danh sách.
+    } // Kết thúc GetAllCommentsExplicitLoadingDemoAsync.
+
+    // Demo toàn bộ comment + projection.
+    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsProjectionDemoAsync(CancellationToken cancellationToken = default) // Một pipeline Select.
+    { // Mở khối.
+        var items = await _repository.GetAllCommentsProjectionDemoAsync(cancellationToken); // SQL projection.
+        return items; // Trả danh sách.
+    } // Kết thúc GetAllCommentsProjectionDemoAsync.
+
     // Chuẩn hóa và bắt buộc chuỗi tìm kiếm không rỗng; ném 400 nếu không hợp lệ.
     private static string RequireSearchTerm(string? raw) // Chuỗi thô có thể null.
     { // Mở khối RequireSearchTerm.

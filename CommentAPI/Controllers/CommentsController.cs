@@ -150,7 +150,7 @@ public class CommentsController : ControllerBase // JSON only.
         return Ok(new { message = ApiMessages.CommentDemoLazyLoadingListSuccess, data = result }); // 200.
     }
 
-    // Demo phân trang — eager: Include Post, User, Parent, Children (AsSplitQuery).
+    // Demo phân trang — eager: Include Post, User, Children (AsSplitQuery); cùng phạm vi DTO với lazy/explicit (không Include Parent).
     [HttpGet("demo/eager-loading")] // Eager load demo.
     [Authorize(Roles = "Admin,User")] // Đọc.
     public async Task<IActionResult> GetDemoEagerLoadingList( // List.
@@ -163,7 +163,7 @@ public class CommentsController : ControllerBase // JSON only.
         return Ok(new { message = ApiMessages.CommentDemoEagerLoadingListSuccess, data = result }); // 200.
     }
 
-    // Demo phân trang — explicit: sau Skip/Take, LoadAsync từng navigation cho mỗi comment.
+    // Demo phân trang — explicit: sau Skip/Take, LoadAsync Post/User/Children cho mỗi comment (không Parent — khớp DTO).
     [HttpGet("demo/explicit-loading")] // Explicit loading demo.
     [Authorize(Roles = "Admin,User")] // Đọc.
     public async Task<IActionResult> GetDemoExplicitLoadingList( // List.
@@ -188,6 +188,42 @@ public class CommentsController : ControllerBase // JSON only.
         var result = await _service.GetCommentsProjectionDemoPagedAsync(p, s, cancellationToken); // Select DTO.
         return Ok(new { message = ApiMessages.CommentDemoProjectionListSuccess, data = result }); // 200.
     }
+
+    // Demo toàn bộ comment — lazy: không phân trang; cùng OrderBy và cùng nav Post/User/Children như route paged (cẩn thận bảng lớn).
+    [HttpGet("demo/lazy-loading/no-pagination")] // GET .../demo/lazy-loading/no-pagination
+    [Authorize(Roles = "Admin,User")] // Đọc.
+    public async Task<IActionResult> GetDemoLazyLoadingAll(CancellationToken cancellationToken = default) // List toàn bộ.
+    { // Mở action.
+        var result = await _service.GetAllCommentsLazyLoadingDemoAsync(cancellationToken); // Mọi comment + lazy.
+        return Ok(new { message = ApiMessages.CommentDemoLazyLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
+    } // Kết thúc GetDemoLazyLoadingAll.
+
+    // Demo toàn bộ comment — eager: Include + AsSplitQuery, không Skip/Take.
+    [HttpGet("demo/eager-loading/no-pagination")] // GET .../demo/eager-loading/no-pagination
+    [Authorize(Roles = "Admin,User")] // Đọc.
+    public async Task<IActionResult> GetDemoEagerLoadingAll(CancellationToken cancellationToken = default) // List toàn bộ.
+    { // Mở action.
+        var result = await _service.GetAllCommentsEagerLoadingDemoAsync(cancellationToken); // Eager mọi dòng.
+        return Ok(new { message = ApiMessages.CommentDemoEagerLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
+    } // Kết thúc GetDemoEagerLoadingAll.
+
+    // Demo toàn bộ comment — explicit: SELECT all rồi LoadAsync từng quan hệ mỗi dòng.
+    [HttpGet("demo/explicit-loading/no-pagination")] // GET .../demo/explicit-loading/no-pagination
+    [Authorize(Roles = "Admin,User")] // Đọc.
+    public async Task<IActionResult> GetDemoExplicitLoadingAll(CancellationToken cancellationToken = default) // List toàn bộ.
+    { // Mở action.
+        var result = await _service.GetAllCommentsExplicitLoadingDemoAsync(cancellationToken); // Explicit mọi dòng.
+        return Ok(new { message = ApiMessages.CommentDemoExplicitLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
+    } // Kết thúc GetDemoExplicitLoadingAll.
+
+    // Demo toàn bộ comment — projection: Select danh sách DTO trên SQL.
+    [HttpGet("demo/projection/no-pagination")] // GET .../demo/projection/no-pagination
+    [Authorize(Roles = "Admin,User")] // Đọc.
+    public async Task<IActionResult> GetDemoProjectionAll(CancellationToken cancellationToken = default) // List toàn bộ.
+    { // Mở action.
+        var result = await _service.GetAllCommentsProjectionDemoAsync(cancellationToken); // Projection một pipeline.
+        return Ok(new { message = ApiMessages.CommentDemoProjectionAllSuccess, data = result, totalCount = result.Count }); // 200.
+    } // Kết thúc GetDemoProjectionAll.
 
     // Demo một comment — lazy loading (proxies).
     [HttpGet("demo/lazy-loading/{id:guid}")] // Chi tiết một id.

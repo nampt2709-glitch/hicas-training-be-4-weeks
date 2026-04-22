@@ -29,6 +29,6 @@ public interface IPostRepository
     Task AddAsync(Post post); // Thêm bài mới.
     void Update(Post post); // Cập nhật.
     void Remove(Post post); // Xóa.
-    Task<bool> ExistsAsync(Guid id); // Any theo id.
+    Task<bool> ExistsAsync(Guid id); // Any theo id.     
     Task SaveChangesAsync(); // Commit thay đổi.
 }

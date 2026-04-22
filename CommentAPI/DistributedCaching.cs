@@ -12,7 +12,7 @@ using StackExchange.Redis;
 namespace CommentAPI;
 
 // =============================================================================
-// File duy nhất: đăng ký + cấu hình + triển khai cache phân tán (Redis ưu tiên,
+// File DistributedCaching.cs: đăng ký + cấu hình + triển khai cache phân tán (Redis ưu tiên,
 // in-memory dự phòng) và lớp tiện ích IEntityResponseCache (JSON).
 // =============================================================================
 
@@ -369,9 +369,9 @@ public sealed class RedisFirstFailoverMemoryDistributedCache : IDistributedCache
 }
 
 // Đăng ký IDistributedCache: ưu tiên Redis, dự phòng bộ nhớ; chỉ bộ nhớ nếu thiếu cấu hình / ép cờ dev.
-public static class CommentApiCacheRegistration // Extension AddCommentApiDistributedCache.
+public static class DistributedCaching // Extension AddDistributedCaching.
 {
-    public static void AddCommentApiDistributedCache(this WebApplicationBuilder builder) // Host builder entry.
+    public static void AddDistributedCaching(this WebApplicationBuilder builder) // Host builder entry.
     {
         builder.Services.Configure<CacheOptions>(builder.Configuration.GetSection(CacheOptions.SectionName)); // Options pattern.
         var cacheOptions = builder.Configuration.GetSection(CacheOptions.SectionName).Get<CacheOptions>() ?? new(); // Snapshot read.

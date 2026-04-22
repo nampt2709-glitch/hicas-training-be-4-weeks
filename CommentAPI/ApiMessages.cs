@@ -184,6 +184,16 @@ public static partial class ApiMessages
     public const string CommentDemoProjectionListSuccess =
         "Comments demo (paged): rows built in SQL via Select (projection / server-side join).";
 
+    // Demo — toàn bộ comment (không phân trang): cùng logic với bản phân trang nhưng lấy mọi bản ghi; cẩn thận bảng lớn.
+    public const string CommentDemoLazyLoadingAllSuccess =
+        "Comments demo (all rows, no paging): related data via lazy loading per row (proxies).";
+    public const string CommentDemoEagerLoadingAllSuccess =
+        "Comments demo (all rows, no paging): related data via eager loading (Include / AsSplitQuery).";
+    public const string CommentDemoExplicitLoadingAllSuccess =
+        "Comments demo (all rows, no paging): related data via explicit loading per row (Entry LoadAsync).";
+    public const string CommentDemoProjectionAllSuccess =
+        "Comments demo (all rows, no paging): rows built in SQL via Select (projection / server-side join).";
+
     // Tìm kiếm: user, post, comment; có kèm theo bộ lọc.
     public const string UserSearchByNameSuccess = "Users matching the display name filter retrieved successfully.";
     public const string UserSearchByUserNameSuccess = "Users matching the username filter retrieved successfully.";
