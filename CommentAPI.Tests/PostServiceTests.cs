@@ -43,7 +43,7 @@ public class PostServiceTests
     {
         var dto = new PostDto { Id = Guid.NewGuid(), Title = "t", Content = "c", CreatedAt = DateTime.UtcNow, UserId = Guid.NewGuid() };
         var repo = new Mock<IPostRepository>();
-        repo.Setup(r => r.GetPagedAsync(2, 5, It.IsAny<CancellationToken>())).ReturnsAsync((new List<PostDto> { dto }, 1L));
+        repo.Setup(r => r.GetPagedAsync(2, 5, It.IsAny<CancellationToken>(), null, null, null, null)).ReturnsAsync((new List<PostDto> { dto }, 1L));
 
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(c => c.GetJsonAsync<PagedResult<PostDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -59,43 +59,39 @@ public class PostServiceTests
         cache.Verify(c => c.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<PostDto>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // F.I.R.S.T: biên term rỗng giống Comment/User search.
-    // 3A — Arrange: title null/blank. Act: SearchByTitlePagedAsync. Assert: SearchTermRequired.
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("  ")]
-    public async Task PS03_SearchByTitlePagedAsync_ShouldThrow400_WhenTermMissing(string? title)
-    {
-        var sut = new PostService(
-            Mock.Of<IPostRepository>(MockBehavior.Strict),
-            Mock.Of<IUserRepository>(MockBehavior.Strict),
-            TestMapperFactory.CreateMapper(),
-            Mock.Of<IEntityResponseCache>(MockBehavior.Strict));
-
-        var ex = await Assert.ThrowsAsync<ApiException>(() =>
-            sut.SearchByTitlePagedAsync(title, 1, 10, CancellationToken.None));
-
-        Assert.Equal(ApiErrorCodes.SearchTermRequired, ex.ErrorCode);
-    }
-
-    // F.I.R.S.T: term một ký tự hợp lệ.
-    // 3A — Arrange: repo trả rỗng. Act: search "x". Assert: TotalCount 0.
+    // F.I.R.S.T: filter title — không đọc/ghi cache danh sách thuần.
+    // 3A — Arrange: repo + cache Strict. Act: GetPagedAsync với titleContains. Assert: có kết quả repo; không SetJson list.
     [Fact]
-    public async Task PS04_SearchByTitlePagedAsync_ShouldSucceed_WhenSingleCharTerm()
+    public async Task PS03_GetPagedAsync_ShouldQueryRepo_AndNotCacheList_WhenTitleFilter()
     {
+        var dto = new PostDto { Id = Guid.NewGuid(), Title = "x", Content = "c", CreatedAt = DateTime.UtcNow, UserId = Guid.NewGuid() };
         var repo = new Mock<IPostRepository>();
-        repo.Setup(r => r.SearchByTitlePagedAsync("x", 1, 20, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((new List<PostDto>(), 0L));
+        repo.Setup(r => r.GetPagedAsync(1, 10, It.IsAny<CancellationToken>(), null, null, "x", null))
+            .ReturnsAsync((new List<PostDto> { dto }, 1L));
 
-        var cache = new Mock<IEntityResponseCache>();
-        cache.Setup(c => c.GetJsonAsync<PagedResult<PostDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((PagedResult<PostDto>?)null);
-        cache.Setup(c => c.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<PostDto>>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
+        var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);
 
         var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object);
-        var r = await sut.SearchByTitlePagedAsync("x", 1, 20);
+        var r = await sut.GetPagedAsync(1, 10, CancellationToken.None, null, null, "x", null);
+
+        Assert.Single(r.Items);
+        Assert.Equal("x", r.Items[0].Title);
+        cache.Verify(c => c.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<PostDto>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // F.I.R.S.T: filter một ký tự trên title vẫn hợp lệ (Contains).
+    // 3A — Arrange: repo trả rỗng cho title "x". Act: GetPagedAsync. Assert: TotalCount 0; không cache list.
+    [Fact]
+    public async Task PS04_GetPagedAsync_ShouldReturnEmpty_WhenTitleFilterMatchesNothing()
+    {
+        var repo = new Mock<IPostRepository>();
+        repo.Setup(r => r.GetPagedAsync(1, 20, It.IsAny<CancellationToken>(), null, null, "x", null))
+            .ReturnsAsync((new List<PostDto>(), 0L));
+
+        var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);
+
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object);
+        var r = await sut.GetPagedAsync(1, 20, CancellationToken.None, null, null, "x", null);
 
         Assert.Empty(r.Items);
         Assert.Equal(0L, r.TotalCount);

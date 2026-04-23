@@ -19,247 +19,23 @@ public class CommentsController : ControllerBase // JSON only.
         _service = service; // Field.
     }
 
-    [HttpGet] // Danh sách comment phân trang (mặc định kiểu list service).
+    // GET /api/comments — luôn phân trang (page/pageSize); một comment theo id dùng GET /api/comments/{id}.
+    [HttpGet] // postId = khóa bài viết (Post).
     [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetAll( // Query phân trang.
-        [FromQuery] string? page, // Page string.
-        [FromQuery] string? pageSize, // Size string.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Normalize.
-        var result = await _service.GetAllPagedAsync(p, s, cancellationToken); // Service implementation.
-        return Ok(new { message = ApiMessages.CommentListSuccess, data = result }); // 200.
-    }
-
-    // Tất cả comment phẳng của một bài (không phân trang) — đặt sát GET /api/comments để client dễ gọi theo postId.
-    [HttpGet("post/{postId:guid}")] // GET .../api/comments/post/{postId}
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetAllByPostId( // Danh sách đầy đủ một post.
-        Guid postId, // Id bài viết.
-        CancellationToken cancellationToken = default) // Hủy.
-    {
-        var result = await _service.GetAllByPostIdAsync(postId, cancellationToken); // Repository GetByPostIdAsync + map.
-        return Ok(new { message = ApiMessages.CommentAllByPostSuccess, data = result }); // 200 + mảng CommentDto.
-    }
-
-    [HttpGet("search/id/{id:guid}")] // Tìm theo id toàn cục.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> SearchById(Guid id) // Comment id.
-    {
-        var result = await _service.GetByIdAsync(id); // Một bản ghi.
-        return Ok(new { message = ApiMessages.CommentGetSuccess, data = result }); // 200.
-    }
-
-    [HttpGet("search/by-content")] // Tìm theo nội dung chứa.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> SearchByContent( // Phân trang.
-        [FromQuery] string? content, // Mẫu nội dung.
-        [FromQuery] string? page, // Trang.
+    public async Task<IActionResult> GetAll( // Bộ lọc query thống nhất.
+        [FromQuery] Guid? postId, // Lọc theo Id bài viết (Post), không phải Id comment.
+        [FromQuery] string? content, // Tìm Contains trong nội dung comment.
+        [FromQuery] string? page, // Số trang.
         [FromQuery] string? pageSize, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Biên dưới CreatedAt (inclusive).
+        [FromQuery] DateTime? createdAtTo = null, // Biên trên CreatedAt (inclusive).
         CancellationToken cancellationToken = default) // Hủy.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.SearchByContentPagedAsync(content, p, s, cancellationToken); // DB search.
-        return Ok(new { message = ApiMessages.CommentSearchByContentSuccess, data = result }); // 200.
-    }
-
-    [HttpGet("all/flat")] // Danh sách phẳng toàn hệ thống (theo service).
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetAllFlat( // Phân trang.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetAllFlatPagedAsync(p, s, cancellationToken); // Flat query.
-        return Ok(new { message = ApiMessages.CommentAllFlatSuccess, data = result }); // 200.
-    }
-
-    [HttpGet("all/tree/flat")] // Cây nhưng biểu diễn phẳng theo contract service (không flatten DFS).
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetAllTreeFlat( // Phân trang.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetAllTreePagedAsync(p, s, cancellationToken); // Tree paged.
-        return Ok(new { message = ApiMessages.CommentAllTreeSuccess, data = result }); // 200.
-    }
-
-    [HttpGet("all/cte")] // Toàn cục: danh sách phẳng qua CTE SQL.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetAllCteFlat( // Phân trang.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetAllCteFlatPagedAsync(p, s, cancellationToken); // CTE flat.
-        return Ok(new { message = ApiMessages.CommentAllCteFlatSuccess, data = result }); // 200.
-    }
-
-    [HttpGet("all/tree/cte")] // Toàn cục: cây materialized qua CTE.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetAllCteTree( // Phân trang.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetAllCteTreePagedAsync(p, s, cancellationToken); // CTE tree.
-        return Ok(new { message = ApiMessages.CommentAllCteTreeSuccess, data = result }); // 200.
-    }
-
-    // Toàn cục: trang gốc EF → cây → preorder phẳng (không CTE).
-    [HttpGet("all/tree/flat/flatten")] // Flatten forest từ EF.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetAllTreeFlatFlattened( // Phân trang theo dòng phẳng preorder.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetFlattenedForestPagedAsync(p, s, cancellationToken); // EF tree flatten.
-        return Ok(new { message = ApiMessages.CommentFlattenForestSuccess, data = result }); // 200.
-    }
-
-    // Toàn cục: CTE mọi post → cây → preorder; phân trang theo dòng phẳng.
-    [HttpGet("tree/cte/flatten")] // CTE flatten toàn hệ.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetAllCteTreeFlattened( // Phân trang.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetFlattenedFromCtePagedAsync(p, s, cancellationToken); // SQL CTE walk.
-        return Ok(new { message = ApiMessages.CommentFlattenCteSuccess, data = result }); // 200.
-    }
-
-    // Demo phân trang — lazy: mỗi bản ghi tracked, đọc Post/User/Children kích hoạt thêm truy vấn.
-    [HttpGet("demo/lazy-loading")] // Endpoint minh họa N+1 / proxy lazy.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoLazyLoadingList( // List demo.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetCommentsLazyLoadingDemoPagedAsync(p, s, cancellationToken); // EF lazy pattern.
-        return Ok(new { message = ApiMessages.CommentDemoLazyLoadingListSuccess, data = result }); // 200.
-    }
-
-    // Demo phân trang — eager: Include Post, User, Children (AsSplitQuery); cùng phạm vi DTO với lazy/explicit (không Include Parent).
-    [HttpGet("demo/eager-loading")] // Eager load demo.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoEagerLoadingList( // List.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetCommentsEagerLoadingDemoPagedAsync(p, s, cancellationToken); // Include chain.
-        return Ok(new { message = ApiMessages.CommentDemoEagerLoadingListSuccess, data = result }); // 200.
-    }
-
-    // Demo phân trang — explicit: sau Skip/Take, LoadAsync Post/User/Children cho mỗi comment (không Parent — khớp DTO).
-    [HttpGet("demo/explicit-loading")] // Explicit loading demo.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoExplicitLoadingList( // List.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetCommentsExplicitLoadingDemoPagedAsync(p, s, cancellationToken); // Entry.LoadAsync.
-        return Ok(new { message = ApiMessages.CommentDemoExplicitLoadingListSuccess, data = result }); // 200.
-    }
-
-    // Demo phân trang — projection: Select DTO trên server (join + COUNT con), không Include.
-    [HttpGet("demo/projection")] // Projection-only query.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoProjectionList( // List.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetCommentsProjectionDemoPagedAsync(p, s, cancellationToken); // Select DTO.
-        return Ok(new { message = ApiMessages.CommentDemoProjectionListSuccess, data = result }); // 200.
-    }
-
-    // Demo toàn bộ comment — lazy: không phân trang; cùng OrderBy và cùng nav Post/User/Children như route paged (cẩn thận bảng lớn).
-    [HttpGet("demo/lazy-loading/no-pagination")] // GET .../demo/lazy-loading/no-pagination
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoLazyLoadingAll(CancellationToken cancellationToken = default) // List toàn bộ.
     { // Mở action.
-        var result = await _service.GetAllCommentsLazyLoadingDemoAsync(cancellationToken); // Mọi comment + lazy.
-        return Ok(new { message = ApiMessages.CommentDemoLazyLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
-    } // Kết thúc GetDemoLazyLoadingAll.
-
-    // Demo toàn bộ comment — eager: Include + AsSplitQuery, không Skip/Take.
-    [HttpGet("demo/eager-loading/no-pagination")] // GET .../demo/eager-loading/no-pagination
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoEagerLoadingAll(CancellationToken cancellationToken = default) // List toàn bộ.
-    { // Mở action.
-        var result = await _service.GetAllCommentsEagerLoadingDemoAsync(cancellationToken); // Eager mọi dòng.
-        return Ok(new { message = ApiMessages.CommentDemoEagerLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
-    } // Kết thúc GetDemoEagerLoadingAll.
-
-    // Demo toàn bộ comment — explicit: SELECT all rồi LoadAsync từng quan hệ mỗi dòng.
-    [HttpGet("demo/explicit-loading/no-pagination")] // GET .../demo/explicit-loading/no-pagination
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoExplicitLoadingAll(CancellationToken cancellationToken = default) // List toàn bộ.
-    { // Mở action.
-        var result = await _service.GetAllCommentsExplicitLoadingDemoAsync(cancellationToken); // Explicit mọi dòng.
-        return Ok(new { message = ApiMessages.CommentDemoExplicitLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
-    } // Kết thúc GetDemoExplicitLoadingAll.
-
-    // Demo toàn bộ comment — projection: Select danh sách DTO trên SQL.
-    [HttpGet("demo/projection/no-pagination")] // GET .../demo/projection/no-pagination
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoProjectionAll(CancellationToken cancellationToken = default) // List toàn bộ.
-    { // Mở action.
-        var result = await _service.GetAllCommentsProjectionDemoAsync(cancellationToken); // Projection một pipeline.
-        return Ok(new { message = ApiMessages.CommentDemoProjectionAllSuccess, data = result, totalCount = result.Count }); // 200.
-    } // Kết thúc GetDemoProjectionAll.
-
-    // Demo một comment — lazy loading (proxies).
-    [HttpGet("demo/lazy-loading/{id:guid}")] // Chi tiết một id.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoLazyLoading(Guid id, CancellationToken cancellationToken = default) // Single.
-    {
-        var result = await _service.GetCommentLazyLoadingDemoAsync(id, cancellationToken); // Lazy traverse.
-        return Ok(new { message = ApiMessages.CommentDemoLazyLoadingSuccess, data = result }); // 200.
-    }
-
-    // Demo một comment — eager (Include / AsSplitQuery).
-    [HttpGet("demo/eager-loading/{id:guid}")] // Chi tiết eager.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoEagerLoading(Guid id, CancellationToken cancellationToken = default) // Single.
-    {
-        var result = await _service.GetCommentEagerLoadingDemoAsync(id, cancellationToken); // Include graph.
-        return Ok(new { message = ApiMessages.CommentDemoEagerLoadingSuccess, data = result }); // 200.
-    }
-
-    // Demo một comment — explicit (Entry LoadAsync).
-    [HttpGet("demo/explicit-loading/{id:guid}")] // Chi tiết explicit.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoExplicitLoading(Guid id, CancellationToken cancellationToken = default) // Single.
-    {
-        var result = await _service.GetCommentExplicitLoadingDemoAsync(id, cancellationToken); // LoadAsync steps.
-        return Ok(new { message = ApiMessages.CommentDemoExplicitLoadingSuccess, data = result }); // 200.
-    }
-
-    // Demo một comment — projection (Select SQL, không nạp navigation trên client).
-    [HttpGet("demo/projection/{id:guid}")] // Chi tiết projection.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetDemoProjection(Guid id, CancellationToken cancellationToken = default) // Single.
-    {
-        var result = await _service.GetCommentProjectionDemoAsync(id, cancellationToken); // Single DTO query.
-        return Ok(new { message = ApiMessages.CommentDemoProjectionSuccess, data = result }); // 200.
-    }
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu from > to.
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Luôn bật phân trang.
+        var result = await _service.GetCommentListAsync(postId, content, false, p, s, cancellationToken, createdAtFrom, createdAtTo); // Không unpaged từ route này.
+        return Ok(new { message = ApiMessages.CommentListSuccess, data = result }); // 200 + PagedResult<CommentDto>.
+    } // Kết thúc GetAll.
 
     [HttpGet("{id:guid}")] // GET by id chuẩn.
     [Authorize(Roles = "Admin,User")] // Đọc.
@@ -269,8 +45,25 @@ public class CommentsController : ControllerBase // JSON only.
         return Ok(new { message = ApiMessages.CommentGetSuccess, data = result }); // 200.
     }
 
-    [HttpPost] // Tạo comment (Admin set UserId/PostId trong body).
-    [Authorize(Roles = "Admin")] // Chỉ Admin trên route này.
+    // Danh sách comment do một user tạo — literal "user" tránh trùng template GET /api/comments/{id}.
+    [HttpGet("user/{userId:guid}")] // Cạnh route theo id về mặt REST; route cụ thể hơn {id}.
+    [Authorize(Roles = "Admin,User")] // Đọc.
+    public async Task<IActionResult> GetByUserId( // Phân trang theo tác giả.
+        Guid userId, // UserId (không phải Comment.Id).
+        [FromQuery] string? page = null, // Trang.
+        [FromQuery] string? pageSize = null, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Chuẩn hóa phân trang.
+        var result = await _service.GetCommentsByUserIdPagedAsync(userId, p, s, cancellationToken, createdAtFrom, createdAtTo); // 404 nếu user không tồn tại.
+        return Ok(new { message = ApiMessages.CommentListByUserSuccess, data = result }); // 200.
+    } // Kết thúc GetByUserId.
+
+    [HttpPost] // Tạo comment
+    [Authorize(Roles = "Admin,User")] 
     public async Task<IActionResult> Create([FromBody] CreateCommentDto dto) // Body.
     {
         var result = await _service.CreateAsync(dto); // Insert + integrity checks in service/repo.
@@ -315,106 +108,238 @@ public class CommentsController : ControllerBase // JSON only.
         return Ok(new { message = ApiMessages.CommentDeleteSuccess }); // 200.
     }
 
-    // Tìm một comment theo id trong phạm vi một post.
-    [HttpGet("post/{postId:guid}/search/id/{commentId:guid}")] // Scoped search.
+    // Danh sách phẳng CommentDto — luôn phân trang; ?postId= là Id bài viết (Post).
+    [HttpGet("flat")] // Dữ liệu “thô” phẳng giống list chuẩn.
     [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> SearchByIdInPost(Guid postId, Guid commentId, CancellationToken cancellationToken = default) // Two ids.
-    {
-        var result = await _service.GetByIdInPostAsync(postId, commentId, cancellationToken); // Must belong to post.
-        return Ok(new { message = ApiMessages.CommentSearchByIdInPostSuccess, data = result }); // 200.
-    }
+    public async Task<IActionResult> GetAllFlat( // Chỉ phân trang.
+        [FromQuery] Guid? postId, // Tuỳ chọn: Id bài viết (Post), không phải Id comment.
+        [FromQuery] string? page = null, // Trang.
+        [FromQuery] string? pageSize = null, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Luôn phân trang.
+        if (postId is { } pid) // Phân trang trong một bài.
+        { // Mở khối.
+            var byPost = await _service.GetFlatByPostIdPagedAsync(pid, p, s, cancellationToken, createdAtFrom, createdAtTo); // EF phân trang theo post.
+            return Ok(new { message = ApiMessages.CommentFlatByPostSuccess, data = byPost }); // 200.
+        } // Kết thúc theo post.
 
-    // Tìm theo nội dung chỉ trong một post (phân trang).
-    [HttpGet("post/{postId:guid}/search/by-content")] // Scoped content search.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> SearchByContentInPost( // Params.
-        Guid postId, // Post scope.
-        [FromQuery] string? content, // Needle.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.SearchByContentInPostPagedAsync(postId, content, p, s, cancellationToken); // Query.
-        return Ok(new { message = ApiMessages.CommentSearchByContentInPostSuccess, data = result }); // 200.
-    }
+        var global = await _service.GetAllFlatPagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo); // Toàn hệ có phân trang.
+        return Ok(new { message = ApiMessages.CommentAllFlatSuccess, data = global }); // 200.
+    } // Kết thúc GetAllFlat.
 
-    [HttpGet("post/{postId:guid}/flat")] // Danh sách phẳng theo post.
+    // Phẳng có Level — hàng thô từ file SQL CTE (CommentTree_*.sql); luôn phân trang; ?postId= là Id bài viết (Post).
+    [HttpGet("cte")] // Khác route flat: flat = EF, cte = ADO CTE.
     [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetFlatByPostId( // Phân trang.
-        Guid postId, // Post.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetFlatByPostIdPagedAsync(postId, p, s, cancellationToken); // EF/SQL flat.
-        return Ok(new { message = ApiMessages.CommentFlatByPostSuccess, data = result }); // 200.
-    }
+    public async Task<IActionResult> GetAllCteFlat( // Flat + Level.
+        [FromQuery] Guid? postId, // Tuỳ chọn: Id bài viết (Post), không phải Id comment.
+        [FromQuery] string? page = null, // Trang.
+        [FromQuery] string? pageSize = null, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Luôn phân trang.
+        if (postId is { } pid) // Phân trang trong post.
+        { // Mở khối.
+            var pageRows = await _service.GetCteFlatByPostIdPagedAsync(pid, p, s, cancellationToken, createdAtFrom, createdAtTo); // Trang CommentFlatDto.
+            return Ok(new { message = ApiMessages.CommentCteFlatByPostSuccess, data = pageRows }); // 200.
+        } // Kết thúc post.
 
-    [HttpGet("post/{postId:guid}/cte")] // Phẳng CTE theo post.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetCteFlatByPostId( // Phân trang.
-        Guid postId, // Post.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetCteFlatByPostIdPagedAsync(postId, p, s, cancellationToken); // CTE.
-        return Ok(new { message = ApiMessages.CommentCteFlatByPostSuccess, data = result }); // 200.
-    }
+        var global = await _service.GetAllCteFlatPagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo); // Trang toàn hệ.
+        return Ok(new { message = ApiMessages.CommentAllCteFlatSuccess, data = global }); // 200.
+    } // Kết thúc GetAllCteFlat.
 
-    [HttpGet("post/{postId:guid}/tree/flat")] // Cây (flat representation) theo post.
+    // Cây (biểu diễn phẳng theo DTO cây): ?postId= là Id bài viết (Post).
+    [HttpGet("tree/flat")] // Phân trang theo gốc (roots).
     [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetTreeByPostId( // Phân trang.
-        Guid postId, // Post.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetTreeByPostIdPagedAsync(postId, p, s, cancellationToken); // Tree.
-        return Ok(new { message = ApiMessages.CommentTreeByPostSuccess, data = result }); // 200.
-    }
+    public async Task<IActionResult> GetAllTreeFlat( // Tree paged.
+        [FromQuery] Guid? postId, // Id bài viết (Post); bỏ trống = toàn hệ thống.
+        [FromQuery] string? page = null, // Trang.
+        [FromQuery] string? pageSize = null, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Luôn phân trang (theo gốc).
+        if (postId is { } pid) // Cây trong một post.
+        { // Mở khối.
+            var trees = await _service.GetTreeByPostIdPagedAsync(pid, p, s, cancellationToken, createdAtFrom, createdAtTo); // EF tree + phân trang gốc.
+            return Ok(new { message = ApiMessages.CommentTreeByPostSuccess, data = trees }); // 200.
+        } // Kết thúc post.
 
-    [HttpGet("post/{postId:guid}/tree/cte")] // Cây CTE theo post.
-    [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetCteTreeByPostId( // Phân trang.
-        Guid postId, // Post.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetCteTreeByPostIdPagedAsync(postId, p, s, cancellationToken); // CTE tree.
-        return Ok(new { message = ApiMessages.CommentCteTreeByPostSuccess, data = result }); // 200.
-    }
+        var allTrees = await _service.GetAllTreePagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo); // Rừng gốc toàn hệ thống.
+        return Ok(new { message = ApiMessages.CommentAllTreeSuccess, data = allTrees }); // 200.
+    } // Kết thúc GetAllTreeFlat.
 
-    // CTE một post → cây → danh sách phẳng preorder (khác .../cte là thứ tự/Level theo DFS).
-    [HttpGet("post/{postId:guid}/tree/cte/flatten")] // Flatten CTE per post.
+    // Cây lồng từ hàng CTE (sau đó dựng cây RAM); khác tree/flat (EF). ?postId= là Id bài viết (Post).
+    [HttpGet("tree/cte")] // Service: GetTreeRowsByCte* → BuildTreeFromFlatDtosForOnePost / rừng toàn cục.
     [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetFlattenedCteTreeByPostId( // Phân trang.
-        Guid postId, // Post.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetFlattenedCteTreeByPostIdPagedAsync(postId, p, s, cancellationToken); // Flatten.
-        return Ok(new { message = ApiMessages.CommentFlattenCteTreeByPostSuccess, data = result }); // 200.
-    }
+    public async Task<IActionResult> GetAllCteTree( // Tree paged.
+        [FromQuery] Guid? postId, // Id bài viết (Post); bỏ trống = toàn hệ.
+        [FromQuery] string? page = null, // Trang.
+        [FromQuery] string? pageSize = null, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Phân trang bắt buộc.
+        if (postId is { } pid) // Một post.
+        { // Mở khối.
+            var trees = await _service.GetCteTreeByPostIdPagedAsync(pid, p, s, cancellationToken, createdAtFrom, createdAtTo); // Cây từ CTE + phân trang gốc.
+            return Ok(new { message = ApiMessages.CommentCteTreeByPostSuccess, data = trees }); // 200.
+        } // Kết thúc post.
 
-    [HttpGet("post/{postId:guid}/tree/flat/flatten")] // EF flatten tree per post.
+        var allTrees = await _service.GetAllCteTreePagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo); // Toàn hệ.
+        return Ok(new { message = ApiMessages.CommentAllCteTreeSuccess, data = allTrees }); // 200.
+    } // Kết thúc GetAllCteTree.
+
+    // EF: gốc → cây → preorder phẳng; ?postId= là Id bài viết (Post).
+    [HttpGet("tree/flat/flatten")] // Flatten rừng EF.
     [Authorize(Roles = "Admin,User")] // Đọc.
-    public async Task<IActionResult> GetTreeFlattenByPostId( // Phân trang.
-        Guid postId, // Post.
-        [FromQuery] string? page, // Page.
-        [FromQuery] string? pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
+    public async Task<IActionResult> GetAllTreeFlatFlattened( // Phân trang trên dòng phẳng (theo trang gốc).
+        [FromQuery] Guid? postId, // Id bài viết (Post); bỏ trống = toàn hệ.
+        [FromQuery] string? page = null, // Trang.
+        [FromQuery] string? pageSize = null, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var result = await _service.GetFlattenedTreeByPostIdPagedAsync(postId, p, s, cancellationToken); // EF walk.
-        return Ok(new { message = ApiMessages.CommentFlattenTreeByPostSuccess, data = result }); // 200.
-    }
+        if (postId is { } pid) // Một bài: làm phẳng cây EF trong post.
+        { // Mở khối.
+            var flat = await _service.GetFlattenedTreeByPostIdPagedAsync(pid, p, s, cancellationToken, createdAtFrom, createdAtTo); // Preorder + Level.
+            return Ok(new { message = ApiMessages.CommentFlattenTreeByPostSuccess, data = flat }); // 200.
+        } // Kết thúc post.
+
+        var forest = await _service.GetFlattenedForestPagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo); // Toàn hệ: trang gốc.
+        return Ok(new { message = ApiMessages.CommentFlattenForestSuccess, data = forest }); // 200.
+    } // Kết thúc GetAllTreeFlatFlattened.
+
+    // CTE toàn cục hoặc một post → preorder phẳng; ?postId= là Id bài viết (Post).
+    [HttpGet("tree/cte/flatten")] // Flatten sau CTE.
+    [Authorize(Roles = "Admin,User")] // Đọc.
+    public async Task<IActionResult> GetAllCteTreeFlattened( // Phân trang trên dòng phẳng.
+        [FromQuery] Guid? postId, // Id bài viết (Post); bỏ trống = mọi bài.
+        [FromQuery] string? page = null, // Trang.
+        [FromQuery] string? pageSize = null, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
+        if (postId is { } pid) // CTE + flatten trong một post.
+        { // Mở khối.
+            var flat = await _service.GetFlattenedCteTreeByPostIdPagedAsync(pid, p, s, cancellationToken, createdAtFrom, createdAtTo); // Cache khi không lọc ngày.
+            return Ok(new { message = ApiMessages.CommentFlattenCteTreeByPostSuccess, data = flat }); // 200.
+        } // Kết thúc post.
+
+        var global = await _service.GetFlattenedFromCtePagedAsync(p, s, cancellationToken, null, createdAtFrom, createdAtTo); // Mọi post — postId null.
+        return Ok(new { message = ApiMessages.CommentFlattenCteSuccess, data = global }); // 200.
+    } // Kết thúc GetAllCteTreeFlattened.
+
+    // Demo lazy: chỉ danh sách (nhiều comment) — filterByPostId + paginationEnabled; không nhận id comment.
+    [HttpGet("demo/lazy-loading")] // So sánh lazy navigation trên tập bản ghi.
+    [Authorize(Roles = "Admin,User")] // Đọc.
+    public async Task<IActionResult> GetDemoLazyLoadingList( // List — mục đích tải nhiều comment.
+        [FromQuery(Name = "filterByPostId")] Guid? filterByPostId, // Id bài viết (Post), tuỳ chọn.
+        [FromQuery] bool paginationEnabled = true, // false = trả toàn bộ dòng khớp filter (cẩn thận kích thước).
+        [FromQuery] string? page = null, // Trang khi paginationEnabled=true.
+        [FromQuery] string? pageSize = null, // Cỡ trang khi paginationEnabled=true.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
+        var (unpaged, p, s) = PaginationQuery.ParsePaginationFromQuery(page, pageSize, paginationEnabled); // Chỉ demo dùng cờ này.
+        if (unpaged) // Không Skip/Take.
+        { // Mở khối.
+            var result = await _service.GetAllCommentsLazyLoadingDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo); // SELECT đủ + lazy nav.
+            return Ok(new { message = ApiMessages.CommentDemoLazyLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
+        } // Kết thúc unpaged.
+
+        var paged = await _service.GetCommentsLazyLoadingDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo); // Trang + lazy.
+        return Ok(new { message = ApiMessages.CommentDemoLazyLoadingListSuccess, data = paged }); // 200.
+    } // Kết thúc GetDemoLazyLoadingList.
+
+    // Demo eager: chỉ danh sách — Include/split query trên nhiều comment.
+    [HttpGet("demo/eager-loading")] // List.
+    [Authorize(Roles = "Admin,User")] // Đọc.
+    public async Task<IActionResult> GetDemoEagerLoadingList( // List.
+        [FromQuery(Name = "filterByPostId")] Guid? filterByPostId, // Id Post — tuỳ chọn.
+        [FromQuery] bool paginationEnabled = true, // false = toàn bộ khớp lọc.
+        [FromQuery] string? page = null, // Trang.
+        [FromQuery] string? pageSize = null, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
+        var (unpaged, p, s) = PaginationQuery.ParsePaginationFromQuery(page, pageSize, paginationEnabled); // Parse.
+        if (unpaged) // Include toàn tập khớp.
+        { // Mở khối.
+            var result = await _service.GetAllCommentsEagerLoadingDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo); // Split query + Include.
+            return Ok(new { message = ApiMessages.CommentDemoEagerLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
+        } // Kết thúc unpaged.
+
+        var paged = await _service.GetCommentsEagerLoadingDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo); // Trang eager.
+        return Ok(new { message = ApiMessages.CommentDemoEagerLoadingListSuccess, data = paged }); // 200.
+    } // Kết thúc GetDemoEagerLoadingList.
+
+    // Demo explicit: chỉ danh sách — LoadAsync từng bước trên nhiều comment.
+    [HttpGet("demo/explicit-loading")] // List.
+    [Authorize(Roles = "Admin,User")] // Đọc.
+    public async Task<IActionResult> GetDemoExplicitLoadingList( // List.
+        [FromQuery(Name = "filterByPostId")] Guid? filterByPostId, // Id Post — tuỳ chọn.
+        [FromQuery] bool paginationEnabled = true, // false = không phân trang.
+        [FromQuery] string? page = null, // Trang.
+        [FromQuery] string? pageSize = null, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
+        var (unpaged, p, s) = PaginationQuery.ParsePaginationFromQuery(page, pageSize, paginationEnabled); // Parse.
+        if (unpaged) // Mọi dòng khớp + LoadAsync.
+        { // Mở khối.
+            var result = await _service.GetAllCommentsExplicitLoadingDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo); // Nhiều câu SQL nhỏ.
+            return Ok(new { message = ApiMessages.CommentDemoExplicitLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
+        } // Kết thúc unpaged.
+
+        var paged = await _service.GetCommentsExplicitLoadingDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo); // Trang explicit.
+        return Ok(new { message = ApiMessages.CommentDemoExplicitLoadingListSuccess, data = paged }); // 200.
+    } // Kết thúc GetDemoExplicitLoadingList.
+
+    // Demo projection: chỉ danh sách — Select DTO trên nhiều comment (không Include graph đầy đủ).
+    [HttpGet("demo/projection")] // List.
+    [Authorize(Roles = "Admin,User")] // Đọc.
+    public async Task<IActionResult> GetDemoProjectionList( // List.
+        [FromQuery(Name = "filterByPostId")] Guid? filterByPostId, // Id Post — tuỳ chọn.
+        [FromQuery] bool paginationEnabled = true, // false = không phân trang.
+        [FromQuery] string? page = null, // Trang.
+        [FromQuery] string? pageSize = null, // Cỡ trang.
+        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở action.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
+        var (unpaged, p, s) = PaginationQuery.ParsePaginationFromQuery(page, pageSize, paginationEnabled); // Parse.
+        if (unpaged) // ToList projection một pipeline.
+        { // Mở khối.
+            var result = await _service.GetAllCommentsProjectionDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo); // Không Include graph.
+            return Ok(new { message = ApiMessages.CommentDemoProjectionAllSuccess, data = result, totalCount = result.Count }); // 200.
+        } // Kết thúc unpaged.
+
+        var paged = await _service.GetCommentsProjectionDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo); // Trang projection.
+        return Ok(new { message = ApiMessages.CommentDemoProjectionListSuccess, data = paged }); // 200.
+    } // Kết thúc GetDemoProjectionList.
+
 }

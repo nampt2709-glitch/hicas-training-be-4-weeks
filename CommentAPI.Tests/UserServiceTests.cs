@@ -46,7 +46,7 @@ public class UserServiceTests
         var row = new UserPageRow(id, "Tên", "login1", "a@b.c", DateTime.UtcNow);
 
         var repo = new Mock<IUserRepository>();
-        repo.Setup(r => r.GetPagedAsync(1, 10, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.GetPagedAsync(1, 10, It.IsAny<CancellationToken>(), null, null, null, null, null))
             .ReturnsAsync((new List<UserPageRow> { row }, 1L));
         repo.Setup(r => r.GetRoleNamesByUserIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<Guid, List<string>> { [id] = new List<string> { "Admin", "User" } });
@@ -66,40 +66,48 @@ public class UserServiceTests
         Assert.NotEqual(Guid.Empty, r.Items[0].Id);
     }
 
-    // F.I.R.S.T: tìm theo Name — term bắt buộc.
-    // 3A — Arrange: name rỗng. Act: SearchByNamePagedAsync. Assert: 400.
-    [Theory]
-    [InlineData(null)]
-    [InlineData("   ")]
-    public async Task US03_SearchByNamePagedAsync_ShouldThrow400_WhenTermMissing(string? name)
+    // F.I.R.S.T: filter name — không cache danh sách (tránh khóa sai).
+    // 3A — Arrange: repo trả một dòng khi nameContains khác rỗng; cache Strict (không được gọi đọc/ghi list). Act: GetPagedAsync có name. Assert: có dữ liệu; không SetJson list.
+    [Fact]
+    public async Task US03_GetPagedAsync_ShouldQueryRepo_AndNotCacheList_WhenNameFilter()
     {
-        var sut = new UserService(
-            Mock.Of<IUserRepository>(MockBehavior.Strict),
-            UserManagerMockFactory.Create().Object,
-            RoleManagerMockFactory.Create().Object,
-            TestMapperFactory.CreateMapper(),
-            Mock.Of<IEntityResponseCache>(MockBehavior.Strict));
+        var id = Guid.NewGuid();
+        var row = new UserPageRow(id, "Nguyên", "login1", "a@b.c", DateTime.UtcNow);
 
-        var ex = await Assert.ThrowsAsync<ApiException>(() => sut.SearchByNamePagedAsync(name, 1, 5));
+        var repo = new Mock<IUserRepository>();
+        repo.Setup(r => r.GetPagedAsync(1, 5, It.IsAny<CancellationToken>(), null, null, "Nguyên", null, null))
+            .ReturnsAsync((new List<UserPageRow> { row }, 1L));
+        repo.Setup(r => r.GetRoleNamesByUserIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, List<string>> { [id] = new List<string> { "User" } });
 
-        Assert.Equal(ApiErrorCodes.SearchTermRequired, ex.ErrorCode);
+        var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);
+
+        var sut = new UserService(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var r = await sut.GetPagedAsync(1, 5, CancellationToken.None, null, null, "Nguyên", null, null);
+
+        Assert.Single(r.Items);
+        Assert.Equal(id, r.Items[0].Id);
+        cache.Verify(c => c.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<UserDto>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    // F.I.R.S.T: tìm theo UserName.
-    // 3A — Arrange: term rỗng. Act: SearchByUserNamePagedAsync. Assert: SearchTermRequired.
+    // F.I.R.S.T: filter userName — cùng quy tắc bỏ cache list.
+    // 3A — Arrange: userNameContains "adm". Act: GetPagedAsync. Assert: repo được gọi đúng tham số; không ghi cache phân trang.
     [Fact]
-    public async Task US04_SearchByUserNamePagedAsync_ShouldThrow400_WhenTermEmpty()
+    public async Task US04_GetPagedAsync_ShouldQueryRepo_AndNotCacheList_WhenUserNameFilter()
     {
-        var sut = new UserService(
-            Mock.Of<IUserRepository>(MockBehavior.Strict),
-            UserManagerMockFactory.Create().Object,
-            RoleManagerMockFactory.Create().Object,
-            TestMapperFactory.CreateMapper(),
-            Mock.Of<IEntityResponseCache>(MockBehavior.Strict));
+        var repo = new Mock<IUserRepository>();
+        repo.Setup(r => r.GetPagedAsync(2, 10, It.IsAny<CancellationToken>(), null, null, null, "adm", null))
+            .ReturnsAsync((new List<UserPageRow>(), 0L));
+        repo.Setup(r => r.GetRoleNamesByUserIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, List<string>>());
 
-        var ex = await Assert.ThrowsAsync<ApiException>(() => sut.SearchByUserNamePagedAsync("", 1, 5));
+        var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);
 
-        Assert.Equal(ApiErrorCodes.SearchTermRequired, ex.ErrorCode);
+        var sut = new UserService(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var r = await sut.GetPagedAsync(2, 10, CancellationToken.None, null, null, null, "adm", null);
+
+        Assert.Empty(r.Items);
+        cache.Verify(c => c.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<UserDto>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // F.I.R.S.T: chi tiết user cache hit.

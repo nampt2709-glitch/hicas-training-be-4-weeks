@@ -91,6 +91,9 @@ public static class ApiErrorCodes
     // Endpoint tìm kiếm bắt buộc có từ khoá.
     public const string SearchTermRequired = "SEARCH_TERM_REQUIRED";
 
+    // Query pageSize vượt trần PaginationQuery.MaxPageSize.
+    public const string PageSizeTooLarge = "PAGE_SIZE_TOO_LARGE";
+
     // User không phải tác giả tài nguyên.
     public const string NotResourceAuthor = "NOT_RESOURCE_AUTHOR";
 
@@ -112,6 +115,11 @@ public static class ApiErrorCodes
 // partial: cho phép tách thêm file mở rộng nếu cần (khác file hiện có phần lỗi).
 public static partial class ApiMessages
 {
+    // Nhóm auth.
+    public const string AuthSignUpSuccess = "Sign up successful.";
+    public const string AuthLoginSuccess = "Login successful.";
+    public const string AuthRefreshSuccess = "Token refreshed successfully.";
+
     // Nhóm user — CRUD thành công.
     public const string UserListSuccess = "Users retrieved successfully.";
     public const string UserGetSuccess = "User retrieved successfully.";
@@ -129,6 +137,9 @@ public static partial class ApiMessages
 
     // Nhóm comment — CRUD cơ bản.
     public const string CommentListSuccess = "Comments retrieved successfully.";
+
+    // Danh sách comment theo UserId (tác giả).
+    public const string CommentListByUserSuccess = "Comments for the user retrieved successfully.";
     // Một bài: toàn bộ comment phẳng một lần (không phân trang; khác GET .../post/{id}/flat bị trần MaxPageSize).
     public const string CommentAllByPostSuccess = "All comments for the post retrieved successfully (flat list, no pagination).";
     public const string CommentGetSuccess = "Comment retrieved successfully.";
@@ -195,9 +206,6 @@ public static partial class ApiMessages
         "Comments demo (all rows, no paging): rows built in SQL via Select (projection / server-side join).";
 
     // Tìm kiếm: user, post, comment; có kèm theo bộ lọc.
-    public const string UserSearchByNameSuccess = "Users matching the display name filter retrieved successfully.";
-    public const string UserSearchByUserNameSuccess = "Users matching the username filter retrieved successfully.";
-    public const string PostSearchByTitleSuccess = "Posts matching the title filter retrieved successfully.";
     public const string CommentSearchByContentSuccess = "Comments matching the content filter retrieved successfully.";
 
     public const string CommentSearchByIdInPostSuccess = "Comment in the post retrieved by id successfully.";
@@ -223,7 +231,7 @@ public static partial class ApiMessages
 
     // 403: policy cấm (role, quy tắc tùy chỉnh).
     public const string InsufficientPermission =
-        "Your account is not allowed to perform this request.";
+        "Your account does not have permission to perform this request. Required role: Admin.";
 
     // Body login không đạt validator.
     public const string LoginValidationFailed =
@@ -328,6 +336,14 @@ public static partial class ApiMessages
     // Tìm kiếm thiếu chuỗi sau trim.
     public const string SearchTermRequired =
         "Search term is required and cannot be empty.";
+
+    // pageSize trong query vượt MaxPageSize (placeholder {0} = giá trị max).
+    public const string PageSizeExceedsMax =
+        "pageSize cannot exceed {0}. Reduce the requested page size and try again.";
+
+    // createdAtFrom lớn hơn createdAtTo — khoảng thời gian không hợp lệ.
+    public const string CreatedAtRangeInvalid =
+        "createdAtFrom must be less than or equal to createdAtTo.";
 
     // Tác giả resource không khớp current user.
     public const string NotResourceAuthor =

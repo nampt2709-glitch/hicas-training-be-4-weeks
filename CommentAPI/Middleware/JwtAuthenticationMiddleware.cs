@@ -9,6 +9,7 @@ public sealed class JwtAuthenticationMiddleware // Bảo vệ prefix /api ngoạ
 {
     private static readonly HashSet<string> AnonymousApiPaths = new(StringComparer.OrdinalIgnoreCase) // Đường dẫn không cần JWT.
     {
+        "/api/auth/signup", // Đăng ký công khai (tạo user + role User).
         "/api/auth/login", // Đăng nhập.
         "/api/auth/refresh" // Đổi refresh token.
     };

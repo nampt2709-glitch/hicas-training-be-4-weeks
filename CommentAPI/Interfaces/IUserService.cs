@@ -10,21 +10,12 @@ public interface IUserService
     Task<PagedResult<UserDto>> GetPagedAsync(
         int page, // Số trang bắt đầu từ 1 sau khi chuẩn hóa ở client hoặc service.
         int pageSize, // Số bản ghi tối đa mỗi trang, có trần MaxPageSize ở PaginationQuery.
-        CancellationToken cancellationToken = default); // Truyền xuống EF/SQL để hủy khi request đóng.
-
-    // Tìm user có Name chứa chuỗi, phân trang; name null/rỗng xử lý theo quy ước validator hoặc service.
-    Task<PagedResult<UserDto>> SearchByNamePagedAsync(
-        string? name, // Chuỗi con tìm trong cột Name; có thể null nếu route cho phép.
-        int page, // Trang phân trang, dùng OFFSET tính từ (page-1)*pageSize.
-        int pageSize, // Cỡ trang, giới hạn tải dữ liệu mỗi lần.
-        CancellationToken cancellationToken = default); // Hủy tác vụ khi client ngắt kết nối.
-
-    // Tìm user có UserName chứa chuỗi, phân trang; dùng cho ô tìm kiếm theo đăng nhập.
-    Task<PagedResult<UserDto>> SearchByUserNamePagedAsync(
-        string? userName, // Chuỗi con tìm trong UserName; null/ rỗng theo quy ước tầng trên.
-        int page, // Trang 1-based sau chuẩn hóa.
-        int pageSize, // Kích thước trang, bị cắt theo MaxPageSize.
-        CancellationToken cancellationToken = default); // Token hủy dùng trong truy vấn dài.
+        CancellationToken cancellationToken = default, // Truyền xuống EF/SQL để hủy khi request đóng.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt inclusive.
+        DateTime? createdAtTo = null, // Lọc CreatedAt inclusive.
+        string? nameContains = null, // Filter Contains trên Name (tuỳ chọn).
+        string? userNameContains = null, // Filter Contains trên UserName (tuỳ chọn).
+        string? emailContains = null); // Filter Contains trên Email (tuỳ chọn).
 
     // Một user theo id; không có thì ném ngoại lệ 404 thống nhất API (tùy triển khai).
     Task<UserDto> GetByIdAsync(Guid id);

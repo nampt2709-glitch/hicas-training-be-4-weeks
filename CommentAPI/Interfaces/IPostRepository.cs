@@ -9,18 +9,15 @@ public interface IPostRepository
 {
     Task<List<Post>> GetAllAsync(); // Toàn bộ entity (dùng hiếm, thường kèm AsNoTracking ở triển khai).
 
-    // Phân trang, trả trực tiếp PostDto từ SQL (Select), không materialize Post rồi map thủ công.
+    // Phân trang, trả trực tiếp PostDto từ SQL (Select); title/content là filter Contains tuỳ chọn (null = không lọc).
     Task<(List<PostDto> Items, long TotalCount)> GetPagedAsync(
         int page, // Trang, dùng OFFSET.
         int pageSize, // FETCH, giới hạn hàng.
-        CancellationToken cancellationToken = default); // Hủy.
-
-    // Tìm Title chứa chuỗi, phân trang; count + trang song song.
-    Task<(List<PostDto> Items, long TotalCount)> SearchByTitlePagedAsync(
-        string titleContains, // Chuỗi con, đã trim/validate ở tầng trên nếu cần.
-        int page, // Trang.
-        int pageSize, // Cỡ.
-        CancellationToken cancellationToken = default); // Hủy.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt inclusive.
+        DateTime? createdAtTo = null, // Lọc CreatedAt inclusive.
+        string? titleContains = null, // Chuỗi con trong Title.
+        string? contentContains = null); // Chuỗi con trong Content.
 
     // Đọc một dòng PostDto theo id, AsNoTracking, cho cache/ response; null nếu không có.
     Task<PostDto?> GetByIdForReadAsync(Guid id, CancellationToken cancellationToken = default);

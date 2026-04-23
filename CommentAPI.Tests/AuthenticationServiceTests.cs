@@ -22,9 +22,12 @@ public class AuthenticationServiceTests
         RefreshTokenDays = 1
     };
 
-    private static AuthenticationService CreateSut(Mock<IAuthenticationRepository> auth)
+    private static AuthenticationService CreateSut(Mock<IAuthenticationRepository> auth, IUserService? userService = null)
     {
-        return new AuthenticationService(auth.Object, Options.Create(TestJwt));
+        return new AuthenticationService(
+            auth.Object,
+            userService ?? Mock.Of<IUserService>(MockBehavior.Strict),
+            Options.Create(TestJwt));
     }
 
     // F.I.R.S.T: không lộ thông tin tài khoản.
@@ -218,5 +221,43 @@ public class AuthenticationServiceTests
 
         Assert.Equal(StatusCodes.Status500InternalServerError, ex.StatusCode);
         Assert.Equal(ApiErrorCodes.TokenIssueFailed, ex.ErrorCode);
+    }
+
+    // F.I.R.S.T: đăng ký tái dùng CreateAsync + phát JWT.
+    // 3A — Arrange: UserService trả DTO; repo trả entity + role User + stamp. Act: SignUpAsync. Assert: có access/refresh.
+    [Fact]
+    public async Task AS11_SignUpAsync_ShouldReturnTokens_WhenUserCreated()
+    {
+        var id = Guid.NewGuid();
+        var entity = new User { Id = id, UserName = "newu", Name = "Người mới", Email = "n@n.n", CreatedAt = DateTime.UtcNow };
+
+        var users = new Mock<IUserService>();
+        users.Setup(u => u.CreateAsync(It.IsAny<CreateUserDto>())).ReturnsAsync(new UserDto
+        {
+            Id = id,
+            Name = entity.Name,
+            UserName = entity.UserName,
+            Email = entity.Email,
+            Roles = new List<string> { "User" },
+            CreatedAt = entity.CreatedAt
+        });
+
+        var auth = new Mock<IAuthenticationRepository>();
+        auth.Setup(a => a.GetByIdAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(entity);
+        auth.Setup(a => a.GetRoleNamesAsync(entity, It.IsAny<CancellationToken>())).ReturnsAsync(new List<string> { "User" });
+        auth.Setup(a => a.GetSecurityStampAsync(entity, It.IsAny<CancellationToken>())).ReturnsAsync("stamp-signup");
+
+        var sut = CreateSut(auth, users.Object);
+        var tokens = await sut.SignUpAsync(new SignUpRequestDto
+        {
+            Name = entity.Name,
+            UserName = entity.UserName,
+            Password = "P@ssw0rd!",
+            Email = entity.Email
+        });
+
+        Assert.False(string.IsNullOrWhiteSpace(tokens.AccessToken));
+        Assert.False(string.IsNullOrWhiteSpace(tokens.RefreshToken));
+        users.Verify(u => u.CreateAsync(It.Is<CreateUserDto>(d => d.UserName == entity.UserName)), Times.Once);
     }
 }

@@ -9,25 +9,16 @@ public interface IUserRepository
 {
     Task<List<User>> GetAllAsync(); // Đọc toàn bộ user thành entity (thường ít dùng sản xuất, debug/ admin).
 
-    // Phân trang: trả tuple (danh sách dòng projection, tổng số bản ghi); không tải PasswordHash.
+    // Phân trang: trả tuple (danh sách dòng projection, tổng số bản ghi); name/userName/email là filter Contains tuỳ chọn.
     Task<(List<UserPageRow> Items, long TotalCount)> GetPagedAsync(
         int page, // Số trang, dùng Skip/Take trong SQL.
         int pageSize, // Cỡ trang, giới hạn truy vấn.
-        CancellationToken cancellationToken = default); // Hủy truy vấn dài.
-
-    // Tìm user có Name chứa chuỗi, phân trang; dùng Contains/ LIKE tùy provider.
-    Task<(List<UserPageRow> Items, long TotalCount)> SearchByNamePagedAsync(
-        string nameContains, // Chuỗi con tìm trong Name, không null ở caller nếu đã chuẩn hóa.
-        int page, // Trang phân trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default); // Hủy.
-
-    // Tìm user có UserName chứa chuỗi, phân trang.
-    Task<(List<UserPageRow> Items, long TotalCount)> SearchByUserNamePagedAsync(
-        string userNameContains, // Chuỗi con trong UserName.
-        int page, // Trang.
-        int pageSize, // Cỡ.
-        CancellationToken cancellationToken = default); // Hủy.
+        CancellationToken cancellationToken = default, // Hủy truy vấn dài.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt inclusive.
+        DateTime? createdAtTo = null, // Lọc CreatedAt inclusive.
+        string? nameContains = null, // Chuỗi con trong Name.
+        string? userNameContains = null, // Chuỗi con trong UserName.
+        string? emailContains = null); // Chuỗi con trong Email.
 
     // Một truy vấn lấy mọi role theo danh sách user id, tránh N+1 lần gọi GetRoles mỗi user.
     Task<Dictionary<Guid, List<string>>> GetRoleNamesByUserIdsAsync(

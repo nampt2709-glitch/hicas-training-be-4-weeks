@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -211,6 +212,17 @@ builder.Services.AddEndpointsApiExplorer();
 // Swagger: bỏ ví dụ; thêm bảo mật Bearer cho try-it-out.
 builder.Services.AddSwaggerGen(options =>
 {
+    // Swashbuckle mặc định OrderActionsBy theo RelativePath + HttpMethod → thứ tự alphabet của URI (vd. api/admin/... trước api/posts) và của verb (DELETE trước GET), không khớp thứ tự action trong controller. Gom theo controller (FullName) rồi MetadataToken của method (Roslyn thường tăng dần theo thứ tự khai báo trong class) để UI gần với file controller.
+    options.OrderActionsBy(apiDesc =>
+    {
+        if (apiDesc.ActionDescriptor is ControllerActionDescriptor cad)
+        {
+            var typeKey = cad.ControllerTypeInfo.FullName ?? cad.ControllerName;
+            return $"{typeKey}_{cad.MethodInfo.MetadataToken:X8}";
+        }
+
+        return $"{apiDesc.RelativePath}_{apiDesc.HttpMethod}";
+    });
     options.DocumentFilter<RemoveSwaggerExamplesDocumentFilter>();
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {

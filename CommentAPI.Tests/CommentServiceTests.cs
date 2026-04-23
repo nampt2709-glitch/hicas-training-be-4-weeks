@@ -120,7 +120,7 @@ public class CommentServiceTests
     public async Task CM05_SearchByContentPagedAsync_ShouldSucceed_WhenSingleCharTerm()
     {
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.SearchByContentPagedAsync("a", 1, 10, It.IsAny<CancellationToken>()))
+        repo.Setup(r => r.SearchByContentPagedAsync("a", 1, 10, It.IsAny<CancellationToken>(), null, null))
             .ReturnsAsync((new List<Comment>(), 0L));
 
         var cache = new Mock<IEntityResponseCache>();

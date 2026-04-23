@@ -1,5 +1,7 @@
 // Phân trang: response có metadata (trang, tổng, tổng số trang) và helper chuẩn hóa page/pageSize từ query.
 using System.Globalization;
+using CommentAPI;
+using Microsoft.AspNetCore.Http;
 
 namespace CommentAPI.DTOs;
 
@@ -22,7 +24,7 @@ public class PagedResult<T>
     public int TotalPages => PageSize <= 0 ? 0 : (int)Math.Ceiling(TotalCount / (double)PageSize);
 }
 
-// Chuẩn hóa page/pageSize (tối thiểu 1, tối đa MaxPageSize); ParseFromQuery đọc chuỗi query, lỗi thì dùng mặc định 1 và 20 rồi Normalize.
+// Chuẩn hóa page/pageSize (tối thiểu 1, tối đa MaxPageSize); ParseFromQuery: pageSize là số hợp lệ và > Max → ApiException 400; còn lại fallback + Normalize.
 public static class PaginationQuery
 {
 
@@ -30,7 +32,7 @@ public static class PaginationQuery
     public const int DefaultPageSize = 20;
 
     // Trần bảo vệ: không cho pageSize lớn quá, tránh quét toàn bảng vô tình.
-    public const int MaxPageSize = 100;
+    public const int MaxPageSize = 500;
 
     // Cắt biên: trang ≥1; pageSize<1 thì dùng DefaultPageSize, >Max thì cắt về Max — trả tuple cho Skip/Take.
     public static (int Page, int PageSize) Normalize(int page, int pageSize)
@@ -40,12 +42,38 @@ public static class PaginationQuery
         return (p, s); // Tuple truyền tới service/repository tính Skip/Take.
     }
 
-    // Đọc chuỗi query: trống/không phải số → thay 1 / DefaultPageSize, sau đó Normalize.
+    // Đọc chuỗi query: pageSize gửi rõ là số nguyên và vượt MaxPageSize → 400; trống/không phải số → fallback rồi Normalize.
     public static (int Page, int PageSize) ParseFromQuery(string? pageRaw, string? pageSizeRaw)
     {
+        // Nếu client gửi pageSize cụ thể (parse được) mà lớn hơn trần — báo lỗi rõ, không im lặng cắt.
+        if (!string.IsNullOrWhiteSpace(pageSizeRaw) // Có chuỗi pageSize (kể cả chỉ khoảng trắng đã trim ở bước TryParse).
+            && int.TryParse(pageSizeRaw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var explicitSize) // Parse invariant giống ParseIntLoose.
+            && explicitSize > MaxPageSize) // Vượt trần bảo vệ API.
+        {
+            throw new ApiException( // Middleware chuẩn hóa JSON lỗi.
+                StatusCodes.Status400BadRequest, // 400: tham số query không hợp lệ.
+                ApiErrorCodes.PageSizeTooLarge, // Mã ổn định cho client.
+                string.Format(CultureInfo.InvariantCulture, ApiMessages.PageSizeExceedsMax, MaxPageSize)); // Thông điệp có nhúng max.
+        } // Kết thúc nhánh pageSize quá lớn.
+
         var page = ParseIntLoose(pageRaw, 1); // Parse số trang, fallback 1, không ném ngoại lệ lên ngoài.
         var pageSize = ParseIntLoose(pageSizeRaw, DefaultPageSize); // Parse cỡ trang, rỗng thì 20, rồi sắp Normalize bên dưới.
         return Normalize(page, pageSize); // Cắt biên sau khi đã có số; coi mọi chuỗi lỗi thành fallback.
+    }
+
+    // paginationEnabled=false: tắt phân trang (chỉ dùng trên route demo). true: dùng page/pageSize.
+    public static (bool Unpaged, int Page, int PageSize) ParsePaginationFromQuery(
+        string? pageRaw,
+        string? pageSizeRaw,
+        bool paginationEnabled)
+    {
+        if (!paginationEnabled) // Client tắt phân trang — không Skip/Take ở tầng service.
+        {
+            return (true, 1, DefaultPageSize); // Tuple hợp lệ; Unpaged=true bỏ qua p/s khi đọc DB.
+        }
+
+        var (p, s) = ParseFromQuery(pageRaw, pageSizeRaw); // Bật phân trang — chuẩn hóa trang/cỡ.
+        return (false, p, s); // Cắt trang theo p/s.
     }
 
     private static int ParseIntLoose(string? raw, int fallback) // Hàm phụ, không công khai, parse linh hoạt, không throw.

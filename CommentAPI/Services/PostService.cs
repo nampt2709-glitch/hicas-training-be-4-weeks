@@ -9,6 +9,8 @@ namespace CommentAPI.Services;
 
 public class PostService : IPostService // CRUD + search + author/admin update paths.
 {
+    #region Trường & hàm tạo — PostsController
+
     private readonly IPostRepository _repository; // Post persistence.
     private readonly IUserRepository _userRepository; // Kiểm tra FK UserId.
     private readonly IMapper _mapper; // AutoMapper.
@@ -26,19 +28,35 @@ public class PostService : IPostService // CRUD + search + author/admin update p
         _cache = cache; // Field.
     }
 
+    #endregion
+
+    #region GET — PostsController (GetAll, GetById)
+
     public async Task<PagedResult<PostDto>> GetPagedAsync( // List posts paged.
         int page, // Page index.
         int pageSize, // Page size.
-        CancellationToken cancellationToken = default) // CT.
+        CancellationToken cancellationToken = default, // CT.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null, // Lọc CreatedAt.
+        string? titleContains = null, // Filter Title (Contains).
+        string? contentContains = null) // Filter Content (Contains).
     {
-        var cacheKey = EntityCacheKeys.PostsPaged(page, pageSize); // Cache key.
-        var cached = await _cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken); // Try cache.
-        if (cached is not null) // Hit.
+        if (!HasPostListFilter(createdAtFrom, createdAtTo, titleContains, contentContains)) // Chỉ cache danh sách “thuần”.
         {
-            return cached; // Fast path.
+            var cacheKey = EntityCacheKeys.PostsPaged(page, pageSize); // Cache key.
+            var cached = await _cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken); // Try cache.
+            if (cached is not null) // Hit.
+                return cached; // Fast path.
         }
 
-        var (items, total) = await _repository.GetPagedAsync(page, pageSize, cancellationToken); // DB projection already PostDto.
+        var (items, total) = await _repository.GetPagedAsync(
+            page,
+            pageSize,
+            cancellationToken,
+            createdAtFrom,
+            createdAtTo,
+            titleContains,
+            contentContains); // DB projection.
         var result = new PagedResult<PostDto> // Wrap.
         {
             Items = items, // Page rows.
@@ -46,48 +64,9 @@ public class PostService : IPostService // CRUD + search + author/admin update p
             PageSize = pageSize, // Size.
             TotalCount = total // Count.
         };
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Store.
+        if (!HasPostListFilter(createdAtFrom, createdAtTo, titleContains, contentContains))
+            await _cache.SetJsonAsync(EntityCacheKeys.PostsPaged(page, pageSize), result, cancellationToken); // Store.
         return result; // Out.
-    }
-
-    public async Task<PagedResult<PostDto>> SearchByTitlePagedAsync( // Search title contains.
-        string? title, // Raw term.
-        int page, // Page.
-        int pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var term = RequireSearchTerm(title); // Non-empty.
-        var cacheKey = EntityCacheKeys.PostsSearchTitle(EntityCacheHash.SearchTerm(term), page, pageSize); // Key.
-        var cached = await _cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken); // Get.
-        if (cached is not null) // Hit.
-        {
-            return cached; // Cached list.
-        }
-
-        var (items, total) = await _repository.SearchByTitlePagedAsync(term, page, pageSize, cancellationToken); // Query.
-        var result = new PagedResult<PostDto> // Result.
-        {
-            Items = items, // Items.
-            Page = page, // Page.
-            PageSize = pageSize, // Size.
-            TotalCount = total // Total.
-        };
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Save.
-        return result; // Return.
-    }
-
-    private static string RequireSearchTerm(string? raw) // Validate search string.
-    {
-        var t = raw?.Trim(); // Trim.
-        if (string.IsNullOrEmpty(t)) // Empty.
-        {
-            throw new ApiException( // 400.
-                StatusCodes.Status400BadRequest, // 400.
-                ApiErrorCodes.SearchTermRequired, // Code.
-                ApiMessages.SearchTermRequired); // Msg.
-        }
-
-        return t; // Term.
     }
 
     public async Task<PostDto> GetByIdAsync(Guid id) // Single post read.
@@ -112,6 +91,10 @@ public class PostService : IPostService // CRUD + search + author/admin update p
         return dto; // DTO.
     }
 
+    #endregion
+
+    #region POST — PostsController (Create)
+
     public async Task<PostDto> CreateAsync(CreatePostDto dto) // Insert post.
     {
         if (!await _userRepository.ExistsAsync(dto.UserId)) // FK guard.
@@ -130,6 +113,10 @@ public class PostService : IPostService // CRUD + search + author/admin update p
 
         return _mapper.Map<PostDto>(entity); // Return mapped DTO (client nhận id mới).
     }
+
+    #endregion
+
+    #region PUT — PostsController (Update, UpdateAsAdmin)
 
     // User: chỉ chủ bài (UserId trùng JWT) được cập nhật tiêu đề/nội dung.
     public async Task UpdateAsAuthorAsync(Guid id, UpdatePostDto dto, Guid currentUserId) // Author path.
@@ -192,6 +179,10 @@ public class PostService : IPostService // CRUD + search + author/admin update p
         await _cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Invalidate cache entry.
     }
 
+    #endregion
+
+    #region DELETE — PostsController (Delete)
+
     public async Task DeleteAsync(Guid id) // Remove post.
     {
         var entity = await _repository.GetByIdAsync(id); // Find tracked entity.
@@ -208,4 +199,21 @@ public class PostService : IPostService // CRUD + search + author/admin update p
         _repository.Remove(entity); // Stage delete.
         await _repository.SaveChangesAsync(); // Commit cascade rules theo model.
     }
+
+    #endregion
+
+    #region Private helpers
+
+    // Có bất kỳ filter list nào → không cache (tránh khóa sai hoặc bùng nổ).
+    private static bool HasPostListFilter(
+        DateTime? createdAtFrom,
+        DateTime? createdAtTo,
+        string? titleContains,
+        string? contentContains) =>
+        createdAtFrom.HasValue
+        || createdAtTo.HasValue
+        || !string.IsNullOrWhiteSpace(titleContains)
+        || !string.IsNullOrWhiteSpace(contentContains);
+
+    #endregion
 }

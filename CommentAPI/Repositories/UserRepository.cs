@@ -8,6 +8,8 @@ namespace CommentAPI.Repositories;
 
 public class UserRepository : IUserRepository // Truy vấn bảng Users và role join.
 {
+    #region Trường & hàm tạo
+
     private readonly AppDbContext _context; // DbContext scoped per request.
 
     public UserRepository(AppDbContext context) // Inject context.
@@ -15,23 +17,47 @@ public class UserRepository : IUserRepository // Truy vấn bảng Users và rol
         _context = context; // Store.
     }
 
-    public async Task<List<User>> GetAllAsync() // Toàn bộ users (ít dùng trong API hiện tại).
+    #endregion
+
+    #region Private — lọc query
+
+    // Lọc CreatedAt inclusive trên User.
+    private static IQueryable<User> WhereCreatedAtRange(IQueryable<User> query, DateTime? createdAtFrom, DateTime? createdAtTo)
     {
-        return await _context.Users // DbSet User.
-            .AsNoTracking() // Read-only.
-            .OrderBy(x => x.CreatedAt) // Sort stable by creation.
-            .ToListAsync(); // Materialize.
+        if (createdAtFrom is { } f)
+            query = query.Where(u => u.CreatedAt >= f);
+        if (createdAtTo is { } t)
+            query = query.Where(u => u.CreatedAt <= t);
+        return query;
     }
+
+    #endregion
+
+    #region GET — UsersController (GetAll, GetById) & batch role
 
     public async Task<(List<UserPageRow> Items, long TotalCount)> GetPagedAsync( // Phân trang + projection nhẹ.
         int page, // Page 1-based.
         int pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
+        CancellationToken cancellationToken = default, // CT.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null, // Lọc CreatedAt.
+        string? nameContains = null, // Filter Name.
+        string? userNameContains = null, // Filter UserName.
+        string? emailContains = null) // Filter Email.
     {
         // Chuẩn hóa Skip/Take; Select chỉ cột cần cho DTO (không đọc PasswordHash, token…).
         var (p, s) = PaginationQuery.Normalize(page, pageSize); // Clamp page/size.
-        var q = _context.Users.AsNoTracking(); // Base query.
-        var total = await q.LongCountAsync(cancellationToken); // Count all.
+        var q = WhereCreatedAtRange(_context.Users.AsNoTracking(), createdAtFrom, createdAtTo); // Base + khoảng thời gian.
+        var n = nameContains?.Trim();
+        if (!string.IsNullOrEmpty(n))
+            q = q.Where(u => u.Name.Contains(n)); // Name LIKE.
+        var uN = userNameContains?.Trim();
+        if (!string.IsNullOrEmpty(uN))
+            q = q.Where(u => u.UserName != null && u.UserName.Contains(uN)); // UserName LIKE.
+        var e = emailContains?.Trim();
+        if (!string.IsNullOrEmpty(e))
+            q = q.Where(u => u.Email != null && u.Email.Contains(e)); // Email LIKE.
+        var total = await q.LongCountAsync(cancellationToken); // Count khớp lọc.
         var items = await q // Page query.
             .OrderBy(u => u.CreatedAt) // Primary sort.
             .ThenBy(u => u.Id) // Tie-breaker PK.
@@ -45,55 +71,6 @@ public class UserRepository : IUserRepository // Truy vấn bảng Users và rol
                 u.CreatedAt)) // Created.
             .ToListAsync(cancellationToken); // Execute.
         return (items, total); // Tuple result.
-    }
-
-    public async Task<(List<UserPageRow> Items, long TotalCount)> SearchByNamePagedAsync( // Filter Name contains.
-        string nameContains, // Pattern.
-        int page, // Page.
-        int pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.Normalize(page, pageSize); // Normalize.
-        var q = _context.Users.AsNoTracking().Where(u => u.Name.Contains(nameContains)); // Filter — SQL translation.
-        var total = await q.LongCountAsync(cancellationToken); // Count filtered.
-        var items = await q // Page.
-            .OrderBy(u => u.CreatedAt) // Sort.
-            .ThenBy(u => u.Id) // Tie.
-            .Skip((p - 1) * s) // Skip.
-            .Take(s) // Take.
-            .Select(u => new UserPageRow( // Project.
-                u.Id, // Id.
-                u.Name, // Name.
-                u.UserName ?? "", // Username.
-                u.Email, // Email.
-                u.CreatedAt)) // Created.
-            .ToListAsync(cancellationToken); // List.
-        return (items, total); // Out.
-    }
-
-    public async Task<(List<UserPageRow> Items, long TotalCount)> SearchByUserNamePagedAsync( // UserName contains.
-        string userNameContains, // Pattern.
-        int page, // Page.
-        int pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var (p, s) = PaginationQuery.Normalize(page, pageSize); // Normalize.
-        var q = _context.Users.AsNoTracking() // Base.
-            .Where(u => u.UserName != null && u.UserName.Contains(userNameContains)); // Nullable guard.
-        var total = await q.LongCountAsync(cancellationToken); // Count.
-        var items = await q // Page.
-            .OrderBy(u => u.CreatedAt) // Sort.
-            .ThenBy(u => u.Id) // Tie.
-            .Skip((p - 1) * s) // Skip.
-            .Take(s) // Take.
-            .Select(u => new UserPageRow( // Row.
-                u.Id, // Id.
-                u.Name, // Name.
-                u.UserName ?? "", // Username.
-                u.Email, // Email.
-                u.CreatedAt)) // Created.
-            .ToListAsync(cancellationToken); // Execute.
-        return (items, total); // Return.
     }
 
     // Kế thừa hợp đồng: batch-load tên role theo danh sách user id (một truy vấn).
@@ -126,6 +103,10 @@ public class UserRepository : IUserRepository // Truy vấn bảng Users và rol
         return await _context.Users.FirstOrDefaultAsync(x => x.Id == id); // May return null.
     }
 
+    #endregion
+
+    #region Ghi — hỗ trợ UserService (Create / Update / Delete)
+
     public async Task AddAsync(User user) // Insert user entity.
     {
         await _context.Users.AddAsync(user); // Stage.
@@ -150,4 +131,18 @@ public class UserRepository : IUserRepository // Truy vấn bảng Users và rol
     {
         await _context.SaveChangesAsync(); // EF save.
     }
+
+    #endregion
+
+    #region Bổ trợ — không map route trực tiếp
+
+    public async Task<List<User>> GetAllAsync() // Toàn bộ users (ít dùng trong API hiện tại).
+    {
+        return await _context.Users // DbSet User.
+            .AsNoTracking() // Read-only.
+            .OrderBy(x => x.CreatedAt) // Sort stable by creation.
+            .ToListAsync(); // Materialize.
+    }
+
+    #endregion
 }

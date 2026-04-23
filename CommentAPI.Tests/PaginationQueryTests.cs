@@ -1,3 +1,4 @@
+using CommentAPI;
 using CommentAPI.DTOs;
 
 namespace CommentAPI.Tests;
@@ -35,7 +36,7 @@ public class PaginationQueryTests
     }
 
     // F.I.R.S.T: biên trần MaxPageSize.
-    // 3A — Arrange: pageSize vượt Max. Act: Normalize. Assert: cắt về MaxPageSize (100).
+    // 3A — Arrange: pageSize vượt Max. Act: Normalize. Assert: cắt về MaxPageSize (500).
     [Fact]
     public void PQ04_Normalize_PageSizeAboveMax_ShouldClampToMax()
     {
@@ -44,7 +45,7 @@ public class PaginationQueryTests
     }
 
     // F.I.R.S.T: pageSize đúng bằng Max vẫn giữ.
-    // 3A — Arrange: 100. Act: Normalize. Assert: 100.
+    // 3A — Arrange: đúng Max. Act: Normalize. Assert: MaxPageSize.
     [Fact]
     public void PQ05_Normalize_PageSizeExactlyMax_ShouldStay()
     {
@@ -83,6 +84,28 @@ public class PaginationQueryTests
         var (page, size) = PaginationQuery.ParseFromQuery(" 3 ", " 50 ");
         Assert.Equal(3, page);
         Assert.Equal(50, size);
+    }
+
+    // F.I.R.S.T: query pageSize vượt Max → ApiException 400 (không im lặng Normalize).
+    // 3A — Arrange: pageSize = Max+1 trong query. Act: ParseFromQuery. Assert: throw, đúng mã lỗi.
+    [Fact]
+    public void PQ11_ParseFromQuery_PageSizeAboveMax_ShouldThrowApiException()
+    {
+        var ex = Assert.Throws<ApiException>(() =>
+            PaginationQuery.ParseFromQuery("1", (PaginationQuery.MaxPageSize + 1).ToString()));
+        Assert.Equal(400, ex.StatusCode);
+        Assert.Equal(ApiErrorCodes.PageSizeTooLarge, ex.ErrorCode);
+    }
+
+    // F.I.R.S.T: pageSize đúng bằng Max trong query vẫn chấp nhận.
+    // 3A — Arrange: MaxPageSize. Act: Parse. Assert: giữ nguyên sau Normalize.
+    [Fact]
+    public void PQ12_ParseFromQuery_PageSizeExactlyMax_ShouldSucceed()
+    {
+        var m = PaginationQuery.MaxPageSize;
+        var (page, size) = PaginationQuery.ParseFromQuery("1", m.ToString());
+        Assert.Equal(1, page);
+        Assert.Equal(m, size);
     }
 
     // F.I.R.S.T: độ chặt assert — nếu kỳ vọng TotalPages sai (ví dụ 2 thay vì 3) thì test fail.

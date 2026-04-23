@@ -19,12 +19,22 @@ public class AuthController : ControllerBase // Controller không có view, ch�
         _authenticationService = authenticationService; // Gán instance để dùng trong action.
     }
 
+    [AllowAnonymous] // Đăng ký không cần JWT; middleware whitelist /api/auth/signup.
+    [HttpPost("signup")] // POST tạo tài khoản + trả cặp token (giống login sau khi tạo xong).
+    public async Task<IActionResult> SignUp([FromBody] SignUpRequestDto request, CancellationToken cancellationToken) // Body: Name, UserName, Password, Email?.
+    {
+        var tokens = await _authenticationService.SignUpAsync(request, cancellationToken); // Identity Create + role User + JWT.
+        return StatusCode(
+            StatusCodes.Status201Created,
+            new { message = ApiMessages.AuthSignUpSuccess, data = tokens }); // 201 + message nhất quán.
+    }
+
     [AllowAnonymous] // Không yêu cầu Bearer token cho đăng nhập.
     [HttpPost("login")] // POST tạo phiên: nhận thông tin đăng nhập, trả cặp token.
     public async Task<IActionResult> Login([FromBody] LoginRequestDto request, CancellationToken cancellationToken) // Body JSON map vào DTO; hủy theo token client.
     {
         var tokens = await _authenticationService.LoginAsync(request, cancellationToken); // Gọi service: kiểm tra credential, phát token.
-        return Ok(tokens); // 200 cùng payload token (access/refresh tùy triển khai).
+        return Ok(new { message = ApiMessages.AuthLoginSuccess, data = tokens }); // 200 + message + data.
     }
 
     [AllowAnonymous] // Làm mới token không cần access còn hiệu lực (chỉ refresh hợp lệ).
@@ -32,7 +42,7 @@ public class AuthController : ControllerBase // Controller không có view, ch�
     public async Task<IActionResult> Refresh([FromBody] RefreshRequestDto request, CancellationToken cancellationToken) // Body chứa refresh token.
     {
         var tokens = await _authenticationService.RefreshAsync(request, cancellationToken); // Xác thực refresh, xoay vòng token.
-        return Ok(tokens); // 200 với token mới hoặc lỗi qua exception handler.
+        return Ok(new { message = ApiMessages.AuthRefreshSuccess, data = tokens }); // 200 + message + data.
     }
 
     [Authorize] // Bắt buộc JWT access hợp lệ (middleware + bearer).

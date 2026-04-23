@@ -10,14 +10,11 @@ public interface IPostService
     Task<PagedResult<PostDto>> GetPagedAsync(
         int page, // Số trang, bắt đầu 1, kết hợp Skip: (page-1)*pageSize.
         int pageSize, // Số bản ghi tối đa mỗi trang, chặn trên theo cấu hình phân trang.
-        CancellationToken cancellationToken = default); // Hủy tác vụ bất đồng bộ khi client hủy request, — truyền xuống EF.
-
-    // Tìm chuỗi chứa trong tiêu đề, phân trang; nếu title null/rỗng, service/ validator quy ước cách báo lỗi.
-    Task<PagedResult<PostDto>> SearchByTitlePagedAsync(
-        string? title, // Phần tiêu đề cần tìm, có thể thiếu, — kiểm tra ở service/ FluentValidation.
-        int page, // Số trang, — dùng OFFSET/FETCH ở repository.
-        int pageSize, // Cỡ trang, — giới hạn tải cao, — tránh cắm quá tải.
-        CancellationToken cancellationToken = default); // Token hủy, dùng xuyên tầng xuống truy vấn.
+        CancellationToken cancellationToken = default, // Hủy tác vụ bất đồng bộ khi client hủy request, — truyền xuống EF.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt inclusive.
+        DateTime? createdAtTo = null, // Lọc CreatedAt inclusive.
+        string? titleContains = null, // Filter Contains trên Title (tuỳ chọn).
+        string? contentContains = null); // Filter Contains trên Content (tuỳ chọn).
 
     // Một bài theo id; ném hoặc trả 404 tùy triển khai, — cache đọc theo khóa post id.
     Task<PostDto> GetByIdAsync(Guid id);

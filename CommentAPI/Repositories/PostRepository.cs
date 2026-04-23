@@ -8,6 +8,8 @@ namespace CommentAPI.Repositories;
 
 public class PostRepository : IPostRepository // CRUD + read projections.
 {
+    #region Trường & hàm tạo
+
     private readonly AppDbContext _context; // Database context.
 
     public PostRepository(AppDbContext context) // DI.
@@ -15,21 +17,41 @@ public class PostRepository : IPostRepository // CRUD + read projections.
         _context = context; // Assign.
     }
 
-    public async Task<List<Post>> GetAllAsync() // Full list entities (legacy/helper).
+    #endregion
+
+    #region Private — lọc query
+
+    // Lọc khoảng CreatedAt (inclusive) trên IQueryable Post — dịch sang SQL.
+    private static IQueryable<Post> WhereCreatedAtRange(IQueryable<Post> query, DateTime? createdAtFrom, DateTime? createdAtTo)
     {
-        return await _context.Posts // DbSet.
-            .AsNoTracking() // Read-only.
-            .OrderByDescending(x => x.CreatedAt) // Newest first.
-            .ToListAsync(); // Materialize.
+        if (createdAtFrom is { } f)
+            query = query.Where(p => p.CreatedAt >= f);
+        if (createdAtTo is { } t)
+            query = query.Where(p => p.CreatedAt <= t);
+        return query;
     }
+
+    #endregion
+
+    #region GET — PostsController (GetAll, GetById)
 
     public async Task<(List<PostDto> Items, long TotalCount)> GetPagedAsync( // Paged list as DTO projection.
         int page, // Page (caller normalized in some paths).
         int pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
+        CancellationToken cancellationToken = default, // CT.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null, // Lọc CreatedAt.
+        string? titleContains = null, // Filter Title Contains.
+        string? contentContains = null) // Filter Content Contains.
     {
-        var q = _context.Posts.AsNoTracking(); // Base query.
-        var total = await q.LongCountAsync(cancellationToken); // Count all posts.
+        var q = WhereCreatedAtRange(_context.Posts.AsNoTracking(), createdAtFrom, createdAtTo); // Base + khoảng thời gian.
+        var t = titleContains?.Trim(); // Chuẩn hóa.
+        if (!string.IsNullOrEmpty(t))
+            q = q.Where(p => p.Title.Contains(t)); // WHERE Title LIKE %t%.
+        var c = contentContains?.Trim(); // Chuẩn hóa nội dung.
+        if (!string.IsNullOrEmpty(c))
+            q = q.Where(p => p.Content.Contains(c)); // WHERE Content LIKE %c%.
+        var total = await q.LongCountAsync(cancellationToken); // Count khớp lọc.
         var items = await q // Execute page.
             .OrderByDescending(p => p.CreatedAt) // Newest first.
             .ThenBy(p => p.Id) // Stable order.
@@ -45,31 +67,6 @@ public class PostRepository : IPostRepository // CRUD + read projections.
             })
             .ToListAsync(cancellationToken); // List.
         return (items, total); // Tuple.
-    }
-
-    public async Task<(List<PostDto> Items, long TotalCount)> SearchByTitlePagedAsync( // Title contains.
-        string titleContains, // Pattern.
-        int page, // Page.
-        int pageSize, // Size.
-        CancellationToken cancellationToken = default) // CT.
-    {
-        var q = _context.Posts.AsNoTracking().Where(p => p.Title.Contains(titleContains)); // Filter.
-        var total = await q.LongCountAsync(cancellationToken); // Count filter.
-        var items = await q // Page.
-            .OrderByDescending(p => p.CreatedAt) // Sort.
-            .ThenBy(p => p.Id) // Tie.
-            .Skip((page - 1) * pageSize) // Skip.
-            .Take(pageSize) // Take.
-            .Select(p => new PostDto // DTO.
-            {
-                Id = p.Id, // Id.
-                Title = p.Title, // Title.
-                Content = p.Content, // Content.
-                CreatedAt = p.CreatedAt, // Created.
-                UserId = p.UserId // User.
-            })
-            .ToListAsync(cancellationToken); // Execute.
-        return (items, total); // Out.
     }
 
     public Task<PostDto?> GetByIdForReadAsync(Guid id, CancellationToken cancellationToken = default) => // Single DTO read.
@@ -89,6 +86,10 @@ public class PostRepository : IPostRepository // CRUD + read projections.
     {
         return await _context.Posts.FirstOrDefaultAsync(x => x.Id == id); // Entity or null.
     }
+
+    #endregion
+
+    #region Ghi — PostsController (Create, Update, Delete)
 
     public async Task AddAsync(Post post) // Insert.
     {
@@ -114,4 +115,18 @@ public class PostRepository : IPostRepository // CRUD + read projections.
     {
         await _context.SaveChangesAsync(); // SaveChanges.
     }
+
+    #endregion
+
+    #region Bổ trợ — không map route trực tiếp
+
+    public async Task<List<Post>> GetAllAsync() // Full list entities (legacy/helper).
+    {
+        return await _context.Posts // DbSet.
+            .AsNoTracking() // Read-only.
+            .OrderByDescending(x => x.CreatedAt) // Newest first.
+            .ToListAsync(); // Materialize.
+    }
+
+    #endregion
 }

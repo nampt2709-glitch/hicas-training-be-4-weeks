@@ -7,6 +7,15 @@ public class LoginRequestDto
     public string Password { get; set; } = string.Empty; // Mật khẩu dạng văn bản thuần (HTTPS bảo vệ trên mạng), không lưu lại sau xử lý.
 }
 
+// Body đăng ký công khai: cùng trường nghiệp vụ với CreateUserDto (không OTP / xác thực email); role User do service gán sau tạo.
+public class SignUpRequestDto
+{
+    public string Name { get; set; } = string.Empty; // Tên hiển thị.
+    public string UserName { get; set; } = string.Empty; // Tên đăng nhập (unique).
+    public string Password { get; set; } = string.Empty; // Mật khẩu; service băm qua Identity.
+    public string? Email { get; set; } // Tuỳ chọn; rỗng thì service dùng synthetic {UserName}@users.local giống tạo user admin.
+}
+
 // DTO lấy thân refresh token: client gửi lại chuỗi refresh cũ để đổi access/refresh mới.
 public class RefreshRequestDto
 {

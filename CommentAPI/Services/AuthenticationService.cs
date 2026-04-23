@@ -13,6 +13,8 @@ namespace CommentAPI.Services;
 // Triển khai IAuthenticationService: tách khỏi controller, dùng repository + JwtOptions.
 public class AuthenticationService : IAuthenticationService
 {
+    #region Hằng & trường & hàm tạo — AuthController
+
     // Tên custom claim: loại token (access vs refresh).
     private const string TokenTypeClaim = "token_type";
     // Giá trị claim: access token dùng gọi API (kèm role).
@@ -22,14 +24,48 @@ public class AuthenticationService : IAuthenticationService
 
     // Truy cập user, mật khẩu, role, security stamp, revoke.
     private readonly IAuthenticationRepository _authRepository;
+    // Tạo user + gán role User (tái sử dụng luồng giống API admin, không OTP).
+    private readonly IUserService _userService;
     // Cấu hình issuer, audience, key, thời gian sống, đọc từ IOptions.
     private readonly JwtOptions _jwt;
 
-    // Inject repository + options (scoped + singleton/IOptions tùy cấu hình).
-    public AuthenticationService(IAuthenticationRepository authRepository, IOptions<JwtOptions> jwtOptions)
+    // Inject repository + user service + options (scoped + singleton/IOptions tùy cấu hình).
+    public AuthenticationService(
+        IAuthenticationRepository authRepository,
+        IUserService userService,
+        IOptions<JwtOptions> jwtOptions)
     {
         _authRepository = authRepository; // Lưu tham chiếu repository
+        _userService = userService; // Tạo hồ sơ Identity + role mặc định
         _jwt = jwtOptions.Value; // Snapshot cấu hình JWT
+    }
+
+    #endregion
+
+    #region POST — AuthController (signup, login, refresh)
+
+    // Đăng ký công khai: CreateAsync đã đặt EmailConfirmed và AddToRole User; sau đó phát token giống Login.
+    public async Task<TokenResponseDto> SignUpAsync(SignUpRequestDto request, CancellationToken cancellationToken = default)
+    {
+        var created = await _userService.CreateAsync(new CreateUserDto
+        {
+            Name = request.Name,
+            UserName = request.UserName,
+            Password = request.Password,
+            Email = request.Email
+        });
+
+        var user = await _authRepository.GetByIdAsync(created.Id, cancellationToken);
+        if (user is null) // Trạng thái bất thường sau khi Create thành công.
+        {
+            throw new ApiException(
+                StatusCodes.Status500InternalServerError,
+                ApiErrorCodes.TokenIssueFailed,
+                ApiMessages.TokenIssueFailed);
+        }
+
+        var roles = await _authRepository.GetRoleNamesAsync(user, cancellationToken);
+        return await CreateTokenPairAsync(user, roles, cancellationToken);
     }
 
     // Đăng nhập: tìm user, kiểm tra mật khẩu, lấy role, tạo cặp token.
@@ -100,6 +136,10 @@ public class AuthenticationService : IAuthenticationService
         return await CreateTokenPairAsync(user, roles, cancellationToken); // Mỗi lần refresh: cả hai token mới
     }
 
+    #endregion
+
+    #region POST — AuthController (logout)
+
     // Đăng xuất: tăng security stamp để mọi token cũ (OnTokenValidated) thất bại.
     public async Task LogoutAsync(Guid userId, CancellationToken cancellationToken = default)
     {
@@ -109,6 +149,10 @@ public class AuthenticationService : IAuthenticationService
             await _authRepository.RevokeSessionsAsync(user, cancellationToken); // UpdateSecurityStampAsync
         } // Nếu user null, im lặng (idempotent)
     }
+
+    #endregion
+
+    #region Private — JWT
 
     // Tạo access + refresh: cùng stamp; access có role, refresh không role.
     private async Task<TokenResponseDto> CreateTokenPairAsync(User user, IReadOnlyList<string> roles, CancellationToken cancellationToken)
@@ -200,4 +244,6 @@ public class AuthenticationService : IAuthenticationService
             return null;
         }
     }
+
+    #endregion
 }

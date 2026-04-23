@@ -23,117 +23,68 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         _cache = cache; // Tiêm cache.
     } // Kết thúc hàm tạo.
 
-    // Lấy danh sách comment phân trang toàn hệ thống, có cache theo trang.
-    public async Task<PagedResult<CommentDto>> GetAllPagedAsync( // Khai báo phương thức phân trang toàn cục (CommentDto).
-        int page, // Số trang (1-based).
-        int pageSize, // Số bản ghi mỗi trang.
-        CancellationToken cancellationToken = default) // Hủy bất đồng bộ.
-    { // Mở khối GetAllPagedAsync.
-        var cacheKey = EntityCacheKeys.CommentsAll(page, pageSize); // Chuỗi khóa cache theo số trang và cỡ trang.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Đọc JSON từ cache; không SQL.
-        if (cached is not null) // Có bản trong cache.
-        { // Mở khối.
-            return cached; // Trả ngay, bỏ qua repository.
-        } // Kết thúc nhánh cache hit.
+    // Thứ tự public bám CommentsController; bổ trợ ICommentService (không có action tương ứng) nằm region riêng trước private.
+    #region CommentsController — GET /api/comments, user/{userId}, CRUD
 
-        var (items, total) = await _repository.GetPagedAsync(page, pageSize, cancellationToken); // Gọi COUNT + SELECT trang trong repository.
-        var result = new PagedResult<CommentDto> // Tạo object kết quả phân trang API.
-        { // Mở khối.
-            Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Biến mỗi Comment thành CommentDto trong RAM (LINQ to Objects, không SQL).
-            Page = page, // Ghi số trang hiện tại.
-            PageSize = pageSize, // Ghi cỡ trang.
-            TotalCount = total // Tổng bản ghi từ COUNT repository.
-        }; // Kết thúc khởi tạo PagedResult.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi JSON vào cache cho lần sau.
-        return result; // Trả về cho controller.
-    } // Kết thúc GetAllPagedAsync.
+    // Gom GET /api/comments: postId, content, khoảng CreatedAt — thứ tự ưu tiên content → post-only → toàn hệ (một id dùng GET /{id}).
+    public async Task<PagedResult<CommentDto>> GetCommentListAsync( // Một hàm cho nhiều bộ lọc query.
+        Guid? postId, // Lọc theo bài (tuỳ chọn).
+        string? contentContains, // Tìm theo nội dung (tuỳ chọn).
+        bool unpaged, // true = trả hết bản ghi khớp (không Skip/Take).
+        int page, // Trang khi unpaged=false.
+        int pageSize, // Cỡ trang khi unpaged=false.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetCommentListAsync.
+        var hasContent = !string.IsNullOrWhiteSpace(contentContains); // Client có gửi content để search không.
+        if (hasContent) // Nhánh tìm theo nội dung (thay route search/by-content).
+        { // Mở khối search.
+            var term = RequireSearchTerm(contentContains); // Chuẩn hoá term; 400 nếu rỗng.
 
-    // Lấy hết comment phẳng của một post một lần — không cache (tránh lệch với thay đổi tần suất cao); không cắt MaxPageSize như phân trang.
-    public async Task<IReadOnlyList<CommentDto>> GetAllByPostIdAsync( // Toàn bộ DTO theo PostId.
-        Guid postId, // Bài viết.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetAllByPostIdAsync.
-        await EnsurePostExistsAsync(postId); // 404 nếu post không tồn tại.
-        var entities = await _repository.GetByPostIdAsync(postId); // Một SELECT toàn comment thuộc post (AsNoTracking trong repo).
-        return entities.Select(_mapper.Map<CommentDto>).ToList(); // Map sang DTO, trả IReadOnlyList qua List.
-    } // Kết thúc GetAllByPostIdAsync.
+            if (unpaged) // Trả toàn bộ khớp Contains.
+            { // Mở unpaged search.
+                List<Comment> entities = postId is { } spid // Có postId → giới hạn trong bài.
+                    ? await SearchByContentInPostAllValidatedAsync(spid, term, cancellationToken, createdAtFrom, createdAtTo) // Kiểm tra post + SELECT.
+                    : await _repository.SearchByContentAllAsync(term, cancellationToken, createdAtFrom, createdAtTo); // Toàn hệ thống.
 
-    // Tìm comment theo nội dung (toàn hệ thống), phân trang và cache.
-    public async Task<PagedResult<CommentDto>> SearchByContentPagedAsync( // Khai báo tìm kiếm nội dung toàn hệ thống.
-        string? content, // Chuỗi tìm kiếm có thể null.
-        int page, // Số trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Token hủy.
-    { // Mở khối SearchByContentPagedAsync.
-        var term = RequireSearchTerm(content); // Cắt khoảng trắng; ném lỗi nếu rỗng (không SQL).
-        var cacheKey = EntityCacheKeys.CommentsSearchContent(EntityCacheHash.SearchTerm(term), page, pageSize); // Khóa gồm băm term để khóa ngắn.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Thử đọc cache.
-        if (cached is not null) // Trúng cache.
-        { // Mở khối.
-            return cached; // Trả kết quả đã lưu.
-        } // Hết nhánh cache.
+                var list = entities.Select(_mapper.Map<CommentDto>).ToList(); // Map sang DTO.
+                return ToUnpagedCommentDtoResult(list); // PageSize = số phần tử thực tế.
+            } // Kết thúc unpaged search.
 
-        var (items, total) = await _repository.SearchByContentPagedAsync(term, page, pageSize, cancellationToken); // COUNT + SELECT có WHERE Contains.
-        var result = new PagedResult<CommentDto> // Gói trang kết quả.
-        { // Mở khối.
-            Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Map từng phần tử trong bộ nhớ.
-            Page = page, // Chỉ số trang.
-            PageSize = pageSize, // Kích thước trang.
-            TotalCount = total // Tổng khớp tìm kiếm.
-        }; // Kết thúc object initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache.
-        return result; // Trả về cho caller.
-    } // Kết thúc SearchByContentPagedAsync.
+            if (postId is { } ppid) // Phân trang trong một post.
+            { // Mở khối.
+                return await SearchByContentInPostPagedAsync(ppid, term, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Cache + COUNT/SELECT.
+            } // Kết thúc in-post paged.
 
-    // Đọc một comment theo Id trong phạm vi một bài viết; 404 nếu không tồn tại.
-    public async Task<CommentDto> GetByIdInPostAsync( // Khai báo đọc comment trong một post.
-        Guid postId, // Định danh bài viết chứa comment.
-        Guid commentId, // Định danh comment cần đọc.
-        CancellationToken cancellationToken = default) // Token hủy thao tác bất đồng bộ.
-    { // Mở khối GetByIdInPostAsync.
-        await EnsurePostExistsAsync(postId); // Gọi Any Post — một truy vấn SQL trong repository.
-        var dto = await _repository.GetByIdForReadInPostAsync(postId, commentId, cancellationToken); // SELECT projection một dòng hoặc null.
-        if (dto is null) // Không có comment đó trong post.
-        { // Mở khối.
-            throw new ApiException( // Ném lỗi HTTP 404 thống nhất API.
-                StatusCodes.Status404NotFound, // Mã 404.
-                ApiErrorCodes.CommentNotFound, // Mã lỗi nghiệp vụ.
-                ApiMessages.CommentNotFound); // Thông điệp hiển thị.
-        } // Kết thúc nhánh null.
+            return await SearchByContentPagedAsync(term, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Toàn hệ phân trang.
+        } // Kết thúc nhánh content.
 
-        return dto; // Trả DTO đã đọc.
-    } // Kết thúc GetByIdInPostAsync.
+        if (postId is { } onlyPost) // Chỉ lọc post, không search.
+        { // Mở khối theo post.
+            if (unpaged) // Thay route GET .../post/{id} không phân trang.
+            { // Mở khối.
+                var fullPostList = await GetAllByPostIdAsync(onlyPost, cancellationToken); // Đã EnsurePostExists bên trong.
+                var list = fullPostList // Áp lọc ngày trong RAM (list một post thường nhỏ).
+                    .Where(d => (!createdAtFrom.HasValue || d.CreatedAt >= createdAtFrom) && (!createdAtTo.HasValue || d.CreatedAt <= createdAtTo))
+                    .ToList(); // Materialize sau lọc.
+                return ToUnpagedCommentDtoResult(list); // List đầy đủ một bài (đã lọc ngày).
+            } // Kết thúc unpaged theo post.
 
-    // Tìm comment theo nội dung trong một bài viết, phân trang và cache.
-    public async Task<PagedResult<CommentDto>> SearchByContentInPostPagedAsync( // Khai báo tìm theo nội dung trong post.
-        Guid postId, // Bài viết giới hạn phạm vi tìm kiếm.
-        string? content, // Chuỗi tìm kiếm.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Token hủy.
-    { // Mở khối SearchByContentInPostPagedAsync.
-        var term = RequireSearchTerm(content); // Chuẩn hóa term.
-        var cacheKey = EntityCacheKeys.CommentsSearchContentInPost(postId, EntityCacheHash.SearchTerm(term), page, pageSize); // Khóa có postId.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Đọc cache nếu có.
-        if (cached is not null) // Cache hit.
-        { // Mở khối.
-            return cached; // Trả ngay.
-        } // Hết nhánh cache.
+            return await GetFlatByPostIdPagedAsync(onlyPost, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Phân trang phẳng trong post.
+        } // Kết thúc chỉ postId.
 
-        await EnsurePostExistsAsync(postId); // Kiểm tra post tồn tại (SQL Any).
-        var (items, total) = await _repository.SearchByContentInPostPagedAsync(postId, term, page, pageSize, cancellationToken); // COUNT + SELECT trong post.
-        var result = new PagedResult<CommentDto> // Đối tượng phân trang.
-        { // Mở khối.
-            Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Ánh xạ sang DTO.
-            Page = page, // Trang hiện tại.
-            PageSize = pageSize, // Cỡ trang.
-            TotalCount = total // Tổng bản ghi khớp.
-        }; // Kết thúc initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Lưu cache.
-        return result; // Trả kết quả.
-    } // Kết thúc SearchByContentInPostPagedAsync.
+        if (unpaged) // Toàn bộ comment mọi bài — không cache (khối lượng lớn).
+        { // Mở khối global unpaged.
+            var entities = await _repository.GetAllAsync(createdAtFrom, createdAtTo); // SELECT có lọc ngày ở SQL.
+            var list = entities.Select(_mapper.Map<CommentDto>).ToList(); // Ánh xạ DTO.
+            return ToUnpagedCommentDtoResult(list); // Trả PagedResult “giả” một trang đủ dài.
+        } // Kết thúc global unpaged.
 
-    // Đọc một comment theo Id với cache; 404 nếu không có.
+        return await GetAllPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Mặc định: phân trang toàn hệ.
+    } // Kết thúc GetCommentListAsync.
+
+    // Đọc một comment theo Id với cache; 404 nếu không có — cùng thứ tự GET /api/comments/{id} trong CommentsController.
     public async Task<CommentDto> GetByIdAsync(Guid id) // Khóa chính comment.
     { // Mở khối GetByIdAsync.
         var cacheKey = EntityCacheKeys.Comment(id); // Khóa theo Guid comment.
@@ -155,6 +106,42 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         await _cache.SetJsonAsync(cacheKey, dto, default); // Lưu DTO vào cache.
         return dto; // Trả DTO cho caller.
     } // Kết thúc GetByIdAsync.
+
+    // Phân trang comment của một user (UserId); 404 nếu user không tồn tại.
+    public async Task<PagedResult<CommentDto>> GetCommentsByUserIdPagedAsync( // List by author.
+        Guid userId, // Tác giả.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetCommentsByUserIdPagedAsync.
+        await EnsureUserExistsAsync(userId); // User phải có trong DB.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
+        { // Mở khối cache.
+            var cacheKey = EntityCacheKeys.CommentsByUser(userId, page, pageSize); // Khóa theo user + trang.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Kết thúc hit.
+        } // Kết thúc nhánh cache.
+
+        var (items, total) = await _repository.GetByUserIdPagedAsync(userId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // DB.
+        var result = new PagedResult<CommentDto> // Gói phân trang.
+        { // Mở khối.
+            Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Map DTO.
+            Page = page, // Trang.
+            PageSize = pageSize, // Cỡ.
+            TotalCount = total // Tổng.
+        }; // Kết thúc initializer.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ set cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsByUser(userId, page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
+        return result; // Trả controller.
+    } // Kết thúc GetCommentsByUserIdPagedAsync.
 
     // Tạo comment mới sau khi kiểm tra post, user và parent hợp lệ.
     public async Task<CommentDto> CreateAsync(CreateCommentDto dto) // Payload tạo mới.
@@ -335,27 +322,6 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         await _cache.RemoveManyAsync(cacheKeys, default); // Xóa hàng loạt.
     } // Kết thúc UpdateAsAdminAsync.
 
-    // Tập định danh cây con (gồm rootId) bằng BFS theo quan hệ ParentId trên danh sách phẳng một post.
-    private static HashSet<Guid> BuildSubtreeIdSet(IReadOnlyList<Comment> inPost, Guid rootId) // Danh sách trong post và Id gốc.
-    { // Mở khối BuildSubtreeIdSet.
-        var s = new HashSet<Guid> { rootId }; // Tập đã thăm/kết quả; khởi tạo với gốc.
-        var q = new Queue<Guid>(); // Hàng đợi BFS.
-        q.Enqueue(rootId); // Đưa gốc vào hàng đợi.
-        while (q.Count > 0) // Còn nút xử lý.
-        { // Mở khối.
-            var u = q.Dequeue(); // Lấy Id cha hiện tại.
-            foreach (var n in inPost) // Quét toàn list phẳng (O(n) mỗi tầng).
-            { // Mở khối.
-                if (n.ParentId == u && s.Add(n.Id)) // Con trực tiếp và Id con mới (Add trả true nếu chưa có).
-                { // Mở khối.
-                    q.Enqueue(n.Id); // Đưa con vào hàng đợi.
-                } // Hết nhánh con hợp lệ.
-            } // Hết foreach.
-        } // Hết while BFS.
-
-        return s; // Trả tập Id cây con.
-    } // Kết thúc BuildSubtreeIdSet.
-
     // Xóa một comment và toàn bộ hậu duệ trong cùng post; vô hiệu cache liên quan.
     public async Task DeleteAsync(Guid id) // Id comment gốc cần xóa.
     { // Mở khối DeleteAsync.
@@ -413,150 +379,31 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         await _cache.RemoveManyAsync(keys, default); // Xóa cache theo loạt.
     } // Kết thúc DeleteAsync.
 
-    // Alias phân trang phẳng toàn cục: cùng implementation với GetAllPagedAsync.
-    public Task<PagedResult<CommentDto>> GetAllFlatPagedAsync( // Alias phân trang phẳng (Task đồng bộ hóa với GetAllPagedAsync).
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetAllFlatPagedAsync.
-        return GetAllPagedAsync(page, pageSize, cancellationToken); // Ủy quyền hoàn toàn — cùng SQL và cache.
-    } // Kết thúc GetAllFlatPagedAsync.
+    #endregion
 
-    // Phân trang comment dạng cây (gốc toàn hệ thống), dựng bằng EF trong bộ nhớ.
-    public async Task<PagedResult<CommentTreeDto>> GetAllTreePagedAsync( // Phân trang cây toàn hệ thống (EF).
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetAllTreePagedAsync.
-        var cacheKey = EntityCacheKeys.CommentsAllTreeFlat(page, pageSize); // Khóa cây EF theo trang.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentTreeDto>>(cacheKey, cancellationToken); // Thử cache.
-        if (cached is not null) // Hit.
-        { // Mở khối.
-            return cached; // Trả ngay.
-        } // Hết cache.
-
-        var (roots, total) = await _repository.GetRootCommentsPagedAsync(page, pageSize, cancellationToken); // COUNT + SELECT trang gốc.
-        var trees = await BuildSubtreesForRootsAsync(roots, cancellationToken); // Thêm query nạp comment theo post + dựng cây RAM.
-        var result = new PagedResult<CommentTreeDto> // Gói phân trang.
-        { // Mở khối.
-            Items = trees, // Danh sách cây đã dựng.
-            Page = page, // Trang.
-            PageSize = pageSize, // Cỡ trang.
-            TotalCount = total // Tổng số gốc (theo phân trang gốc).
-        }; // Kết thúc initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Lưu cache.
-        return result; // Trả kết quả.
-    } // Kết thúc GetAllTreePagedAsync.
-
-    // Phân trang danh sách phẳng có Level; tên CTE chỉ phản ánh endpoint, dữ liệu từ EF phân trang.
-    public async Task<PagedResult<CommentFlatDto>> GetAllCteFlatPagedAsync( // Phân trang phẳng có Level (tên CTE, dữ liệu EF).
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetAllCteFlatPagedAsync.
-        var cacheKey = EntityCacheKeys.CommentsAllCteFlat(page, pageSize); // Khóa cache.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
-        if (cached is not null) // Hit.
-        { // Mở khối.
-            return cached; // Trả ngay.
-        } // Hết cache.
-
-        var (items, total) = await _repository.GetPagedAsync(page, pageSize, cancellationToken); // Hai query EF phân trang.
-        var flats = await ToCommentFlatDtosAsync(items, cancellationToken); // Có thể thêm query nạp đủ post để tính Level.
-        var result = new PagedResult<CommentFlatDto> // Gói phân trang.
-        { // Mở khối.
-            Items = flats, // Dòng phẳng có Level.
-            Page = page, // Trang.
-            PageSize = pageSize, // Cỡ trang.
-            TotalCount = total // Tổng bản ghi.
-        }; // Kết thúc initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache.
-        return result; // Trả về.
-    } // Kết thúc GetAllCteFlatPagedAsync.
-
-    // Alias cây “CTE”: thực tế gọi GetAllTreePagedAsync (cây EF).
-    public Task<PagedResult<CommentTreeDto>> GetAllCteTreePagedAsync( // Alias cây CTE → ủy quyền GetAllTreePagedAsync.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetAllCteTreePagedAsync.
-        return GetAllTreePagedAsync(page, pageSize, cancellationToken); // Không gọi CTE SQL — dùng cây EF.
-    } // Kết thúc GetAllCteTreePagedAsync.
-
-    // Làm phẳng rừng cây EF (preorder) theo trang gốc toàn hệ thống.
-    public async Task<PagedResult<CommentFlatDto>> GetFlattenedForestPagedAsync( // Rừng EF làm phẳng preorder, phân trang theo gốc.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetFlattenedForestPagedAsync.
-        var cacheKey = EntityCacheKeys.CommentsAllFlattenEfTree(page, pageSize); // Khóa cache.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
-        if (cached is not null) // Hit.
-        { // Mở khối.
-            return cached; // Trả ngay.
-        } // Hết cache.
-
-        var (roots, total) = await _repository.GetRootCommentsPagedAsync(page, pageSize, cancellationToken); // Trang gốc.
-        var trees = await BuildSubtreesForRootsAsync(roots, cancellationToken); // Dựng subtree đầy đủ cho mỗi gốc.
-        var flat = FlattenForestPreorder(trees); // Duyệt DFS gán Level — chỉ CPU.
-        var result = new PagedResult<CommentFlatDto> // Gói phân trang.
-        { // Mở khối.
-            Items = flat, // Danh sách phẳng có Level.
-            Page = page, // Trang.
-            PageSize = pageSize, // Cỡ trang.
-            TotalCount = total // Tổng gốc (theo phân trang gốc).
-        }; // Kết thúc initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache.
-        return result; // Trả về.
-    } // Kết thúc GetFlattenedForestPagedAsync.
-
-    // Làm phẳng toàn bộ cây bằng CTE SQL, rồi phân trang trong bộ nhớ (Skip/Take).
-    public async Task<PagedResult<CommentFlatDto>> GetFlattenedFromCtePagedAsync( // CTE toàn cục rồi cắt trang trong RAM.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetFlattenedFromCtePagedAsync.
-        var cacheKey = EntityCacheKeys.CommentsAllFlattenCteTree(page, pageSize); // Khóa cache.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
-        if (cached is not null) // Hit.
-        { // Mở khối.
-            return cached; // Trả ngay.
-        } // Hết cache.
-
-        var allRows = await _repository.GetTreeRowsByCteAllAsync(); // Một (hoặc vài) lệnh ADO CTE toàn cục.
-        var flatList = BuildGlobalFlatFromCteAllRows(allRows); // Nhóm post + cây + flatten trong RAM.
-        var total = flatList.Count; // Tổng số dòng phẳng (int) từ Count collection.
-        var slice = flatList // Nguồn cho biểu thức Skip/Take (phân trang trong RAM).
-            .Skip((page - 1) * pageSize) // Bỏ các dòng của trang trước (LINQ to Objects).
-            .Take(pageSize) // Lấy đúng pageSize phần tử.
-            .ToList(); // List vật lý cho response.
-        var result = new PagedResult<CommentFlatDto> // Gói phân trang.
-        { // Mở khối.
-            Items = slice, // Trang con của danh sách phẳng.
-            Page = page, // Trang.
-            PageSize = pageSize, // Cỡ trang.
-            TotalCount = total // Tổng dòng phẳng toàn cục.
-        }; // Kết thúc initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache.
-        return result; // Trả về.
-    } // Kết thúc GetFlattenedFromCtePagedAsync.
+    #region CommentsController — GET flat / cte / tree (post trước, toàn hệ sau, như nhánh if trong controller)
 
     // Phân trang comment phẳng (DTO cơ bản) theo một post.
     public async Task<PagedResult<CommentDto>> GetFlatByPostIdPagedAsync( // Phân trang DTO phẳng theo post.
         Guid postId, // Bài viết.
         int page, // Trang.
         int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối GetFlatByPostIdPagedAsync.
-        var cacheKey = EntityCacheKeys.CommentsFlatByPost(postId, page, pageSize); // Khóa cache.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Đọc cache.
-        if (cached is not null) // Hit.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
         { // Mở khối.
-            return cached; // Trả ngay.
-        } // Hết cache.
+            var cacheKey = EntityCacheKeys.CommentsFlatByPost(postId, page, pageSize); // Khóa cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
 
         await EnsurePostExistsAsync(postId); // Any post.
-        var (items, total) = await _repository.GetByPostIdPagedAsync(postId, page, pageSize, cancellationToken); // COUNT + SELECT trong post.
+        var (items, total) = await _repository.GetByPostIdPagedAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT trong post.
         var result = new PagedResult<CommentDto> // Gói phân trang.
         { // Mở khối.
             Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Map sang DTO.
@@ -564,54 +411,126 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             PageSize = pageSize, // Cỡ trang.
             TotalCount = total // Tổng comment post.
         }; // Kết thúc initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsFlatByPost(postId, page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
         return result; // Trả về.
     } // Kết thúc GetFlatByPostIdPagedAsync.
 
-    // Phân trang phẳng có Level trong một post (tính Level qua ToCommentFlatDtosAsync).
-    public async Task<PagedResult<CommentFlatDto>> GetCteFlatByPostIdPagedAsync( // Phân trang CommentFlatDto theo post.
+    // Alias phân trang phẳng toàn cục: cùng implementation với GetAllPagedAsync (GET /api/comments/flat khi không có postId).
+    public Task<PagedResult<CommentDto>> GetAllFlatPagedAsync( // Alias phân trang phẳng (Task đồng bộ hóa với GetAllPagedAsync).
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetAllFlatPagedAsync.
+        return GetAllPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Ủy quyền — cùng SQL và cache.
+    } // Kết thúc GetAllFlatPagedAsync.
+
+    // Phân trang phẳng có Level trong một post — hàng thô từ CTE @postId (không EF phân trang).
+    public async Task<PagedResult<CommentFlatDto>> GetCteFlatByPostIdPagedAsync( // Phân trang CommentFlatDto theo post (CTE).
         Guid postId, // Bài viết.
         int page, // Trang.
         int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối GetCteFlatByPostIdPagedAsync.
-        var cacheKey = EntityCacheKeys.CommentsCteFlatByPost(postId, page, pageSize); // Khóa cache.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
-        if (cached is not null) // Hit.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
         { // Mở khối.
-            return cached; // Trả ngay.
-        } // Hết cache.
+            var cacheKey = EntityCacheKeys.CommentsCteFlatByPost(postId, page, pageSize); // Khóa cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
 
         await EnsurePostExistsAsync(postId); // Kiểm tra post tồn tại.
-        var (items, total) = await _repository.GetByPostIdPagedAsync(postId, page, pageSize, cancellationToken); // Phân trang EF trong post.
-        var flats = await ToCommentFlatDtosAsync(items, cancellationToken); // Bổ sung query + tính Level.
+        var rows = await _repository.GetTreeRowsByCteAsync(postId, cancellationToken, createdAtFrom, createdAtTo); // CTE theo post có lọc ngày.
+        var total = (long)rows.Count; // Tổng hàng trong post theo CTE.
+        var slice = rows // Thứ tự như reader.
+            .Skip((page - 1) * pageSize) // Trang.
+            .Take(pageSize) // Cỡ.
+            .ToList(); // List response.
         var result = new PagedResult<CommentFlatDto> // Gói phân trang.
         { // Mở khối.
-            Items = flats, // Dòng phẳng có Level.
+            Items = slice, // Hàng thô phẳng.
             Page = page, // Trang.
             PageSize = pageSize, // Cỡ trang.
-            TotalCount = total // Tổng bản ghi post.
+            TotalCount = total // Tổng hàng.
         }; // Kết thúc initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsCteFlatByPost(postId, page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
         return result; // Trả về.
     } // Kết thúc GetCteFlatByPostIdPagedAsync.
+
+    // Phân trang danh sách phẳng có Level từ CTE SQL toàn hệ (GET /api/comments/cte khi không có postId).
+    public async Task<PagedResult<CommentFlatDto>> GetAllCteFlatPagedAsync( // Phân trang hàng thô CTE toàn hệ.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt trên kết quả CTE.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetAllCteFlatPagedAsync.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
+        { // Mở khối.
+            var cacheKey = EntityCacheKeys.CommentsAllCteFlat(page, pageSize); // Khóa cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
+
+        var allRows = await _repository.GetTreeRowsByCteAllAsync(cancellationToken, createdAtFrom, createdAtTo); // CTE toàn cục có lọc ngày.
+        var total = (long)allRows.Count; // Tổng hàng phẳng trước khi cắt trang trong RAM.
+        var slice = allRows // Giữ thứ tự kết quả CTE.
+            .Skip((page - 1) * pageSize) // Bỏ các hàng trang trước.
+            .Take(pageSize) // Lấy đúng cỡ trang.
+            .ToList(); // Materialize cho response.
+        var result = new PagedResult<CommentFlatDto> // Gói phân trang.
+        { // Mở khối.
+            Items = slice, // Trang con hàng thô có Level.
+            Page = page, // Trang.
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = total // Tổng hàng CTE.
+        }; // Kết thúc initializer.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsAllCteFlat(page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
+        return result; // Trả về.
+    } // Kết thúc GetAllCteFlatPagedAsync.
 
     // Phân trang cây theo gốc trong một post (dựng cây EF; lặp BuildTree theo từng gốc trang).
     public async Task<PagedResult<CommentTreeDto>> GetTreeByPostIdPagedAsync( // Cây theo post, phân trang gốc.
         Guid postId, // Bài viết.
         int page, // Trang gốc.
         int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt trên gốc trong post.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối GetTreeByPostIdPagedAsync.
-        var cacheKey = EntityCacheKeys.CommentsTreeByPost(postId, page, pageSize); // Khóa cache.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentTreeDto>>(cacheKey, cancellationToken); // Đọc cache.
-        if (cached is not null) // Hit.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
         { // Mở khối.
-            return cached; // Trả ngay.
-        } // Hết cache.
+            var cacheKey = EntityCacheKeys.CommentsTreeByPost(postId, page, pageSize); // Khóa cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentTreeDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
 
         await EnsurePostExistsAsync(postId); // Kiểm tra post.
-        var (roots, total) = await _repository.GetRootsByPostIdPagedAsync(postId, page, pageSize, cancellationToken); // Trang gốc trong post.
+        var (roots, total) = await _repository.GetRootsByPostIdPagedAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Trang gốc trong post.
         var allInPost = await _repository.GetByPostIdAsync(postId); // Toàn bộ comment của post — một SELECT lớn.
         var trees = new List<CommentTreeDto>(); // Chứa cây con ứng mỗi gốc trang.
         foreach (var root in roots) // Duyệt từng gốc trong trang hiện tại.
@@ -631,36 +550,156 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             PageSize = pageSize, // Cỡ trang.
             TotalCount = total // Tổng gốc trong post.
         }; // Kết thúc initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsTreeByPost(postId, page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
         return result; // Trả về.
     } // Kết thúc GetTreeByPostIdPagedAsync.
 
-    // Alias “CTE tree”: ủy quyền sang GetTreeByPostIdPagedAsync.
-    public Task<PagedResult<CommentTreeDto>> GetCteTreeByPostIdPagedAsync( // Alias → GetTreeByPostIdPagedAsync.
-        Guid postId, // Bài viết.
+    // Phân trang comment dạng cây gốc toàn hệ (GET /api/comments/tree/flat khi không có postId).
+    public async Task<PagedResult<CommentTreeDto>> GetAllTreePagedAsync( // Phân trang cây toàn hệ thống (EF).
         int page, // Trang.
         int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt (chỉ áp lên comment gốc).
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetAllTreePagedAsync.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
+        { // Mở khối.
+            var cacheKey = EntityCacheKeys.CommentsAllTreeFlat(page, pageSize); // Khóa cây EF theo trang.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentTreeDto>>(cacheKey, cancellationToken); // Thử cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
+
+        var (roots, total) = await _repository.GetRootCommentsPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT trang gốc.
+        var trees = await BuildSubtreesForRootsAsync(roots, cancellationToken); // Nạp comment theo post + dựng cây RAM.
+        var result = new PagedResult<CommentTreeDto> // Gói phân trang.
+        { // Mở khối.
+            Items = trees, // Danh sách cây đã dựng.
+            Page = page, // Trang.
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = total // Tổng số gốc.
+        }; // Kết thúc initializer.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsAllTreeFlat(page, pageSize), result, cancellationToken); // Lưu cache.
+        } // Kết thúc set.
+
+        return result; // Trả kết quả.
+    } // Kết thúc GetAllTreePagedAsync.
+
+    // Cây trong post từ CTE: hàng thô → BuildTreeFromFlatDtosForOnePost → phân trang danh sách gốc (không dùng EF tree).
+    public async Task<PagedResult<CommentTreeDto>> GetCteTreeByPostIdPagedAsync( // Cây CTE theo post.
+        Guid postId, // Bài viết.
+        int page, // Trang gốc.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối GetCteTreeByPostIdPagedAsync.
-        return GetTreeByPostIdPagedAsync(postId, page, pageSize, cancellationToken); // Cùng implementation EF.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
+        { // Mở khối.
+            var cacheKey = EntityCacheKeys.CommentsTreeCteByPost(postId, page, pageSize); // Khóa tách khỏi CommentsTreeByPost (EF).
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentTreeDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
+
+        await EnsurePostExistsAsync(postId); // Post phải tồn tại.
+        var rows = await _repository.GetTreeRowsByCteAsync(postId, cancellationToken, createdAtFrom, createdAtTo); // Hàng CTE một post có lọc ngày.
+        var roots = BuildTreeFromFlatDtosForOnePost(rows); // Rừng gốc đã lồng Children.
+        var orderedRoots = roots // Cùng thứ tự hiển thị gốc như EF: CreatedAt, Id.
+            .OrderBy(r => r.CreatedAt) // Thời gian tạo gốc.
+            .ThenBy(r => r.Id) // Tie-break.
+            .ToList(); // List để Skip/Take.
+        var total = (long)orderedRoots.Count; // Tổng số gốc trong post.
+        var items = orderedRoots // Phân trang gốc.
+            .Skip((page - 1) * pageSize) // OFFSET.
+            .Take(pageSize) // FETCH.
+            .ToList(); // Trang hiện tại.
+        var result = new PagedResult<CommentTreeDto> // Gói phân trang.
+        { // Mở khối.
+            Items = items, // Mỗi mục là subtree đầy đủ từ CTE.
+            Page = page, // Trang.
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = total // Tổng gốc.
+        }; // Kết thúc initializer.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsTreeCteByPost(postId, page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
+        return result; // Trả về.
     } // Kết thúc GetCteTreeByPostIdPagedAsync.
+
+    // Phân trang cây gốc toàn hệ từ CTE (GET /api/comments/tree/cte khi không có postId).
+    public async Task<PagedResult<CommentTreeDto>> GetAllCteTreePagedAsync( // Cây từ hàng CTE, phân trang theo gốc.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetAllCteTreePagedAsync.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
+        { // Mở khối.
+            var cacheKey = EntityCacheKeys.CommentsAllTreeCte(page, pageSize); // Khóa tách biệt cây EF.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentTreeDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
+
+        var allRows = await _repository.GetTreeRowsByCteAllAsync(cancellationToken, createdAtFrom, createdAtTo); // Hàng thô CTE mọi post.
+        var rootForest = BuildGlobalRootForestFromCteAllRows(allRows); // Danh sách gốc đã có subtree đầy đủ, thứ tự ổn định.
+        var total = (long)rootForest.Count; // Tổng số gốc toàn hệ (cùng ý nghĩa phân trang với GetRootCommentsPagedAsync).
+        var items = rootForest // Cắt trang trên tập gốc.
+            .Skip((page - 1) * pageSize) // OFFSET theo trang.
+            .Take(pageSize) // FETCH cỡ trang.
+            .ToList(); // List cho JSON.
+        var result = new PagedResult<CommentTreeDto> // Gói phân trang.
+        { // Mở khối.
+            Items = items, // Mỗi phần tử là một cây CommentTreeDto lồng nhau.
+            Page = page, // Trang.
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = total // Tổng gốc.
+        }; // Kết thúc initializer.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsAllTreeCte(page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
+        return result; // Trả về.
+    } // Kết thúc GetAllCteTreePagedAsync.
 
     // Làm phẳng cây EF trong một post theo trang gốc (một lần dựng rừng, trích subtree theo gốc trang).
     public async Task<PagedResult<CommentFlatDto>> GetFlattenedTreeByPostIdPagedAsync( // Làm phẳng cây EF trong post.
         Guid postId, // Bài viết.
         int page, // Trang gốc.
         int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt trên gốc.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối GetFlattenedTreeByPostIdPagedAsync.
-        var cacheKey = EntityCacheKeys.CommentsFlattenedEfTreeByPost(postId, page, pageSize); // Khóa cache.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
-        if (cached is not null) // Hit.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
         { // Mở khối.
-            return cached; // Trả ngay.
-        } // Hết cache.
+            var cacheKey = EntityCacheKeys.CommentsFlattenedEfTreeByPost(postId, page, pageSize); // Khóa cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
 
         await EnsurePostExistsAsync(postId); // Kiểm tra post.
-        var (roots, total) = await _repository.GetRootsByPostIdPagedAsync(postId, page, pageSize, cancellationToken); // Trang gốc.
+        var (roots, total) = await _repository.GetRootsByPostIdPagedAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Trang gốc.
         var allInPost = await _repository.GetByPostIdAsync(postId); // Nạp toàn comment post.
         var forest = BuildTreeFromComments(allInPost); // Một lần dựng rừng cho cả post.
         var trees = new List<CommentTreeDto>(); // Subtree theo từng gốc trang.
@@ -681,27 +720,72 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             PageSize = pageSize, // Cỡ trang.
             TotalCount = total // Tổng gốc post.
         }; // Kết thúc initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsFlattenedEfTreeByPost(postId, page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
         return result; // Trả về.
     } // Kết thúc GetFlattenedTreeByPostIdPagedAsync.
+
+    // Làm phẳng rừng cây EF toàn hệ (GET /api/comments/tree/flat/flatten khi không có postId).
+    public async Task<PagedResult<CommentFlatDto>> GetFlattenedForestPagedAsync( // Rừng EF làm phẳng preorder, phân trang theo gốc.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt trên gốc.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetFlattenedForestPagedAsync.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
+        { // Mở khối.
+            var cacheKey = EntityCacheKeys.CommentsAllFlattenEfTree(page, pageSize); // Khóa cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
+
+        var (roots, total) = await _repository.GetRootCommentsPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Trang gốc.
+        var trees = await BuildSubtreesForRootsAsync(roots, cancellationToken); // Dựng subtree đầy đủ cho mỗi gốc.
+        var flat = FlattenForestPreorder(trees); // Duyệt DFS gán Level — chỉ CPU.
+        var result = new PagedResult<CommentFlatDto> // Gói phân trang.
+        { // Mở khối.
+            Items = flat, // Danh sách phẳng có Level.
+            Page = page, // Trang.
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = total // Tổng gốc (theo phân trang gốc).
+        }; // Kết thúc initializer.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsAllFlattenEfTree(page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
+        return result; // Trả về.
+    } // Kết thúc GetFlattenedForestPagedAsync.
 
     // CTE theo post: dựng cây từ hàng SQL, làm phẳng, phân trang trong RAM.
     public async Task<PagedResult<CommentFlatDto>> GetFlattenedCteTreeByPostIdPagedAsync( // CTE một post, phẳng, cắt trang.
         Guid postId, // Bài viết.
         int page, // Trang.
         int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối GetFlattenedCteTreeByPostIdPagedAsync.
-        var cacheKey = EntityCacheKeys.CommentsFlattenedCteTree(postId, page, pageSize); // Khóa cache.
-        var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
-        if (cached is not null) // Hit.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
         { // Mở khối.
-            return cached; // Trả ngay.
-        } // Hết cache.
+            var cacheKey = EntityCacheKeys.CommentsFlattenedCteTree(postId, page, pageSize); // Khóa cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
 
         await EnsurePostExistsAsync(postId); // Kiểm tra post.
 
-        var cteRows = await _repository.GetTreeRowsByCteAsync(postId); // ADO CTE một post.
+        var cteRows = await _repository.GetTreeRowsByCteAsync(postId, cancellationToken, createdAtFrom, createdAtTo); // ADO CTE một post có lọc ngày.
         var roots = BuildTreeFromFlatDtosForOnePost(cteRows); // Dựng cây từ hàng có Level.
         var flatList = FlattenForestPreorder(roots); // Làm phẳng preorder.
         var total = flatList.Count; // Tổng dòng phẳng.
@@ -716,11 +800,370 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             PageSize = pageSize, // Cỡ trang.
             TotalCount = total // Tổng dòng.
         }; // Kết thúc initializer.
-        await _cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsFlattenedCteTree(postId, page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
         return result; // Trả về.
     } // Kết thúc GetFlattenedCteTreeByPostIdPagedAsync.
 
-    // Demo lazy loading: ủy quyền repository; có thể phát sinh truy vấn bổ sung khi đọc navigation.
+    // Làm phẳng CTE toàn hệ rồi cắt trang trong RAM (GET /api/comments/tree/cte/flatten khi không có postId).
+    public async Task<PagedResult<CommentFlatDto>> GetFlattenedFromCtePagedAsync( // CTE toàn cục rồi cắt trang trong RAM.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Một bài: ủy quyền sang CTE-theo-post.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetFlattenedFromCtePagedAsync.
+        if (postId is { } scopedPost) // Client lọc theo post.
+        { // Mở khối.
+            return await GetFlattenedCteTreeByPostIdPagedAsync(scopedPost, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // CTE một post + lọc ngày.
+        } // Kết thúc nhánh post.
+
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
+        { // Mở khối.
+            var cacheKey = EntityCacheKeys.CommentsAllFlattenCteTree(page, pageSize); // Khóa cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
+            if (cached is not null) // Hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết cache.
+        } // Kết thúc nhánh cache.
+
+        var allRows = await _repository.GetTreeRowsByCteAllAsync(cancellationToken, createdAtFrom, createdAtTo); // ADO CTE toàn cục có lọc ngày.
+        var flatList = BuildGlobalFlatFromCteAllRows(allRows); // Nhóm post + cây + flatten trong RAM.
+        var total = flatList.Count; // Tổng số dòng phẳng (int) từ Count collection.
+        var slice = flatList // Nguồn cho biểu thức Skip/Take (phân trang trong RAM).
+            .Skip((page - 1) * pageSize) // Bỏ các dòng của trang trước (LINQ to Objects).
+            .Take(pageSize) // Lấy đúng pageSize phần tử.
+            .ToList(); // List vật lý cho response.
+        var result = new PagedResult<CommentFlatDto> // Gói phân trang.
+        { // Mở khối.
+            Items = slice, // Trang con của danh sách phẳng.
+            Page = page, // Trang.
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = total // Tổng dòng phẳng toàn cục.
+        }; // Kết thúc initializer.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsAllFlattenCteTree(page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
+        return result; // Trả về.
+    } // Kết thúc GetFlattenedFromCtePagedAsync.
+
+    #endregion
+
+    #region CommentsController — demo danh sách (lazy / eager / explicit / projection)
+
+    // Demo phân trang lazy: normalize rồi gọi repository.
+    public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsLazyLoadingDemoPagedAsync( // Demo phân trang lazy.
+        int page, // Trang yêu cầu.
+        int pageSize, // Cỡ trang yêu cầu.
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Lọc một bài cho demo.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetCommentsLazyLoadingDemoPagedAsync.
+        if (postId is { } pid) // Có postId → đảm bảo post tồn tại trước khi query demo.
+        { // Mở khối.
+            await EnsurePostExistsAsync(pid); // 404 nếu sai Id bài.
+        } // Kết thúc kiểm tra post.
+
+        var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa số trang/cỡ trang (không SQL).
+        var (items, total) = await _repository.GetCommentsLazyLoadingDemoPagedAsync(p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // COUNT + SELECT.
+        return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
+        { // Mở khối.
+            Items = items, // Danh sách đã map từ repository.
+            Page = p, // Trang đã chuẩn hóa.
+            PageSize = s, // Cỡ trang đã chuẩn hóa.
+            TotalCount = total // Tổng bản ghi.
+        }; // Kết thúc object initializer.
+    } // Kết thúc GetCommentsLazyLoadingDemoPagedAsync.
+
+    // Demo phân trang eager: normalize rồi gọi repository.
+    public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsEagerLoadingDemoPagedAsync( // Demo phân trang eager.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Lọc một bài.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetCommentsEagerLoadingDemoPagedAsync.
+        if (postId is { } pid) // Post phải tồn tại.
+        { // Mở khối.
+            await EnsurePostExistsAsync(pid); // 404 nếu không có bài.
+        } // Kết thúc kiểm tra.
+
+        var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa tham số phân trang.
+        var (items, total) = await _repository.GetCommentsEagerLoadingDemoPagedAsync(p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // Include + phân trang.
+        return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
+        { // Mở khối.
+            Items = items, // Dòng demo.
+            Page = p, // Trang.
+            PageSize = s, // Cỡ trang.
+            TotalCount = total // Tổng.
+        }; // Kết thúc initializer.
+    } // Kết thúc GetCommentsEagerLoadingDemoPagedAsync.
+
+    // Demo phân trang explicit loading.
+    public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsExplicitLoadingDemoPagedAsync( // Demo phân trang explicit.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Lọc một bài.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetCommentsExplicitLoadingDemoPagedAsync.
+        if (postId is { } pid) // Kiểm tra post.
+        { // Mở khối.
+            await EnsurePostExistsAsync(pid); // 404 nếu không tồn tại.
+        } // Kết thúc kiểm tra.
+
+        var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa.
+        var (items, total) = await _repository.GetCommentsExplicitLoadingDemoPagedAsync(p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // LoadAsync sau phân trang.
+        return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
+        { // Mở khối.
+            Items = items, // Dòng demo.
+            Page = p, // Trang.
+            PageSize = s, // Cỡ trang.
+            TotalCount = total // Tổng.
+        }; // Kết thúc initializer.
+    } // Kết thúc GetCommentsExplicitLoadingDemoPagedAsync.
+
+    // Demo phân trang projection (DTO ngay trong SQL).
+    public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsProjectionDemoPagedAsync( // Demo phân trang projection.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Lọc một bài.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối GetCommentsProjectionDemoPagedAsync.
+        if (postId is { } pid) // Post hợp lệ.
+        { // Mở khối.
+            await EnsurePostExistsAsync(pid); // 404 nếu sai.
+        } // Kết thúc kiểm tra.
+
+        var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa.
+        var (items, total) = await _repository.GetCommentsProjectionDemoPagedAsync(p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // Select DTO phân trang.
+        return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
+        { // Mở khối.
+            Items = items, // Dòng demo.
+            Page = p, // Trang.
+            PageSize = s, // Cỡ trang.
+            TotalCount = total // Tổng.
+        }; // Kết thúc initializer.
+    } // Kết thúc GetCommentsProjectionDemoPagedAsync.
+
+    // Demo toàn bộ comment + lazy: không COUNT/Skip/Take; ủy quyền repository (cảnh báo dữ liệu lớn).
+    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsLazyLoadingDemoAsync(
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Lọc một bài.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối.
+        if (postId is { } pid) // Kiểm tra post trước.
+        { // Mở khối.
+            await EnsurePostExistsAsync(pid); // 404 nếu không có.
+        } // Kết thúc kiểm tra.
+
+        var items = await _repository.GetAllCommentsLazyLoadingDemoAsync(cancellationToken, postId, createdAtFrom, createdAtTo); // SELECT all + lazy nav.
+        return items; // List → IReadOnlyList.
+    } // Kết thúc GetAllCommentsLazyLoadingDemoAsync.
+
+    // Demo toàn bộ comment + eager.
+    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsEagerLoadingDemoAsync(
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Lọc một bài.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối.
+        if (postId is { } pid) // Post tồn tại.
+        { // Mở khối.
+            await EnsurePostExistsAsync(pid); // 404.
+        } // Kết thúc kiểm tra.
+
+        var items = await _repository.GetAllCommentsEagerLoadingDemoAsync(cancellationToken, postId, createdAtFrom, createdAtTo); // Include + split.
+        return items; // Trả danh sách.
+    } // Kết thúc GetAllCommentsEagerLoadingDemoAsync.
+
+    // Demo toàn bộ comment + explicit.
+    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsExplicitLoadingDemoAsync(
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Lọc một bài.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối.
+        if (postId is { } pid) // Kiểm tra post.
+        { // Mở khối.
+            await EnsurePostExistsAsync(pid); // 404.
+        } // Kết thúc kiểm tra.
+
+        var items = await _repository.GetAllCommentsExplicitLoadingDemoAsync(cancellationToken, postId, createdAtFrom, createdAtTo); // LoadAsync từng quan hệ.
+        return items; // Trả danh sách.
+    } // Kết thúc GetAllCommentsExplicitLoadingDemoAsync.
+
+    // Demo toàn bộ comment + projection.
+    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsProjectionDemoAsync(
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Lọc một bài.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối.
+        if (postId is { } pid) // Post hợp lệ.
+        { // Mở khối.
+            await EnsurePostExistsAsync(pid); // 404.
+        } // Kết thúc kiểm tra.
+
+        var items = await _repository.GetAllCommentsProjectionDemoAsync(cancellationToken, postId, createdAtFrom, createdAtTo); // SQL projection.
+        return items; // Trả danh sách.
+    } // Kết thúc GetAllCommentsProjectionDemoAsync.
+
+    #endregion
+
+    #region ICommentService — Bổ trợ (phân trang toàn hệ, tìm kiếm, đọc theo post; demo một Id không có route trong CommentsController)
+
+    // Phân trang toàn hệ — dùng nội bộ GetCommentListAsync, GetAllFlatPagedAsync và unit test.
+    public async Task<PagedResult<CommentDto>> GetAllPagedAsync( // Phân trang toàn cục CommentDto.
+        int page, // Số trang (1-based).
+        int pageSize, // Số bản ghi mỗi trang.
+        CancellationToken cancellationToken = default, // Hủy bất đồng bộ.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt inclusive.
+        DateTime? createdAtTo = null) // Lọc CreatedAt inclusive.
+    { // Mở khối GetAllPagedAsync.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Không lọc ngày → được cache.
+        { // Mở khối cache.
+            var cacheKey = EntityCacheKeys.CommentsAll(page, pageSize); // Chuỗi khóa cache theo số trang và cỡ trang.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Đọc JSON từ cache; không SQL.
+            if (cached is not null) // Có bản trong cache.
+            { // Mở khối.
+                return cached; // Trả ngay, bỏ qua repository.
+            } // Kết thúc nhánh cache hit.
+        } // Kết thúc nhánh có thể dùng cache.
+
+        var (items, total) = await _repository.GetPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT có lọc ngày.
+        var result = new PagedResult<CommentDto> // Tạo object kết quả phân trang API.
+        { // Mở khối.
+            Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Biến mỗi Comment thành CommentDto trong RAM (LINQ to Objects, không SQL).
+            Page = page, // Ghi số trang hiện tại.
+            PageSize = pageSize, // Ghi cỡ trang.
+            TotalCount = total // Tổng bản ghi từ COUNT repository.
+        }; // Kết thúc khởi tạo PagedResult.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsAll(page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set cache.
+
+        return result; // Trả về cho caller.
+    } // Kết thúc GetAllPagedAsync.
+
+    // Toàn bộ comment phẳng một post một lần — dùng nội bộ GetCommentListAsync (unpaged + postId).
+    public async Task<IReadOnlyList<CommentDto>> GetAllByPostIdAsync( // Toàn bộ DTO theo PostId.
+        Guid postId, // Bài viết.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Mở khối GetAllByPostIdAsync.
+        await EnsurePostExistsAsync(postId); // 404 nếu post không tồn tại.
+        var entities = await _repository.GetByPostIdAsync(postId); // Một SELECT toàn comment thuộc post (AsNoTracking trong repo).
+        return entities.Select(_mapper.Map<CommentDto>).ToList(); // Map sang DTO, trả IReadOnlyList qua List.
+    } // Kết thúc GetAllByPostIdAsync.
+
+    // Tìm theo nội dung toàn hệ — dùng nội bộ GetCommentListAsync (nhánh content + phân trang).
+    public async Task<PagedResult<CommentDto>> SearchByContentPagedAsync( // Tìm kiếm nội dung toàn hệ thống.
+        string? content, // Chuỗi tìm kiếm có thể null.
+        int page, // Số trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Token hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối SearchByContentPagedAsync.
+        var term = RequireSearchTerm(content); // Cắt khoảng trắng; ném lỗi nếu rỗng (không SQL).
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache chỉ khi không lọc ngày.
+        { // Mở khối cache.
+            var cacheKey = EntityCacheKeys.CommentsSearchContent(EntityCacheHash.SearchTerm(term), page, pageSize); // Khóa gồm băm term để khóa ngắn.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Thử đọc cache.
+            if (cached is not null) // Trúng cache.
+            { // Mở khối.
+                return cached; // Trả kết quả đã lưu.
+            } // Hết nhánh cache.
+        } // Kết thúc nhánh có cache.
+
+        var (items, total) = await _repository.SearchByContentPagedAsync(term, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT.
+        var result = new PagedResult<CommentDto> // Gói trang kết quả.
+        { // Mở khối.
+            Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Map từng phần tử trong bộ nhớ.
+            Page = page, // Chỉ số trang.
+            PageSize = pageSize, // Kích thước trang.
+            TotalCount = total // Tổng khớp tìm kiếm.
+        }; // Kết thúc object initializer.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ ghi cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsSearchContent(EntityCacheHash.SearchTerm(term), page, pageSize), result, cancellationToken); // Ghi cache.
+        } // Kết thúc set.
+
+        return result; // Trả về cho caller.
+    } // Kết thúc SearchByContentPagedAsync.
+
+    // Đọc một comment trong phạm vi post — mở rộng API / test (không có action riêng trong CommentsController hiện tại).
+    public async Task<CommentDto> GetByIdInPostAsync( // Đọc comment trong một post.
+        Guid postId, // Định danh bài viết chứa comment.
+        Guid commentId, // Định danh comment cần đọc.
+        CancellationToken cancellationToken = default) // Token hủy thao tác bất đồng bộ.
+    { // Mở khối GetByIdInPostAsync.
+        await EnsurePostExistsAsync(postId); // Gọi Any Post — một truy vấn SQL trong repository.
+        var dto = await _repository.GetByIdForReadInPostAsync(postId, commentId, cancellationToken); // SELECT projection một dòng hoặc null.
+        if (dto is null) // Không có comment đó trong post.
+        { // Mở khối.
+            throw new ApiException( // Ném lỗi HTTP 404 thống nhất API.
+                StatusCodes.Status404NotFound, // Mã 404.
+                ApiErrorCodes.CommentNotFound, // Mã lỗi nghiệp vụ.
+                ApiMessages.CommentNotFound); // Thông điệp hiển thị.
+        } // Kết thúc nhánh null.
+
+        return dto; // Trả DTO đã đọc.
+    } // Kết thúc GetByIdInPostAsync.
+
+    // Tìm theo nội dung trong một post — dùng nội bộ GetCommentListAsync.
+    public async Task<PagedResult<CommentDto>> SearchByContentInPostPagedAsync( // Tìm theo nội dung trong post.
+        Guid postId, // Bài viết giới hạn phạm vi tìm kiếm.
+        string? content, // Chuỗi tìm kiếm.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Token hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối SearchByContentInPostPagedAsync.
+        var term = RequireSearchTerm(content); // Chuẩn hóa term.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
+        { // Mở khối.
+            var cacheKey = EntityCacheKeys.CommentsSearchContentInPost(postId, EntityCacheHash.SearchTerm(term), page, pageSize); // Khóa có postId.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Đọc cache nếu có.
+            if (cached is not null) // Cache hit.
+            { // Mở khối.
+                return cached; // Trả ngay.
+            } // Hết nhánh cache.
+        } // Kết thúc nhánh cache.
+
+        await EnsurePostExistsAsync(postId); // Kiểm tra post tồn tại (SQL Any).
+        var (items, total) = await _repository.SearchByContentInPostPagedAsync(postId, term, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT trong post.
+        var result = new PagedResult<CommentDto> // Đối tượng phân trang.
+        { // Mở khối.
+            Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Ánh xạ sang DTO.
+            Page = page, // Trang hiện tại.
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = total // Tổng bản ghi khớp.
+        }; // Kết thúc initializer.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
+        { // Mở khối.
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsSearchContentInPost(postId, EntityCacheHash.SearchTerm(term), page, pageSize), result, cancellationToken); // Lưu cache.
+        } // Kết thúc set.
+
+        return result; // Trả kết quả.
+    } // Kết thúc SearchByContentInPostPagedAsync.
+
+    // Demo một bản ghi + lazy — ủy quyền repository (không map GET demo/* list trong CommentsController).
     public async Task<CommentLoadingDemoDto> GetCommentLazyLoadingDemoAsync(Guid id, CancellationToken cancellationToken = default) // Id comment.
     { // Mở khối GetCommentLazyLoadingDemoAsync.
         var dto = await _repository.GetCommentLazyLoadingDemoAsync(id, cancellationToken); // Ủy quyền repository (SQL + lazy tiềm ẩn).
@@ -735,7 +1178,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         return dto; // Trả DTO demo.
     } // Kết thúc GetCommentLazyLoadingDemoAsync.
 
-    // Demo eager loading: ủy quyền repository (Include + split query).
+    // Demo một bản ghi + eager.
     public async Task<CommentLoadingDemoDto> GetCommentEagerLoadingDemoAsync(Guid id, CancellationToken cancellationToken = default) // Id comment.
     { // Mở khối GetCommentEagerLoadingDemoAsync.
         var dto = await _repository.GetCommentEagerLoadingDemoAsync(id, cancellationToken); // Nạp quan hệ trong ít round-trip có kiểm soát.
@@ -750,7 +1193,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         return dto; // Trả DTO demo.
     } // Kết thúc GetCommentEagerLoadingDemoAsync.
 
-    // Demo explicit loading: ủy quyền repository (LoadAsync từng reference/collection).
+    // Demo một bản ghi + explicit.
     public async Task<CommentLoadingDemoDto> GetCommentExplicitLoadingDemoAsync(Guid id, CancellationToken cancellationToken = default) // Id comment.
     { // Mở khối GetCommentExplicitLoadingDemoAsync.
         var dto = await _repository.GetCommentExplicitLoadingDemoAsync(id, cancellationToken); // Nạp có điều khiển sau truy vấn đầu.
@@ -765,7 +1208,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         return dto; // Trả DTO demo.
     } // Kết thúc GetCommentExplicitLoadingDemoAsync.
 
-    // Demo projection: ủy quyền repository (một truy vấn chiếu DTO).
+    // Demo một bản ghi + projection.
     public async Task<CommentLoadingDemoDto> GetCommentProjectionDemoAsync(Guid id, CancellationToken cancellationToken = default) // Id comment.
     { // Mở khối GetCommentProjectionDemoAsync.
         var dto = await _repository.GetCommentProjectionDemoAsync(id, cancellationToken); // SELECT chiếu thẳng sang DTO.
@@ -780,101 +1223,13 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         return dto; // Trả DTO demo.
     } // Kết thúc GetCommentProjectionDemoAsync.
 
-    // Demo phân trang lazy: normalize rồi gọi repository.
-    public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsLazyLoadingDemoPagedAsync( // Demo phân trang lazy.
-        int page, // Trang yêu cầu.
-        int pageSize, // Cỡ trang yêu cầu.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetCommentsLazyLoadingDemoPagedAsync.
-        var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa số trang/cỡ trang (không SQL).
-        var (items, total) = await _repository.GetCommentsLazyLoadingDemoPagedAsync(p, s, cancellationToken); // COUNT + SELECT + lazy tiềm ẩn trong repo.
-        return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
-        { // Mở khối.
-            Items = items, // Danh sách đã map từ repository.
-            Page = p, // Trang đã chuẩn hóa.
-            PageSize = s, // Cỡ trang đã chuẩn hóa.
-            TotalCount = total // Tổng bản ghi.
-        }; // Kết thúc object initializer.
-    } // Kết thúc GetCommentsLazyLoadingDemoPagedAsync.
+    #endregion
 
-    // Demo phân trang eager: normalize rồi gọi repository.
-    public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsEagerLoadingDemoPagedAsync( // Demo phân trang eager.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetCommentsEagerLoadingDemoPagedAsync.
-        var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa tham số phân trang.
-        var (items, total) = await _repository.GetCommentsEagerLoadingDemoPagedAsync(p, s, cancellationToken); // Include + phân trang.
-        return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
-        { // Mở khối.
-            Items = items, // Dòng demo.
-            Page = p, // Trang.
-            PageSize = s, // Cỡ trang.
-            TotalCount = total // Tổng.
-        }; // Kết thúc initializer.
-    } // Kết thúc GetCommentsEagerLoadingDemoPagedAsync.
+    #region Private helpers
 
-    // Demo phân trang explicit loading.
-    public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsExplicitLoadingDemoPagedAsync( // Demo phân trang explicit.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetCommentsExplicitLoadingDemoPagedAsync.
-        var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa.
-        var (items, total) = await _repository.GetCommentsExplicitLoadingDemoPagedAsync(p, s, cancellationToken); // LoadAsync sau phân trang.
-        return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
-        { // Mở khối.
-            Items = items, // Dòng demo.
-            Page = p, // Trang.
-            PageSize = s, // Cỡ trang.
-            TotalCount = total // Tổng.
-        }; // Kết thúc initializer.
-    } // Kết thúc GetCommentsExplicitLoadingDemoPagedAsync.
-
-    // Demo phân trang projection (DTO ngay trong SQL).
-    public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsProjectionDemoPagedAsync( // Demo phân trang projection.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetCommentsProjectionDemoPagedAsync.
-        var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa.
-        var (items, total) = await _repository.GetCommentsProjectionDemoPagedAsync(p, s, cancellationToken); // Select DTO phân trang.
-        return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
-        { // Mở khối.
-            Items = items, // Dòng demo.
-            Page = p, // Trang.
-            PageSize = s, // Cỡ trang.
-            TotalCount = total // Tổng.
-        }; // Kết thúc initializer.
-    } // Kết thúc GetCommentsProjectionDemoPagedAsync.
-
-    // Demo toàn bộ comment + lazy: không COUNT/Skip/Take; ủy quyền repository (cảnh báo dữ liệu lớn).
-    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsLazyLoadingDemoAsync(CancellationToken cancellationToken = default) // Mọi dòng lazy.
-    { // Mở khối.
-        var items = await _repository.GetAllCommentsLazyLoadingDemoAsync(cancellationToken); // SELECT all + lazy nav.
-        return items; // List → IReadOnlyList.
-    } // Kết thúc GetAllCommentsLazyLoadingDemoAsync.
-
-    // Demo toàn bộ comment + eager.
-    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsEagerLoadingDemoAsync(CancellationToken cancellationToken = default) // Mọi dòng eager.
-    { // Mở khối.
-        var items = await _repository.GetAllCommentsEagerLoadingDemoAsync(cancellationToken); // Include + split.
-        return items; // Trả danh sách.
-    } // Kết thúc GetAllCommentsEagerLoadingDemoAsync.
-
-    // Demo toàn bộ comment + explicit.
-    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsExplicitLoadingDemoAsync(CancellationToken cancellationToken = default) // Mọi dòng explicit.
-    { // Mở khối.
-        var items = await _repository.GetAllCommentsExplicitLoadingDemoAsync(cancellationToken); // LoadAsync từng quan hệ.
-        return items; // Trả danh sách.
-    } // Kết thúc GetAllCommentsExplicitLoadingDemoAsync.
-
-    // Demo toàn bộ comment + projection.
-    public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsProjectionDemoAsync(CancellationToken cancellationToken = default) // Một pipeline Select.
-    { // Mở khối.
-        var items = await _repository.GetAllCommentsProjectionDemoAsync(cancellationToken); // SQL projection.
-        return items; // Trả danh sách.
-    } // Kết thúc GetAllCommentsProjectionDemoAsync.
+    // Có lọc CreatedAt từ query → không dùng cache list (tránh khóa bùng nổ).
+    private static bool HasCreatedAtFilter(DateTime? createdAtFrom, DateTime? createdAtTo) => // Hai biên tuỳ chọn.
+        createdAtFrom.HasValue || createdAtTo.HasValue; // Chỉ cần một biên cũng bỏ cache.
 
     // Chuẩn hóa và bắt buộc chuỗi tìm kiếm không rỗng; ném 400 nếu không hợp lệ.
     private static string RequireSearchTerm(string? raw) // Chuỗi thô có thể null.
@@ -890,6 +1245,32 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
 
         return t; // Chuỗi không rỗng cho repository.
     } // Kết thúc RequireSearchTerm.
+
+    // Đảm bảo post tồn tại rồi mới search unpaged trong post (helper GetCommentListAsync).
+    private async Task<List<Comment>> SearchByContentInPostAllValidatedAsync( // Helper cho GetCommentListAsync.
+        Guid postId, // Bài viết.
+        string term, // Đã trim.
+        CancellationToken cancellationToken, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null) // Lọc CreatedAt.
+    { // Mở khối.
+        await EnsurePostExistsAsync(postId); // 404 nếu không có post.
+        return await _repository.SearchByContentInPostAllAsync(postId, term, cancellationToken, createdAtFrom, createdAtTo); // List khớp.
+    } // Kết thúc SearchByContentInPostAllValidatedAsync.
+
+    // Gói danh sách đầy đủ thành PagedResult (Page=1, PageSize=số phần tử hoặc mặc định khi rỗng).
+    private static PagedResult<CommentDto> ToUnpagedCommentDtoResult(List<CommentDto> items) // Không cắt trang.
+    { // Mở khối.
+        var n = items.Count; // Số bản ghi.
+        var ps = n == 0 ? PaginationQuery.DefaultPageSize : n; // Tránh PageSize=0 gây TotalPages lạ.
+        return new PagedResult<CommentDto> // Một “trang” chứa toàn bộ.
+        { // Mở initializer.
+            Items = items, // Toàn bộ dòng.
+            Page = 1, // Luôn 1.
+            PageSize = ps, // Bằng số phần tử (hoặc default khi rỗng).
+            TotalCount = n // Tổng khớp.
+        }; // Kết thúc object.
+    } // Kết thúc ToUnpagedCommentDtoResult.
 
     // Với mỗi gốc trong trang: nạp comment các post liên quan và trích subtree tương ứng.
     private async Task<List<CommentTreeDto>> BuildSubtreesForRootsAsync( // Helper: dựng subtree cho danh sách gốc.
@@ -1013,6 +1394,18 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         } // Hết nhánh không tồn tại.
     } // Kết thúc EnsurePostExistsAsync.
 
+    // Ném 404 nếu user không tồn tại; dùng cho GET comment theo tác giả.
+    private async Task EnsureUserExistsAsync(Guid userId) // Id người dùng cần kiểm tra.
+    { // Mở khối EnsureUserExistsAsync.
+        if (!await _repository.UserExistsAsync(userId)) // Any trong bảng Users.
+        { // Mở khối.
+            throw new ApiException( // 404.
+                StatusCodes.Status404NotFound, // HTTP.
+                ApiErrorCodes.UserNotFound, // Mã.
+                ApiMessages.UserNotFound); // Thông báo.
+        } // Hết nhánh không tồn tại.
+    } // Kết thúc EnsureUserExistsAsync.
+
     // Dựng rừng CommentTreeDto từ danh sách phẳng entity; xử lý dữ liệu lệch và chu kỳ bằng cách nâng nút lên gốc.
     private static List<CommentTreeDto> BuildTreeFromComments(List<Comment> comments) // Danh sách comment một hoặc nhiều cây.
     { // Mở khối BuildTreeFromComments.
@@ -1100,6 +1493,22 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
 
         return result; // Danh sách phẳng toàn hệ thống.
     } // Kết thúc BuildGlobalFlatFromCteAllRows.
+
+    // Từ hàng CTE toàn cục: nhóm PostId → dựng rừng mỗi post → nối các gốc theo PostId rồi CreatedAt/Id (khớp GetRootCommentsPagedAsync).
+    private static List<CommentTreeDto> BuildGlobalRootForestFromCteAllRows(List<CommentFlatDto> allRows) // Gốc đã lồng subtree.
+    { // Mở khối BuildGlobalRootForestFromCteAllRows.
+        var rootForest = new List<CommentTreeDto>(); // Tất cả gốc toàn hệ theo thứ tự ổn định.
+        foreach (var group in allRows.GroupBy(r => r.PostId).OrderBy(g => g.Key)) // Theo PostId tăng dần.
+        { // Mở khối từng bài.
+            var postRoots = BuildTreeFromFlatDtosForOnePost(group.ToList()); // Cây logic trong một post.
+            foreach (var root in postRoots.OrderBy(r => r.CreatedAt).ThenBy(r => r.Id)) // Gốc trong post giống thứ tự EF.
+            { // Mở khối từng gốc.
+                rootForest.Add(root); // Nối vào rừng toàn cục.
+            } // Hết foreach gốc.
+        } // Hết foreach post.
+
+        return rootForest; // Danh sách gốc để phân trang (mỗi phần tử là một cây đầy đủ).
+    } // Kết thúc BuildGlobalRootForestFromCteAllRows.
 
     // Dựng cây từ các hàng phẳng có Level (từ SQL); thứ tự duyệt ổn định theo Level rồi thời gian.
     private static List<CommentTreeDto> BuildTreeFromFlatDtosForOnePost(List<CommentFlatDto> rows) // Hàng một post.
@@ -1212,4 +1621,27 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
 
         return false; // Đến gốc null an toàn.
     } // Kết thúc CreatesCycleFromFlatRows.
+
+    // Tập định danh cây con (gồm rootId) bằng BFS theo quan hệ ParentId trên danh sách phẳng một post.
+    private static HashSet<Guid> BuildSubtreeIdSet(IReadOnlyList<Comment> inPost, Guid rootId) // Danh sách trong post và Id gốc.
+    { // Mở khối BuildSubtreeIdSet.
+        var s = new HashSet<Guid> { rootId }; // Tập đã thăm/kết quả; khởi tạo với gốc.
+        var q = new Queue<Guid>(); // Hàng đợi BFS.
+        q.Enqueue(rootId); // Đưa gốc vào hàng đợi.
+        while (q.Count > 0) // Còn nút xử lý.
+        { // Mở khối.
+            var u = q.Dequeue(); // Lấy Id cha hiện tại.
+            foreach (var n in inPost) // Quét toàn list phẳng (O(n) mỗi tầng).
+            { // Mở khối.
+                if (n.ParentId == u && s.Add(n.Id)) // Con trực tiếp và Id con mới (Add trả true nếu chưa có).
+                { // Mở khối.
+                    q.Enqueue(n.Id); // Đưa con vào hàng đợi.
+                } // Hết nhánh con hợp lệ.
+            } // Hết foreach.
+        } // Hết while BFS.
+
+        return s; // Trả tập Id cây con.
+    } // Kết thúc BuildSubtreeIdSet.
+
+    #endregion
 } // Kết thúc lớp CommentService và không gian tệp.

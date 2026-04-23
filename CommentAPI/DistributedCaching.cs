@@ -73,19 +73,20 @@ public static class EntityCacheKeys // Factory khóa string thống nhất.
     public static string Post(Guid id) => $"p:{id:N}"; // Chi tiết post.
     public static string Comment(Guid id) => $"c:{id:N}"; // Chi tiết comment.
 
-    public static string UsersPaged(int page, int pageSize) => $"l:users:{page}:{pageSize}"; // List users.
-    public static string UsersSearchName(string termHash, int page, int pageSize) => $"l:users:sn:{termHash}:{page}:{pageSize}"; // Search name.
-    public static string UsersSearchUserName(string termHash, int page, int pageSize) => $"l:users:su:{termHash}:{page}:{pageSize}"; // Search username.
+    public static string UsersPaged(int page, int pageSize) => $"l:users:{page}:{pageSize}"; // List users (không filter).
 
-    public static string PostsPaged(int page, int pageSize) => $"l:posts:{page}:{pageSize}"; // List posts.
-    public static string PostsSearchTitle(string termHash, int page, int pageSize) => $"l:posts:st:{termHash}:{page}:{pageSize}"; // Search title.
+    public static string PostsPaged(int page, int pageSize) => $"l:posts:{page}:{pageSize}"; // List posts (không filter).
 
     public static string CommentsAll(int page, int pageSize) => $"l:comments:all:{page}:{pageSize}"; // All comments page.
+
+    public static string CommentsByUser(Guid userId, int page, int pageSize) => // Comment theo tác giả (UserId).
+        $"l:comments:u:{userId:N}:{page}:{pageSize}"; // Khóa cache list-by-user.
     public static string CommentsSearchContent(string termHash, int page, int pageSize) => $"l:comments:sc:{termHash}:{page}:{pageSize}"; // Search content.
 
     public static string CommentsSearchContentInPost(Guid postId, string termHash, int page, int pageSize) => // Scoped search.
         $"l:comments:p:{postId:N}:sc:{termHash}:{page}:{pageSize}"; // Key string.
-    public static string CommentsAllTreeFlat(int page, int pageSize) => $"l:comments:tree:flat:{page}:{pageSize}"; // Tree flat global.
+    public static string CommentsAllTreeFlat(int page, int pageSize) => $"l:comments:tree:flat:{page}:{pageSize}"; // Tree flat global (EF).
+    public static string CommentsAllTreeCte(int page, int pageSize) => $"l:comments:tree:cte:{page}:{pageSize}"; // Tree global từ hàng CTE + dựng cây.
     public static string CommentsAllFlattenEfTree(int page, int pageSize) => $"l:comments:flat:eftree:{page}:{pageSize}"; // EF flatten.
     public static string CommentsAllFlattenCteTree(int page, int pageSize) => $"l:comments:flat:ctetree:{page}:{pageSize}"; // CTE flatten.
     public static string CommentsAllCteFlat(int page, int pageSize) => $"l:comments:cteflat:{page}:{pageSize}"; // CTE flat list.
@@ -96,8 +97,11 @@ public static class EntityCacheKeys // Factory khóa string thống nhất.
     public static string CommentsCteFlatByPost(Guid postId, int page, int pageSize) => // Per post CTE flat.
         $"l:comments:p:{postId:N}:cteflat:{page}:{pageSize}"; // Key.
 
-    public static string CommentsTreeByPost(Guid postId, int page, int pageSize) => // Per post tree.
+    public static string CommentsTreeByPost(Guid postId, int page, int pageSize) => // Per post tree (EF).
         $"l:comments:p:{postId:N}:tree:{page}:{pageSize}"; // Key.
+
+    public static string CommentsTreeCteByPost(Guid postId, int page, int pageSize) => // Per post tree từ CTE.
+        $"l:comments:p:{postId:N}:tree:cte:{page}:{pageSize}"; // Key tách biệt khỏi EF tree.
 
     public static string CommentsFlattenedCteTree(Guid postId, int page, int pageSize) => // Per post CTE tree flatten.
         $"l:comments:p:{postId:N}:ctetree:{page}:{pageSize}"; // Key.
