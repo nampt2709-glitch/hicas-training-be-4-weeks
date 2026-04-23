@@ -3,9 +3,9 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "Kenza123@!"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
     ports:
-      - "18433:1433"
+      - "${SQLSERVER_PORT:-18433}:1433"
     healthcheck:
       test:
         [
@@ -20,18 +20,18 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
 
   commentapi:
     build:
       context: .
       dockerfile: CommentAPI/Dockerfile
     ports:
-      - "8080:8080"
+      - "${COMMENTAPI_PORT:-8080}:8080"
     environment:
-      ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=HICAS_Comment_API;User Id=sa;Password=Kenza123@!;TrustServerCertificate=True;MultipleActiveResultSets=True"
-      ConnectionStrings__Redis: "redis:6379"
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
+      ConnectionStrings__DefaultConnection: "${COMMENTAPI_DOCKER_DEFAULT_CONNECTION}"
+      ConnectionStrings__Redis: "${COMMENTAPI_DOCKER_REDIS_CONNECTION}"
     depends_on:
       sqlserver:
         condition: service_healthy

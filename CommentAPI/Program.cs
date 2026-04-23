@@ -34,6 +34,9 @@ var builder = WebApplication.CreateBuilder(args);
 // Mã hóa UTF-8 cho console: log tiếng Việt không bị thành dấu ch? trên Windows cmd/PowerShell mặc định.
 Console.OutputEncoding = new UTF8Encoding(false);
 
+// Nạp duy nhất file .env của CommentAPI để che connection string nhạy cảm khỏi appsettings.json.
+EnvLoader.LoadEnvFile(builder.Environment.ContentRootPath);
+
 // Bind cấu hình JWT từ section tương ứng (IOptions<JwtOptions> dùng ở AuthenticationService, v.v.).
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 // Đọc mạnh JWT để tạo SymmetricSecurityKey; thiếu cấu hình thì dừng sớm (lỗi rõ tại startup).

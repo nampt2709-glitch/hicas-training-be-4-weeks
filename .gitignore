@@ -81,5 +81,6 @@ Desktop.ini
 $RECYCLE.BIN/
 
 ## Docker / local secrets (uncomment if you keep local-only env files)
-# .env
-# *.env.local
+/.env
+CommentAPI/.env
+*.env.local

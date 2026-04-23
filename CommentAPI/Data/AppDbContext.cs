@@ -27,6 +27,7 @@ public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
             entity.ToTable("Users"); // Tên bảng SQL: Users, thay tên bậc 2c mặc định AspNetUsers, giữ ánh xạ Identity cột chuẩn.
             entity.Property(x => x.Name).HasMaxLength(200).IsRequired(); // Cột Name: tối đa 200 ký tự, NOT NULL, phù hợp tạo user/ hiển thị.
             entity.Property(x => x.CreatedAt).IsRequired(); // Cột mốc tạo, bắt buộc, không bỏ rỗng ở quy ước tầng ánh xạ.
+            entity.HasIndex(x => new { x.CreatedAt, x.Id }); // Hỗ trợ filter theo CreatedAt + phân trang ổn định theo Id.
         });
 
         modelBuilder.Entity<Post>(entity => // Bắt đầu ánh xạ bảng Post, một bài viết, khóa Guid.
@@ -35,11 +36,12 @@ public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
             entity.Property(x => x.Title).HasMaxLength(300).IsRequired(); // Cột title, 300, NOT NULL, phù bài ngắn trên UI/ DB.
             entity.Property(x => x.Content).HasMaxLength(4000).IsRequired(); // Cột nội dung, 4000, bắt buộc, giới hạn tương ứng migration cũ.
             entity.Property(x => x.CreatedAt).IsRequired(); // Mốc tạo bài, bắt buộc, sort theo thời gian khi cần.
+            entity.HasIndex(x => new { x.CreatedAt, x.Id }); // Tăng tốc đọc danh sách post theo CreatedAt/Id.
 
             entity.HasOne(x => x.User) // Một bài hướng tới user chủ, HasOne, navigation User trên thực thể Post, có Id UserId ở bảng.
                 .WithMany(x => x.Posts) // Phía nhiều: user có nhiều bài, WithMany, collection Posts trên User.
                 .HasForeignKey(x => x.UserId) // Cột ngoại UserId, sinh ở bảng Post, bắt liên kết tới bảng Users/ Identity.
-                .OnDelete(DeleteBehavior.NoAction); // Xóa user không tự hủy bài ở DB (NoAction) — cần xử nghiệp vụ/ trigger nếu đổi.
+                .OnDelete(DeleteBehavior.Cascade); // Xóa user thì xóa luôn bài của user đó theo nghiệp vụ.
         }); // Hết ánh xạ Post, tạo khóa ngoại với tên tự sinh, không cascade delete.
 
         modelBuilder.Entity<Comment>(entity => // Cấu hình comment: tự cõi, tới bài, tới user, giới hạn cột, index.
@@ -56,16 +58,16 @@ public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
             entity.HasOne(x => x.Post) // Tới bài, HasOne, navigation Post, — mỗi comment nằm đúng một bài bắt bởi PostId ở dưới cấu hình.
                 .WithMany(x => x.Comments) // Một bài tới tập bình luận, tên tập Comments trên Post.
                 .HasForeignKey(x => x.PostId) // Cột ngoại PostId nằm trên bảng comment.
-                .OnDelete(DeleteBehavior.NoAction); // Tránh khi xóa bài thì comment chết ủy: NoAction, phải hợp lý nghiệp vụ khi cần cascade khác nơi.
+                .OnDelete(DeleteBehavior.Cascade); // Xóa post thì xóa mọi comment thuộc post đó.
 
             entity.HasOne(x => x.Parent) // Tự 1 — n, cha là cùng bảng Comment, cột ParentId nullable, — HasOne, navigation Parent, optional.
                 .WithMany(x => x.Children) // Tập con tên Children, ở entity, — WithMany, — collection con.
                 .HasForeignKey(x => x.ParentId) // Cột ngoại ParentId tự bảng, tree adjacency, — có ràng buộc trigger ngoài migration nếu cần.
-                .OnDelete(DeleteBehavior.Restrict); // Xóa cha nếu còn con: bị cấm bởi Restrict, phù hợp chặn cắt gốc cây; xóa cây nghiệp vụ/ soft delete nơi service.
+                .OnDelete(DeleteBehavior.Cascade); // Xóa comment thì xóa toàn bộ hậu duệ (con/cháu/chắt...) theo cây.
 
-            entity.HasIndex(x => x.PostId); // Index, lọc theo bài, vấn theo từng bài, phân trang ổn định, — SQL tối ưu filter post.
-            entity.HasIndex(x => x.ParentId); // Index, tìm con,— liên hệ leo cây/ join cha nhanh hơn quét toàn bảng.
-            entity.HasIndex(x => x.UserId); // Index, tìm tất cả comment theo tác giả, — phục vụ sửa/ xóa theo user, admin.
+            entity.HasIndex(x => new { x.PostId, x.CreatedAt, x.Id }); // Hỗ trợ query theo post + phân trang/sắp xếp.
+            entity.HasIndex(x => new { x.UserId, x.CreatedAt, x.Id }); // Hỗ trợ query theo user + phân trang/sắp xếp.
+            entity.HasIndex(x => new { x.ParentId, x.CreatedAt, x.Id }); // Hỗ trợ lấy root/children và duyệt cây theo thời gian.
         }); // Hết ánh xạ comment, tạo index có tên, migration phản ánh, — không tự sinh cột Level (tính ở tầng ứng dụng, không bảng).
     } 
     // Kết hàm tạo model, migration sinh/ cập nhật DB khi bạn cần add migration.

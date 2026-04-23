@@ -1,10 +1,12 @@
 using AutoMapper; 
 using CommentAPI;
+using CommentAPI.Data;
 using CommentAPI.DTOs;
 using CommentAPI.Entities; 
 using CommentAPI.Interfaces; 
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity; 
+using Microsoft.EntityFrameworkCore;
 
 namespace CommentAPI.Services; 
 
@@ -17,19 +19,22 @@ public class UserService : IUserService // Triển khai use-case user + cache.
     private readonly RoleManager<IdentityRole<Guid>> _roleManager; // Kiểm tra role tồn tại trước khi gán.
     private readonly IMapper _mapper; // Ánh xạ User → UserDto cơ bản.
     private readonly IEntityResponseCache _cache; // Cache-aside JSON.
+    private readonly AppDbContext _dbContext; // DbContext để xử lý xóa comment authored-by-user tránh kẹt FK NoAction.
 
     public UserService( // Constructor DI.
         IUserRepository repository, // Repo.
         UserManager<User> userManager, // Identity user.
         RoleManager<IdentityRole<Guid>> roleManager, // Identity role.
         IMapper mapper, // AutoMapper.
-        IEntityResponseCache cache) // Distributed cache wrapper.
+        IEntityResponseCache cache, // Distributed cache wrapper.
+        AppDbContext dbContext) // DbContext scoped.
     {
         _repository = repository; // Assign.
         _userManager = userManager; // Assign.
         _roleManager = roleManager; // Assign.
         _mapper = mapper; // Assign.
         _cache = cache; // Assign.
+        _dbContext = dbContext; // Assign.
     }
 
     #endregion
@@ -283,6 +288,17 @@ public class UserService : IUserService // Triển khai use-case user + cache.
         }
 
         await _cache.RemoveAsync(EntityCacheKeys.User(id), default); // Xóa cache trước khi xóa user (tránh stale read).
+
+        // Xóa trước các comment do user viết trên post của người khác để tránh FK UserId (NoAction) chặn xóa user.
+        // Comment thuộc post do chính user sở hữu sẽ bị xóa theo dây chuyền User -> Posts -> Comments (Cascade).
+        var authoredCommentsOutsideOwnPosts = await _dbContext.Comments
+            .Where(c => c.UserId == id && c.Post != null && c.Post.UserId != id)
+            .ToListAsync();
+        if (authoredCommentsOutsideOwnPosts.Count > 0)
+        {
+            _dbContext.Comments.RemoveRange(authoredCommentsOutsideOwnPosts); // ParentId Cascade sẽ kéo theo hậu duệ của các comment này.
+            await _dbContext.SaveChangesAsync(); // Commit trước khi gọi UserManager.DeleteAsync để không bị lỗi FK.
+        }
 
         var result = await _userManager.DeleteAsync(entity); // Cascade theo cấu hình Identity/EF.
         if (!result.Succeeded) // Identity error.
