@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using CommentAPI;
+using CommentAPI.Configuration;
 using CommentAPI.Data;
 using CommentAPI.Entities;
 using CommentAPI.Interfaces;
@@ -17,6 +18,7 @@ using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +26,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
+using System.Threading.RateLimiting;
 
 // Tạo builder web app (hosting, Kestrel, cấu hình JSON, biến môi trường).
 var builder = WebApplication.CreateBuilder(args);
@@ -163,6 +166,43 @@ builder.Services
 // Bật hệ thống [Authorize] trên controller/action.
 builder.Services.AddAuthorization();
 
+// Rate limiting toàn cục theo từng endpoint route + method; cấu hình tập trung trong RouteRateLimitConfiguration.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsJsonAsync(new
+        {
+            code = ApiErrorCodes.InvalidOperation,
+            type = "RateLimitExceeded",
+            message = ApiMessages.InvalidRequest
+        }, cancellationToken);
+    };
+
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+    {
+        var endpoint = httpContext.GetEndpoint() as RouteEndpoint;
+        var routePattern = endpoint?.RoutePattern.RawText ?? httpContext.Request.Path.Value;
+        var rule = RouteRateLimitConfiguration.Resolve(httpContext.Request.Method, routePattern);
+        var clientIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown-ip";
+        var partitionKey = $"{rule.Key}:{clientIp}";
+
+        // Mỗi route của mỗi client IP có bộ đếm riêng, tránh một route nặng làm nghẽn route khác.
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey,
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = rule.PermitLimit,
+                Window = TimeSpan.FromSeconds(rule.WindowSeconds),
+                QueueLimit = rule.QueueLimit,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                AutoReplenishment = true
+            });
+    });
+});
+
 // 403 có body JSON: khi xác thực ok nhưng policy cấm (role), thay vì 403 rỗng mặc định.
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, ForbiddenHandler>();
 
@@ -281,6 +321,7 @@ app.UseSwaggerUI();
 
 // Bắt buộc: UseRouting trước UseAuthentication/Authorization; custom JWT sau UseAuthentication.
 app.UseRouting();
+app.UseRateLimiter(); // Áp dụng limiter sau khi routing để lấy đúng endpoint metadata.
 app.UseAuthentication(); // Đọc Bearer, gắn HttpContext.User
 app.UseJwtAuthentication(); // Bắt buộc API /api (trừ login/refresh) có user đã xác thực
 app.UseAuthorization(); // Áp dụng [Authorize], role, policy
