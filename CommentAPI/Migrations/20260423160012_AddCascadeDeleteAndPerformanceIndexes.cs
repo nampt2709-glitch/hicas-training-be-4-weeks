@@ -65,7 +65,7 @@ namespace CommentAPI.Migrations
                 column: "ParentId",
                 principalTable: "Comments",
                 principalColumn: "Id",
-                onDelete: ReferentialAction.Cascade);
+                onDelete: ReferentialAction.Restrict);
 
             migrationBuilder.AddForeignKey(
                 name: "FK_Comments_Posts_PostId",

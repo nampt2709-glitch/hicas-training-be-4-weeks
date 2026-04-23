@@ -302,7 +302,7 @@ namespace CommentAPI.Migrations
                     b.HasOne("CommentAPI.Entities.Comment", "Parent")
                         .WithMany("Children")
                         .HasForeignKey("ParentId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("CommentAPI.Entities.Post", "Post")
                         .WithMany("Comments")

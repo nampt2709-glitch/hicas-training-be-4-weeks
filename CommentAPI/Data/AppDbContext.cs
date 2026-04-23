@@ -63,7 +63,7 @@ public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
             entity.HasOne(x => x.Parent) // Tự 1 — n, cha là cùng bảng Comment, cột ParentId nullable, — HasOne, navigation Parent, optional.
                 .WithMany(x => x.Children) // Tập con tên Children, ở entity, — WithMany, — collection con.
                 .HasForeignKey(x => x.ParentId) // Cột ngoại ParentId tự bảng, tree adjacency, — có ràng buộc trigger ngoài migration nếu cần.
-                .OnDelete(DeleteBehavior.Cascade); // Xóa comment thì xóa toàn bộ hậu duệ (con/cháu/chắt...) theo cây.
+                .OnDelete(DeleteBehavior.Restrict); // SQL Server tránh multiple cascade paths; xóa hậu duệ xử lý ở service.
 
             entity.HasIndex(x => new { x.PostId, x.CreatedAt, x.Id }); // Hỗ trợ query theo post + phân trang/sắp xếp.
             entity.HasIndex(x => new { x.UserId, x.CreatedAt, x.Id }); // Hỗ trợ query theo user + phân trang/sắp xếp.
