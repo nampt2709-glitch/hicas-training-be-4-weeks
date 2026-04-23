@@ -84,3 +84,16 @@ $RECYCLE.BIN/
 /.env
 CommentAPI/.env
 *.env.local
+
+## Local build scratch folders
+_build_chk/
+_build_out_tests/
+_build_out_tests2/
+**/_build_chk/
+**/_build_out_tests/
+**/_build_out_tests2/
+
+## Cursor local files
+.cursor/
+**/.cursor/
+.cursorignore
