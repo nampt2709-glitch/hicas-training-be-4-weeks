@@ -1,6 +1,7 @@
 using CommentAPI;
 
 using CommentAPI.DTOs; 
+using CommentAPI.Validators;
 
 using CommentAPI.Interfaces;
 
@@ -40,6 +41,7 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
 
 
+    // [1] GET /api/users
     // Danh sách user phân trang; name / userName / email là filter Contains tuỳ chọn (query).
 
     [HttpGet] // GET danh sách có phân trang.
@@ -78,6 +80,7 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
 
 
+    // [2] GET /api/users/{id}
     [HttpGet("{id:guid}")] // GET một user theo id — GET /api/users/{id}.
 
     [Authorize(Roles = "Admin,User")] // Đọc chi tiết.
@@ -94,6 +97,7 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
 
 
+    // [3] POST /api/users
     [HttpPost] // POST tạo user mới (Admin).
 
     [Authorize(Roles = "Admin")] // Chỉ quản trị tạo tài khoản, còn nếu user muốn tạo tài khoản thì phải sign up
@@ -116,6 +120,7 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
 
 
+    // [4] PUT /api/users/{id}
     // User (không phải Admin): chỉ sửa Name của chính mình; Admin phải dùng PUT /api/admin/users/{id}.
 
     [HttpPut("{id:guid}")] // PUT cập nhật Name cho tài khoản hiện tại.
@@ -158,7 +163,8 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
 
 
-    // Admin: cập nhật đầy đủ UserName, Email, Name, roles, mật khẩu tùy chọn (route tuyệt đối giống pattern comment admin).
+    // [5] PUT /api/admin/users/{id}
+    // Admin: cập nhật đầy đủ UserName, Email, Name, roles (không đổi mật khẩu ở route này).
 
     [HttpPut("~/api/admin/users/{id:guid}")] // PUT .../api/admin/users/{id}
 
@@ -176,6 +182,7 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
 
 
+    // [6] DELETE /api/users/{id}
     [HttpDelete("{id:guid}")] // DELETE xóa user khỏi Identity/DB.
 
     [Authorize(Roles = "Admin")] // Chỉ Admin.

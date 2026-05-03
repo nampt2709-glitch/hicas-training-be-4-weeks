@@ -10,12 +10,6 @@
   </ItemGroup>
 
   <ItemGroup>
-	  <None Update="Queries\**\*.sql">
-		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-	  </None>
-  </ItemGroup>
-
-  <ItemGroup>
 	  <PackageReference Include="Asp.Versioning.Mvc" Version="8.1.0" />
 	  <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" Version="8.1.0" />
 	  <PackageReference Include="AutoMapper" Version="16.1.1" />

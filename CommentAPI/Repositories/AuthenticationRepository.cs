@@ -20,38 +20,46 @@ public class AuthenticationRepository : IAuthenticationRepository
 
     #endregion
 
-    #region Đọc user — AuthController / SignUp / Login / Refresh / Logout
+    #region Route Functions
 
-    // Tìm theo tên đăng nhập (UserName) — login.
+    /// <summary>
+    /// [2] Route: POST /api/auth/login
+    /// </summary>
     public Task<User?> GetByUserNameAsync(string userName, CancellationToken cancellationToken = default) =>
         _userManager.FindByNameAsync(userName);
 
-    // Tìm user theo Guid (chuỗi) — hợp với bảng AspNetUsers.
+    /// <summary>
+    /// [3]/[4] Route helper: POST /api/auth/refresh, POST /api/auth/logout
+    /// </summary>
     public Task<User?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
         _userManager.FindByIdAsync(id.ToString());
 
-    // Gọi CheckPasswordAsync: so khớp mật khẩu gửi lên với hash trong DB.
+    /// <summary>
+    /// [2] Route: POST /api/auth/login
+    /// </summary>
     public async Task<bool> ValidatePasswordAsync(User user, string password, CancellationToken cancellationToken = default) =>
         await _userManager.CheckPasswordAsync(user, password);
 
-    // Tên role: AspNetUserRoles nối user–role, trả list chuỗi.
+    /// <summary>
+    /// [1]/[2]/[3] Route helper: resolve role claims for token
+    /// </summary>
     public async Task<IReadOnlyList<string>> GetRoleNamesAsync(User user, CancellationToken cancellationToken = default)
     {
         var roles = await _userManager.GetRolesAsync(user); // Gọi store role
         return roles.ToList(); // Materialize thành list cố định
     }
 
-    // Stamp hiện tại: so sánh với claim trong token khi refresh.
+    /// <summary>
+    /// [3] Route: POST /api/auth/refresh
+    /// </summary>
     public async Task<string> GetSecurityStampAsync(User user, CancellationToken cancellationToken = default)
     {
         return (await _userManager.GetSecurityStampAsync(user).ConfigureAwait(false)) ?? string.Empty; // Null thành rỗng
     }
 
-    #endregion
-
-    #region Phiên — logout / revoke
-
-    // Đổi security stamp: vô hiệu mọi token/refresh cũ phát trước khi thay đổi.
+    /// <summary>
+    /// [4] Route: POST /api/auth/logout
+    /// </summary>
     public async Task RevokeSessionsAsync(User user, CancellationToken cancellationToken = default)
     {
         await _userManager.UpdateSecurityStampAsync(user); // Tạo stamp mới trên bản ghi

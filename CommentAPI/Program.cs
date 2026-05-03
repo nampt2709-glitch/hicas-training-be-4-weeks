@@ -28,13 +28,16 @@ using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.SwaggerGen;
 using System.Threading.RateLimiting;
 
-// Tạo builder web app (hosting, Kestrel, cấu hình JSON, biến môi trường).
-var builder = WebApplication.CreateBuilder(args);
-
 // Mã hóa UTF-8 cho console: log tiếng Việt không bị thành dấu ch? trên Windows cmd/PowerShell mặc định.
 Console.OutputEncoding = new UTF8Encoding(false);
 
-// Nạp duy nhất file .env của CommentAPI để che connection string nhạy cảm khỏi appsettings.json.
+// Nạp .env trước CreateBuilder để ConnectionStrings__* có sẵn khi host build IConfiguration (tránh chuỗi rỗng từ appsettings).
+EnvLoader.LoadEnvFilesBeforeHost();
+
+// Tạo builder web app (hosting, Kestrel, cấu hình JSON, biến môi trường).
+var builder = WebApplication.CreateBuilder(args);
+
+// Dự phòng: .env trong ContentRoot nếu cwd khác và file chỉ nằm cạnh csproj.
 EnvLoader.LoadEnvFile(builder.Environment.ContentRootPath);
 
 // Bind cấu hình JWT từ section tương ứng (IOptions<JwtOptions> dùng ở AuthenticationService, v.v.).
@@ -43,9 +46,13 @@ builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptio
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
  ?? throw new InvalidOperationException("Jwt configuration is missing in appsettings.");
 
-// Chuỗi kết nối SQL Server cho EF Core; bắt buộc có trong appsettings/secret.
-var sqlConnectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is missing.");
+// Chuỗi kết nối SQL Server cho EF Core; bắt buộc có trong appsettings/secret/.env (không được rỗng).
+var sqlConnectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrWhiteSpace(sqlConnectionString))
+{
+    throw new InvalidOperationException(
+        "Connection string 'DefaultConnection' is missing or empty. Set ConnectionStrings__DefaultConnection in .env (see CommentAPI/.env.example) or user secrets, and load .env before WebApplication.CreateBuilder.");
+}
 
 // Cấu hình IDistributedCache: ưu tiên Redis, bộ nhớ dự phòng; xem DistributedCaching.cs.
 builder.AddDistributedCaching();

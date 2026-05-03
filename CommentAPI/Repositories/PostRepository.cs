@@ -4,37 +4,24 @@ using CommentAPI.DTOs;
 using CommentAPI.Interfaces;
 using Microsoft.EntityFrameworkCore; 
 
-namespace CommentAPI.Repositories; 
+namespace CommentAPI.Repositories;
 
-public class PostRepository : IPostRepository // CRUD + read projections.
+public class PostRepository : RepositoryBase<Post>, IPostRepository // CRUD + read projections.
 {
     #region Trường & hàm tạo
 
-    private readonly AppDbContext _context; // Database context.
-
     public PostRepository(AppDbContext context) // DI.
+        : base(context)
     {
-        _context = context; // Assign.
     }
 
     #endregion
 
-    #region Private — lọc query
+    #region Route Functions
 
-    // Lọc khoảng CreatedAt (inclusive) trên IQueryable Post — dịch sang SQL.
-    private static IQueryable<Post> WhereCreatedAtRange(IQueryable<Post> query, DateTime? createdAtFrom, DateTime? createdAtTo)
-    {
-        if (createdAtFrom is { } f)
-            query = query.Where(p => p.CreatedAt >= f);
-        if (createdAtTo is { } t)
-            query = query.Where(p => p.CreatedAt <= t);
-        return query;
-    }
-
-    #endregion
-
-    #region GET — PostsController (GetAll, GetById)
-
+    /// <summary>
+    /// [1] Route: GET /api/posts
+    /// </summary>
     public async Task<(List<PostDto> Items, long TotalCount)> GetPagedAsync( // Paged list as DTO projection.
         int page, // Page (caller normalized in some paths).
         int pageSize, // Size.
@@ -44,7 +31,7 @@ public class PostRepository : IPostRepository // CRUD + read projections.
         string? titleContains = null, // Filter Title Contains.
         string? contentContains = null) // Filter Content Contains.
     {
-        var q = WhereCreatedAtRange(_context.Posts.AsNoTracking(), createdAtFrom, createdAtTo); // Base + khoảng thời gian.
+        var q = WhereCreatedAtRange(Context.Posts.AsNoTracking(), createdAtFrom, createdAtTo); // Base + khoảng thời gian.
         var t = titleContains?.Trim(); // Chuẩn hóa.
         if (!string.IsNullOrEmpty(t))
             q = q.Where(p => p.Title.Contains(t)); // WHERE Title LIKE %t%.
@@ -69,8 +56,11 @@ public class PostRepository : IPostRepository // CRUD + read projections.
         return (items, total); // Tuple.
     }
 
+    /// <summary>
+    /// [2] Route: GET /api/posts/{id}
+    /// </summary>
     public Task<PostDto?> GetByIdForReadAsync(Guid id, CancellationToken cancellationToken = default) => // Single DTO read.
-        _context.Posts.AsNoTracking() // No tracking.
+        Context.Posts.AsNoTracking() // No tracking.
             .Where(p => p.Id == id) // Filter PK.
             .Select(p => new PostDto // Project.
             {
@@ -82,47 +72,23 @@ public class PostRepository : IPostRepository // CRUD + read projections.
             })
             .FirstOrDefaultAsync(cancellationToken); // Null if missing.
 
-    public async Task<Post?> GetByIdAsync(Guid id) // Tracked or default FirstOrDefault entity.
-    {
-        return await _context.Posts.FirstOrDefaultAsync(x => x.Id == id); // Entity or null.
-    }
-
     #endregion
 
-    #region Ghi — PostsController (Create, Update, Delete)
+    #region Helpers
 
-    public async Task AddAsync(Post post) // Insert.
+    // Lọc khoảng CreatedAt (inclusive) trên IQueryable Post — dịch sang SQL.
+    private static IQueryable<Post> WhereCreatedAtRange(IQueryable<Post> query, DateTime? createdAtFrom, DateTime? createdAtTo)
     {
-        await _context.Posts.AddAsync(post); // Stage.
+        if (createdAtFrom is { } f)
+            query = query.Where(p => p.CreatedAt >= f);
+        if (createdAtTo is { } t)
+            query = query.Where(p => p.CreatedAt <= t);
+        return query;
     }
-
-    public void Update(Post post) // Update.
-    {
-        _context.Posts.Update(post); // Mark.
-    }
-
-    public void Remove(Post post) // Delete.
-    {
-        _context.Posts.Remove(post); // Stage remove.
-    }
-
-    public async Task<bool> ExistsAsync(Guid id) // Exists by id.
-    {
-        return await _context.Posts.AsNoTracking().AnyAsync(x => x.Id == id); // Any.
-    }
-
-    public async Task SaveChangesAsync() // Commit.
-    {
-        await _context.SaveChangesAsync(); // SaveChanges.
-    }
-
-    #endregion
-
-    #region Bổ trợ — không map route trực tiếp
 
     public async Task<List<Post>> GetAllAsync() // Full list entities (legacy/helper).
     {
-        return await _context.Posts // DbSet.
+        return await Context.Posts // DbSet.
             .AsNoTracking() // Read-only.
             .OrderByDescending(x => x.CreatedAt) // Newest first.
             .ToListAsync(); // Materialize.

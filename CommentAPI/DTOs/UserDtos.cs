@@ -15,14 +15,13 @@ public class UpdateUserDto
     public string Name { get; set; } = string.Empty; // Tên mới, mặc định rỗng; cập nhật có điều kiện nghiệp vụ.
 }
 
-// Admin: cập nhật đầy đủ hồ sơ Identity + Name + roles; mật khẩu mới tùy chọn (để trống = giữ mật khẩu cũ).
+// Admin: cập nhật đầy đủ hồ sơ Identity + Name + roles; không hỗ trợ đổi mật khẩu ở route admin update.
 public class AdminUpdateUserDto
 {
     public string Name { get; set; } = string.Empty; // Tên hiển thị nghiệp vụ.
     public string UserName { get; set; } = string.Empty; // Tên đăng nhập (phải unique toàn hệ).
     public string? Email { get; set; } // Email; null hoặc chỉ khoảng trắng → dùng synthetic {UserName}@users.local giống CreateUser.
     public List<string> Roles { get; set; } = new(); // Vai trò mới thay thế hoàn toàn (ví dụ User, hoặc Admin+User).
-    public string? NewPassword { get; set; } // Đặt lại mật khẩu; null/rỗng = không đổi.
 }
 
 // DTO trả user ra client: không gồm mật khẩu; có danh sách tên role dạng chuỗi.

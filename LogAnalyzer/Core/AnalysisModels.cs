@@ -1,21 +1,24 @@
-namespace LogAnalyzer;
+namespace LogAnalyzer; // Không gian tên chứa mô hình dữ liệu phân tích.
 
-// Chế độ: đếm mọi từ (Word) hoặc chỉ thuật ngữ lỗi trong danh mục (Error).
+// Kiểu liệt kê: chọn cách trích token từ mỗi dòng log.
 public enum AnalysisMode
 {
-    Word = 0,
-    Error = 1
+    Word = 0, // Đếm mọi từ khớp regex chữ/số.
+    Error = 1 // Chỉ đếm thuật ngữ có trong ErrorCatalog.
 }
 
-// Một dòng tần suất: tên mục (từ hoặc mã lỗi) và số lần xuất hiện.
-public sealed record FrequencyItem(string Name, int Count);
+// Bản ghi bất biến: một hàng trong bảng tần suất (tên + số lần).
+public sealed record FrequencyItem(string Name, int Count); // Name: khóa; Count: số lần xuất hiện.
 
-// Một lần đo benchmark: nhãn, thời gian, danh sách tần suất tại lần đó.
-public sealed record BenchmarkRun(string Label, long ElapsedMilliseconds, List<FrequencyItem> Items);
+// Bản ghi: một lần đo benchmark (nhãn hiển thị, thời gian ms, tùy chọn danh sách kết quả).
+public sealed record BenchmarkRun(string Label, long ElapsedMilliseconds, List<FrequencyItem> Items); // Items thường chỉ đầy đủ ở lần Sequential.
 
-// Báo cáo: chế độ, file, 6 lần chạy, và dữ liệu top để ghi file kết quả.
+// Bản ghi: báo cáo tổng hợp sau khi chạy đủ pha đọc và đếm.
 public sealed record BenchmarkReport(
-    AnalysisMode Mode,
-    string SourceFile,
-    IReadOnlyList<BenchmarkRun> Runs,
-    IReadOnlyList<FrequencyItem> TopItems);
+    AnalysisMode Mode, // Word hoặc Error.
+    string SourceFile, // Đường dẫn file nguồn.
+    IReadOnlyList<BenchmarkRun> ReadRuns, // Hai pha đo đọc Sync/Async.
+    IReadOnlyList<BenchmarkRun> CountRuns, // Ba pha đếm Sequential/ForEach/PLINQ.
+    IReadOnlyList<FrequencyItem> FrequencyItems, // Danh sách tần suất đầy đủ (từ Sequential).
+    long TotalOccurrences, // Tổng số lần xuất hiện (tổng Count).
+    int DistinctTypeCount); // Số loại khóa khác nhau (= số phần tử FrequencyItems).

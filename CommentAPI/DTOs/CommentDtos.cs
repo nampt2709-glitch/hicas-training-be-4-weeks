@@ -56,7 +56,31 @@ public class CommentTreeDto
     public Guid PostId { get; set; } // Bài, dù cây; giữ tính toàn vẹn cùng bài ở nghiệp vụ.
     public Guid UserId { get; set; } // Tác giả tại nút, hiển thị ai gửi ở mọi tầng cây.
     public Guid? ParentId { get; set; } // Gắn cha khi cần phẳng hóa; cây lồng còn dùng Children.
+    public int Level { get; set; } // Độ sâu nút trong cây: 0 là gốc; dùng cho tree/cte trả trực tiếp cấp độ.
     public List<CommentTreeDto> Children { get; set; } = new(); // Con trực tiếp, cấu trúc đệ quy; mặc đã khởi tạo rỗng.
+}
+
+// Cấu trúc cây lồng cho nhánh flat (EF)
+public class CommentTreeFlatDto
+{
+    public Guid Id { get; set; } // Id nút, duy nhất toàn bảng.
+    public string Content { get; set; } = string.Empty; // Nội dung nút.
+    public DateTime CreatedAt { get; set; } // Thời điểm tạo.
+    public Guid PostId { get; set; } // Bài viết chứa comment.
+    public Guid UserId { get; set; } // Tác giả comment.
+    public Guid? ParentId { get; set; } // Cha của nút, null nếu là gốc.
+    public List<CommentTreeFlatDto> Children { get; set; } = new(); // Danh sách con trực tiếp.
+}
+
+// Dòng phẳng cho nhánh flat (EF): không có cột Level trong response.
+public class CommentFlatNoLevelDto
+{
+    public Guid Id { get; set; } // Id dòng.
+    public string Content { get; set; } = string.Empty; // Nội dung.
+    public DateTime CreatedAt { get; set; } // Thời gian tạo.
+    public Guid PostId { get; set; } // Bài viết.
+    public Guid UserId { get; set; } // Tác giả.
+    public Guid? ParentId { get; set; } // Cha.
 }
 
 // DTO demo chiến lược nạp dữ liệu, không dùng cho CRUD sản xuất chính.
@@ -66,6 +90,7 @@ public sealed class CommentLoadingDemoDto
     public string LoadingStrategy { get; init; } = string.Empty; // Nhãn dạng chữ: "lazy" | "eager" | "explicit" | "projection" — biết cách hình thành dữ liệu.
     public Guid CommentId { get; init; } // Id comment, khớp bảng Comments, khóa phân biệt dòng.
     public string Content { get; init; } = string.Empty; // Nội dung, mặc định rỗng, đọc từ cột tương ứng.
+    public DateTime CreatedAt { get; init; } // Thời điểm tạo comment để route demo trả đủ thông tin thời gian.
     public Guid PostId { get; init; } // Bài, liên kết tới bài chứa comment.
     public string? PostTitle { get; init; } // Tiêu đề bài nếu đã tải hoặc Select; null nếu chưa có trong payload.
     public Guid UserId { get; init; } // Id tác giả, map bảng Users.

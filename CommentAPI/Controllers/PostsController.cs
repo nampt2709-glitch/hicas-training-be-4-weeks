@@ -1,6 +1,7 @@
 using CommentAPI;
 
 using CommentAPI.DTOs;
+using CommentAPI.Validators;
 
 using CommentAPI.Interfaces; 
 
@@ -40,6 +41,7 @@ public class PostsController : ControllerBase // Không view.
 
 
 
+    // [1] GET /api/posts
     // Danh sách post phân trang; title/content là filter Contains tuỳ chọn (query).
 
     [HttpGet] // GET paged list.
@@ -76,6 +78,7 @@ public class PostsController : ControllerBase // Không view.
 
 
 
+    // [2] GET /api/posts/{id}
     [HttpGet("{id:guid}")] // GET một post theo id — GET /api/posts/{id}.
 
     [Authorize(Roles = "Admin,User")] // Đọc.
@@ -91,6 +94,7 @@ public class PostsController : ControllerBase // Không view.
 
 
 
+    // [3] POST /api/posts
     [HttpPost] // Tạo bài mới.
 
     [Authorize(Roles = "Admin,User")] // (UserId trong body).
@@ -113,6 +117,7 @@ public class PostsController : ControllerBase // Không view.
 
 
 
+    // [4] PUT /api/posts/{id}
     // User (không phải role Admin) cập nhật bài do chính mình; Admin bị yêu cầu dùng PUT /api/admin/posts/{id}.
 
     [HttpPut("{id:guid}")] // Cập nhật bài — luồng tác giả.
@@ -155,6 +160,7 @@ public class PostsController : ControllerBase // Không view.
 
 
 
+    // [5] PUT /api/admin/posts/{id}
     // Route tuyệt đối: Admin dùng DTO mở rộng (có thể gán lại UserId) — tách hẳn với cập nhật của tác giả ở api/posts.
 
     [HttpPut("~/api/admin/posts/{id:guid}")] // Override route template: không nằm dưới api/posts prefix.
@@ -173,6 +179,7 @@ public class PostsController : ControllerBase // Không view.
 
 
 
+    // [6] DELETE /api/posts/{id}
     [HttpDelete("{id:guid}")] // Xóa bài.
 
     [Authorize(Roles = "Admin")] // Chỉ Admin xóa.

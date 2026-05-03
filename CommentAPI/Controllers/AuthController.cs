@@ -19,6 +19,7 @@ public class AuthController : ControllerBase // Controller không có view, ch�
         _authenticationService = authenticationService; // Gán instance để dùng trong action.
     }
 
+    // [1] POST /api/auth/signup
     [AllowAnonymous] // Đăng ký không cần JWT; middleware whitelist /api/auth/signup.
     [HttpPost("signup")] // POST tạo tài khoản + trả cặp token (giống login sau khi tạo xong).
     public async Task<IActionResult> SignUp([FromBody] SignUpRequestDto request, CancellationToken cancellationToken) // Body: Name, UserName, Password, Email?.
@@ -29,6 +30,7 @@ public class AuthController : ControllerBase // Controller không có view, ch�
             new { message = ApiMessages.AuthSignUpSuccess, data = tokens }); // 201 + message nhất quán.
     }
 
+    // [2] POST /api/auth/login
     [AllowAnonymous] // Không yêu cầu Bearer token cho đăng nhập.
     [HttpPost("login")] // POST tạo phiên: nhận thông tin đăng nhập, trả cặp token.
     public async Task<IActionResult> Login([FromBody] LoginRequestDto request, CancellationToken cancellationToken) // Body JSON map vào DTO; hủy theo token client.
@@ -37,6 +39,7 @@ public class AuthController : ControllerBase // Controller không có view, ch�
         return Ok(new { message = ApiMessages.AuthLoginSuccess, data = tokens }); // 200 + message + data.
     }
 
+    // [3] POST /api/auth/refresh
     [AllowAnonymous] // Làm mới token không cần access còn hiệu lực (chỉ refresh hợp lệ).
     [HttpPost("refresh")] // POST đổi refresh token lấy bộ token mới.
     public async Task<IActionResult> Refresh([FromBody] RefreshRequestDto request, CancellationToken cancellationToken) // Body chứa refresh token.
@@ -45,6 +48,7 @@ public class AuthController : ControllerBase // Controller không có view, ch�
         return Ok(new { message = ApiMessages.AuthRefreshSuccess, data = tokens }); // 200 + message + data.
     }
 
+    // [4] POST /api/auth/logout
     [Authorize] // Bắt buộc JWT access hợp lệ (middleware + bearer).
     [HttpPost("logout")] // POST hủy phiên phía server (vô hiệu hóa refresh nếu có).
     public async Task<IActionResult> Logout(CancellationToken cancellationToken) // Không body; user lấy từ claims.

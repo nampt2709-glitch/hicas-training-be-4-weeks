@@ -10,7 +10,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace CommentAPI.Services; 
 
-public class UserService : IUserService // Triển khai use-case user + cache.
+public class UserService : ServiceBase, IUserService // Triển khai use-case user + cache.
 {
     #region Trường & hàm tạo — UsersController
 
@@ -18,7 +18,6 @@ public class UserService : IUserService // Triển khai use-case user + cache.
     private readonly UserManager<User> _userManager; // Tạo/xóa user Identity, roles.
     private readonly RoleManager<IdentityRole<Guid>> _roleManager; // Kiểm tra role tồn tại trước khi gán.
     private readonly IMapper _mapper; // Ánh xạ User → UserDto cơ bản.
-    private readonly IEntityResponseCache _cache; // Cache-aside JSON.
     private readonly AppDbContext _dbContext; // DbContext để xử lý xóa comment authored-by-user tránh kẹt FK NoAction.
 
     public UserService( // Constructor DI.
@@ -28,19 +27,22 @@ public class UserService : IUserService // Triển khai use-case user + cache.
         IMapper mapper, // AutoMapper.
         IEntityResponseCache cache, // Distributed cache wrapper.
         AppDbContext dbContext) // DbContext scoped.
+        : base(cache)
     {
         _repository = repository; // Assign.
         _userManager = userManager; // Assign.
         _roleManager = roleManager; // Assign.
         _mapper = mapper; // Assign.
-        _cache = cache; // Assign.
         _dbContext = dbContext; // Assign.
     }
 
     #endregion
 
-    #region GET — UsersController (GetAll, GetById)
+    #region Route Functions
 
+    /// <summary>
+    /// [1] Route: GET /api/users
+    /// </summary>
     public async Task<PagedResult<UserDto>> GetPagedAsync( // Trang user + tổng.
         int page, // Số trang 1-based.
         int pageSize, // Kích thước trang.
@@ -54,7 +56,7 @@ public class UserService : IUserService // Triển khai use-case user + cache.
         if (!HasUserListFilter(createdAtFrom, createdAtTo, nameContains, userNameContains, emailContains)) // Chỉ cache danh sách thuần.
         {
             var cacheKey = EntityCacheKeys.UsersPaged(page, pageSize); // Khóa list cố định theo trang.
-            var cached = await _cache.GetJsonAsync<PagedResult<UserDto>>(cacheKey, cancellationToken); // Thử đọc cache.
+            var cached = await Cache.GetJsonAsync<PagedResult<UserDto>>(cacheKey, cancellationToken); // Thử đọc cache.
             if (cached is not null) // Hit.
                 return cached; // Trả ngay DTO phân trang.
         }
@@ -85,15 +87,18 @@ public class UserService : IUserService // Triển khai use-case user + cache.
             TotalCount = total // Tổng bản ghi khớp filter (ở đây toàn bộ users).
         };
         if (!HasUserListFilter(createdAtFrom, createdAtTo, nameContains, userNameContains, emailContains))
-            await _cache.SetJsonAsync(EntityCacheKeys.UsersPaged(page, pageSize), result, cancellationToken); // Ghi cache TTL.
+            await Cache.SetJsonAsync(EntityCacheKeys.UsersPaged(page, pageSize), result, cancellationToken); // Ghi cache TTL.
         return result; // Trả cho controller.
     }
 
+    /// <summary>
+    /// [2] Route: GET /api/users/{id}
+    /// </summary>
     public async Task<UserDto> GetByIdAsync(Guid id) // Chi tiết một user.
     {
         // Cache-aside: đọc DTO từ Redis/memory trước; miss thì truy DB rồi ghi lại cache.
         var cacheKey = EntityCacheKeys.User(id); // Key theo id.
-        var cached = await _cache.GetJsonAsync<UserDto>(cacheKey, CancellationToken.None); // Đọc (không truyền CT từ caller ở đây).
+        var cached = await Cache.GetJsonAsync<UserDto>(cacheKey, CancellationToken.None); // Đọc (không truyền CT từ caller ở đây).
         if (cached is not null) // Hit.
         {
             return cached; // Trả DTO đầy đủ roles (đã snapshot lúc set).
@@ -109,14 +114,13 @@ public class UserService : IUserService // Triển khai use-case user + cache.
         }
 
         var dto = await MapToDtoAsync(entity); // UserManager roles live.
-        await _cache.SetJsonAsync(cacheKey, dto, default); // Populate cache.
+        await Cache.SetJsonAsync(cacheKey, dto, default); // Populate cache.
         return dto; // Return.
     }
 
-    #endregion
-
-    #region POST — UsersController (Create)
-
+    /// <summary>
+    /// [3] Route: POST /api/users
+    /// </summary>
     public async Task<UserDto> CreateAsync(CreateUserDto dto) // Tạo user + role User mặc định.
     {
         if (await _userManager.FindByNameAsync(dto.UserName) != null) // Trùng username.
@@ -155,11 +159,9 @@ public class UserService : IUserService // Triển khai use-case user + cache.
         return await MapToDtoAsync(entity); // DTO kèm roles.
     }
 
-    #endregion
-
-    #region PUT — UsersController (Update, UpdateAsAdmin)
-
-    // User thường: chỉ đổi Name; id phải trùng JWT (chặn sửa hộ user khác).
+    /// <summary>
+    /// [4] Route: PUT /api/users/{id}
+    /// </summary>
     public async Task UpdateAsSelfAsync(Guid id, UpdateUserDto dto, Guid currentUserId)
     {
         if (id != currentUserId) // Không cho chỉnh profile người khác qua endpoint này.
@@ -183,10 +185,12 @@ public class UserService : IUserService // Triển khai use-case user + cache.
         _repository.Update(entity);
         await _repository.SaveChangesAsync();
 
-        await _cache.RemoveAsync(EntityCacheKeys.User(id), default);
+        await Cache.RemoveAsync(EntityCacheKeys.User(id), default);
     }
 
-    // Admin: Name, UserName, Email, roles thay thế hoàn toàn, mật khẩu tùy chọn — chống trùng login/email và gỡ Admin khỏi admin cuối.
+    /// <summary>
+    /// [5] Route: PUT /api/admin/users/{id}
+    /// </summary>
     public async Task UpdateAsAdminAsync(Guid id, AdminUpdateUserDto dto)
     {
         var user = await _repository.GetByIdAsync(id);
@@ -262,20 +266,12 @@ public class UserService : IUserService // Triển khai use-case user + cache.
         ThrowUnlessSucceeded(
             await _userManager.AddToRolesAsync(user, normalizedRoles));
 
-        if (!string.IsNullOrWhiteSpace(dto.NewPassword))
-        {
-            var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-            ThrowUnlessSucceeded(
-                await _userManager.ResetPasswordAsync(user, token, dto.NewPassword!));
-        }
-
-        await _cache.RemoveAsync(EntityCacheKeys.User(id), default);
+        await Cache.RemoveAsync(EntityCacheKeys.User(id), default);
     }
 
-    #endregion
-
-    #region DELETE — UsersController (Delete)
-
+    /// <summary>
+    /// [6] Route: DELETE /api/users/{id}
+    /// </summary>
     public async Task DeleteAsync(Guid id) // Xóa user Identity.
     {
         var entity = await _repository.GetByIdAsync(id); // Find.
@@ -287,7 +283,7 @@ public class UserService : IUserService // Triển khai use-case user + cache.
                 ApiMessages.UserNotFound); // Msg.
         }
 
-        await _cache.RemoveAsync(EntityCacheKeys.User(id), default); // Xóa cache trước khi xóa user (tránh stale read).
+        await Cache.RemoveAsync(EntityCacheKeys.User(id), default); // Xóa cache trước khi xóa user (tránh stale read).
 
         // Xóa trước các comment do user viết trên post của người khác để tránh FK UserId (NoAction) chặn xóa user.
         // Comment thuộc post do chính user sở hữu sẽ bị xóa theo dây chuyền User -> Posts -> Comments (Cascade).
@@ -313,7 +309,7 @@ public class UserService : IUserService // Triển khai use-case user + cache.
 
     #endregion
 
-    #region Private helpers
+    #region Helpers
 
     // Có filter list → không cache.
     private static bool HasUserListFilter(
@@ -322,8 +318,7 @@ public class UserService : IUserService // Triển khai use-case user + cache.
         string? nameContains,
         string? userNameContains,
         string? emailContains) =>
-        createdAtFrom.HasValue
-        || createdAtTo.HasValue
+        HasCreatedAtFilter(createdAtFrom, createdAtTo)
         || !string.IsNullOrWhiteSpace(nameContains)
         || !string.IsNullOrWhiteSpace(userNameContains)
         || !string.IsNullOrWhiteSpace(emailContains);

@@ -1,72 +1,45 @@
-using System.Data;
-using System.Data.Common; 
-using CommentAPI.Data; 
-using CommentAPI.DTOs; 
-using CommentAPI.Entities;
-using CommentAPI.Interfaces; 
-using CommentAPI.Middleware;
-using CommentAPI.Queries; 
-using Microsoft.AspNetCore.Http;
-using Microsoft.EntityFrameworkCore; 
+using System.Linq.Expressions; // Expression trees: dựng predicate động cho lọc CTE trên DTO.
+using CommentAPI.Data; // DbContext ứng dụng.
+using CommentAPI.DTOs; // DTO trả về / projection.
+using CommentAPI.Entities; // Entity Comment và liên quan.
+using CommentAPI.Interfaces; // Hợp đồng ICommentRepository.
+using CommentAPI.Middleware; // Ghi nhận “lệnh SQL” cho demo CTE.
+using Microsoft.AspNetCore.Http; // IHttpContextAccessor lấy HttpContext hiện tại.
+using Microsoft.EntityFrameworkCore; // EF Core: AsNoTracking, ToListAsync, v.v.
 
-namespace CommentAPI.Repositories; 
+namespace CommentAPI.Repositories;
 
-public class CommentRepository : ICommentRepository 
+public class CommentRepository : RepositoryBase<Comment>, ICommentRepository
 { 
     // Mở khối lớp CommentRepository.
     private readonly AppDbContext _context; // Ngữ cảnh EF: DbSet và SaveChanges.
     private readonly IHttpContextAccessor _httpContextAccessor; // Truy cập HttpContext để middleware đếm SQL.
 
     public CommentRepository(AppDbContext context, IHttpContextAccessor httpContextAccessor) // Tiêm dependency qua constructor.
+        : base(context)
     { // Mở khối constructor.
         _context = context; // Gán DbContext dùng cho mọi truy vấn EF trong lớp này.
         _httpContextAccessor = httpContextAccessor; // Dùng để báo cáo lệnh ADO thô (CTE) vào bộ đếm request.
     } // Kết thúc constructor.
 
-    #region Private — lọc query & tham số ADO CTE
+    #region Route Functions
 
-    // Lọc biên CreatedAt (inclusive) trên IQueryable Comment — dùng chung EF list/search.
-    private static IQueryable<Comment> WhereCreatedAtRange( // Biểu thức có thể dịch sang SQL.
-        IQueryable<Comment> query, // Nguồn đã AsNoTracking hoặc tracked tùy caller.
-        DateTime? createdAtFrom, // Mốc dưới (null = không lọc).
-        DateTime? createdAtTo) // Mốc trên (null = không lọc).
-    { // Mở khối WhereCreatedAtRange.
-        if (createdAtFrom is { } f) // Có biên dưới.
-        { // Mở khối.
-            query = query.Where(c => c.CreatedAt >= f); // >= from.
-        } // Kết thúc nhánh from.
-
-        if (createdAtTo is { } t) // Có biên trên.
-        { // Mở khối.
-            query = query.Where(c => c.CreatedAt <= t); // <= to.
-        } // Kết thúc nhánh to.
-
-        return query; // Chuỗi điều kiện đã gắn.
-    } // Kết thúc WhereCreatedAtRange.
-
-    // Gắn tham số datetime2 nullable cho lệnh ADO CTE (SQL Server).
-    private static void AddNullableDateParameter(DbCommand command, string parameterName, DateTime? value) // Tên + giá trị.
-    { // Mở khối AddNullableDateParameter.
-        var p = command.CreateParameter(); // Tham số ADO.
-        p.ParameterName = parameterName; // Khớp @name trong file .sql.
-        p.DbType = DbType.DateTime2; // Kiểu cột CreatedAt.
-        p.Value = value.HasValue ? value.Value : DBNull.Value; // NULL khi không lọc.
-        command.Parameters.Add(p); // Gắn vào lệnh.
-    } // Kết thúc AddNullableDateParameter.
-
-    #endregion
-
-    // Thứ tự public bám luồng CommentsController (đọc/ phân trang → CRUD → CTE → demo); GetAllAsync không map route trực tiếp nên đặt cuối trước SaveChanges.
-    #region Public — truy vấn & ghi (khớp CommentsController / CommentService)
-
-    public async Task<(List<Comment> Items, long TotalCount)> GetPagedAsync( // Phân trang toàn bảng Comments.
+    // [01] Route: GET /api/comments (một hàm xử lý mọi input của route: postId/content/page/date).
+    public async Task<(List<Comment> Items, long TotalCount)> GetCommentsRoutePagedAsync( // Phân trang toàn bảng Comments.
+        Guid? postId, // null = toàn hệ; có giá trị = trong post.
+        string? contentContains, // null/rỗng = list thường; có giá trị = search theo content.
         int page, // Số trang (1-based).
         int pageSize, // Số dòng mỗi trang.
         CancellationToken cancellationToken = default, // Hủy bất đồng bộ.
         DateTime? createdAtFrom = null, // Lọc CreatedAt.
         DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối GetPagedAsync.
-        var q = WhereCreatedAtRange(_context.Comments.AsNoTracking(), createdAtFrom, createdAtTo); // Nguồn + khoảng thời gian.
+        var q = ApplyUniversalFilter(
+            _context.Comments.AsNoTracking(),
+            postId: postId,
+            contentContains: contentContains,
+            createdAtFrom: createdAtFrom,
+            createdAtTo: createdAtTo); // Nguồn + post + content + khoảng thời gian.
         var total = await q // Dùng lại cùng biểu thức IQueryable đã AsNoTracking.
             .LongCountAsync(cancellationToken); // Sinh COUNT_BIG(*) trên bộ lọc hiện tại; await trả tổng số dòng.
         var items = await q // Lại từ cùng nguồn q để tránh lệch trạng thái.
@@ -77,170 +50,13 @@ public class CommentRepository : ICommentRepository
             .Take(pageSize) // Chỉ lấy đúng pageSize dòng tiếp theo (FETCH/LIMIT).
             .ToListAsync(cancellationToken); // Thực thi SELECT và materialize danh sách một trang.
         return (items, total); // Trả tuple: dữ liệu trang + tổng để tính tổng số trang ở API.
-    } // Kết thúc GetPagedAsync.
+    } // Kết thúc GetCommentsRoutePagedAsync.
 
-    public async Task<(List<Comment> Items, long TotalCount)> GetByUserIdPagedAsync( // Phân trang comment của một user.
-        Guid userId, // Tác giả (UserId).
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default, // Hủy.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt.
-        DateTime? createdAtTo = null) // Lọc CreatedAt.
-    { // Mở khối GetByUserIdPagedAsync.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments.AsNoTracking().Where(c => c.UserId == userId), // Thu hẹp theo tác giả.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var total = await q.LongCountAsync(cancellationToken); // Đếm khớp.
-        var items = await q // Cùng bộ lọc.
-            .OrderBy(c => c.PostId) // Ổn định theo bài.
-            .ThenBy(c => c.CreatedAt) // Rồi thời gian.
-            .ThenBy(c => c.Id) // Tie-breaker.
-            .Skip((page - 1) * pageSize) // OFFSET.
-            .Take(pageSize) // FETCH.
-            .ToListAsync(cancellationToken); // Trang.
-        return (items, total); // Tuple.
-    } // Kết thúc GetByUserIdPagedAsync.
-
-    public async Task<(List<Comment> Items, long TotalCount)> GetByPostIdPagedAsync( // Phân trang comment trong một post.
-        Guid postId, // Id bài viết.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default, // Hủy.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt.
-        DateTime? createdAtTo = null) // Lọc CreatedAt.
-    { // Mở khối GetByPostIdPagedAsync.
-        var q = WhereCreatedAtRange( // Áp khoảng thời gian.
-            _context.Comments // DbSet Comments.
-                .AsNoTracking() // Đọc không track.
-                .Where(c => c.PostId == postId), // Lọc WHERE PostId = tham số (một bài viết).
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var total = await q.LongCountAsync(cancellationToken); // Đếm tổng comment của post đó.
-        var items = await q // Cùng bộ lọc post.
-            .OrderBy(c => c.CreatedAt) // Sắp theo thời gian trong post.
-            .ThenBy(c => c.Id) // Tie-breaker theo Id.
-            .Skip((page - 1) * pageSize) // Phân trang: bỏ qua các dòng trước trang hiện tại.
-            .Take(pageSize) // Lấy đúng kích thước trang.
-            .ToListAsync(cancellationToken); // Thực thi SQL và trả List.
-        return (items, total); // Tuple trang và tổng trong post.
-    } // Kết thúc GetByPostIdPagedAsync.
-
-    public async Task<(List<Comment> Items, long TotalCount)> GetRootCommentsPagedAsync( // Phân trang comment gốc toàn hệ thống.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default, // Hủy.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt của gốc.
-        DateTime? createdAtTo = null) // Lọc CreatedAt của gốc.
-    { // Mở khối GetRootCommentsPagedAsync.
-        var q = WhereCreatedAtRange( // Khoảng thời gian trên gốc.
-            _context.Comments // DbSet.
-                .AsNoTracking() // Không track.
-                .Where(c => c.ParentId == null), // Chỉ comment gốc (không có cha).
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var total = await q.LongCountAsync(cancellationToken); // Đếm số gốc toàn hệ thống.
-        var items = await q // Tiếp tục từ cùng IQueryable q.
-            .OrderBy(c => c.PostId) // Gốc sắp theo bài viết.
-            .ThenBy(c => c.CreatedAt) // Rồi theo thời gian.
-            .ThenBy(c => c.Id) // Rồi Id.
-            .Skip((page - 1) * pageSize) // OFFSET theo trang.
-            .Take(pageSize) // Giới hạn số dòng.
-            .ToListAsync(cancellationToken); // Thực thi và materialize.
-        return (items, total); // Trả trang gốc và tổng số gốc.
-    } // Kết thúc GetRootCommentsPagedAsync.
-
-    public async Task<(List<Comment> Items, long TotalCount)> GetRootsByPostIdPagedAsync( // Gốc trong một post, phân trang.
-        Guid postId, // Bài viết.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default, // Hủy.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt gốc.
-        DateTime? createdAtTo = null) // Lọc CreatedAt gốc.
-    { // Mở khối GetRootsByPostIdPagedAsync.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments // DbSet.
-                .AsNoTracking() // Không track.
-                .Where(c => c.PostId == postId && c.ParentId == null), // Gốc trong một post cụ thể.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var total = await q.LongCountAsync(cancellationToken); // Đếm số gốc trong post.
-        var items = await q // Tiếp từ q.
-            .OrderBy(c => c.CreatedAt) // Thứ tự gốc theo thời gian.
-            .ThenBy(c => c.Id) // Tie-breaker.
-            .Skip((page - 1) * pageSize) // Phân trang.
-            .Take(pageSize) // Kích thước trang.
-            .ToListAsync(cancellationToken); // Thực thi SELECT.
-        return (items, total); // Trả trang gốc và tổng gốc trong post.
-    } // Kết thúc GetRootsByPostIdPagedAsync.
-
-    public async Task<(List<Comment> Items, long TotalCount)> SearchByContentPagedAsync( // Tìm theo nội dung, toàn hệ thống.
-        string contentContains, // Chuỗi con cần chứa trong Content.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
-        CancellationToken cancellationToken = default, // Hủy.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt.
-        DateTime? createdAtTo = null) // Lọc CreatedAt.
-    { // Mở khối SearchByContentPagedAsync.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments // DbSet.
-                .AsNoTracking() // Không track.
-                .Where(c => c.Content.Contains(contentContains)), // EF dịch Contains thành LIKE.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var total = await q.LongCountAsync(cancellationToken); // Đếm số khớp toàn cục.
-        var items = await q // Tiếp từ q.
-            .OrderBy(c => c.PostId) // Sắp kết quả tìm kiếm theo post.
-            .ThenBy(c => c.CreatedAt) // Rồi thời gian.
-            .ThenBy(c => c.Id) // Rồi Id.
-            .Skip((page - 1) * pageSize) // Phân trang.
-            .Take(pageSize) // Giới hạn trang.
-            .ToListAsync(cancellationToken); // Materialize.
-        return (items, total); // Trả trang khớp và tổng khớp.
-    } // Kết thúc SearchByContentPagedAsync.
-
-    public async Task<List<Comment>> GetCommentsForPostsAsync( // Một SELECT cho nhiều post (IN PostId).
-        IReadOnlyCollection<Guid> postIds, // Tập Id bài viết.
-        CancellationToken cancellationToken = default) // Hủy.
-    { // Mở khối GetCommentsForPostsAsync.
-        if (postIds.Count == 0) // Không có post nào cần nạp.
-        { // Mở khối.
-            return new List<Comment>(); // Trả list rỗng, không tạo câu SQL IN rỗng.
-        } // Kết thúc nhánh rỗng.
-
-        return await _context.Comments // DbSet.
-            .AsNoTracking() // Không track.
-            .Where(c => postIds.Contains(c.PostId)) // WHERE PostId IN (...danh sách guid...).
-            .OrderBy(c => c.PostId) // Sắp theo post để nhóm tự nhiên khi đọc.
-            .ThenBy(c => c.CreatedAt) // Trong post theo thời gian.
-            .ThenBy(c => c.Id) // Tie-breaker.
-            .ToListAsync(cancellationToken); // Một SELECT trả toàn bộ comment thuộc các post đó.
-    } // Kết thúc GetCommentsForPostsAsync.
-
-    public async Task<List<Comment>> GetByPostIdAsync(Guid postId) // Toàn comment một post, không track.
-    { // Mở khối GetByPostIdAsync.
-        return await _context.Comments // DbSet.
-            .AsNoTracking() // Không track.
-            .Where(x => x.PostId == postId) // Một post.
-            .OrderBy(x => x.CreatedAt) // Thứ tự thời gian.
-            .ThenBy(x => x.Id) // Tie-breaker.
-            .ToListAsync(); // Thực thi SELECT toàn bộ comment của post (có thể lớn).
-    } // Kết thúc GetByPostIdAsync.
-
-    // Nạp mọi comment thuộc post với trạng thái track — phục vụ cập nhật PostId cùng lúc cho cả tập con cây.
-    public async Task<List<Comment>> GetByPostIdTrackedAsync( // Truy vấn tracked để SaveChanges cập nhật hàng loạt.
-        Guid postId, // Bài viết.
-        CancellationToken cancellationToken = default) => // Biểu thức thân phương thức bất đồng bộ.
-        await _context.Comments // DbSet (tracked mặc định khi không AsNoTracking).
-            .Where(x => x.PostId == postId) // Lọc theo post.
-            .OrderBy(x => x.CreatedAt) // Thứ tự ổn định.
-            .ThenBy(x => x.Id) // Tie-breaker.
-            .ToListAsync(cancellationToken); // Materialize danh sách tracked.
-
-    public Task<CommentDto?> GetByIdForReadAsync(Guid id, CancellationToken cancellationToken = default) => // Chiếu một comment sang DTO.
+    // [02] Route: GET /api/comments/{id} (service cũng tái dùng cho đọc theo post nội bộ).
+    public Task<CommentDto?> GetCommentByIdRouteReadAsync(Guid id, Guid? postId = null, CancellationToken cancellationToken = default) => // Chiếu một comment sang DTO.
         _context.Comments // DbSet.
             .AsNoTracking() // Không track.
-            .Where(c => c.Id == id) // Lọc một khóa chính.
+            .Where(c => c.Id == id && (postId == null || c.PostId == postId)) // Lọc theo id, tùy chọn thêm postId.
             .Select(c => new CommentDto // Chiếu thẳng sang DTO trong SQL (không SELECT * entity đầy đủ).
             { // Mở khối initializer.
                 Id = c.Id, // Cột Id vào DTO.
@@ -252,366 +68,148 @@ public class CommentRepository : ICommentRepository
             }) // Kết thúc projection object.
             .FirstOrDefaultAsync(cancellationToken); // SELECT TOP 1 ... hoặc tương đương; null nếu không có.
 
-    public Task<CommentDto?> GetByIdForReadInPostAsync(Guid postId, Guid commentId, CancellationToken cancellationToken = default) => // Đọc trong phạm vi post.
-        _context.Comments // DbSet.
-            .AsNoTracking() // Không track.
-            .Where(c => c.Id == commentId && c.PostId == postId) // AND hai điều kiện: đúng comment và đúng post.
-            .Select(c => new CommentDto // Projection.
-            { // Mở khối initializer.
-                Id = c.Id, // Id.
-                Content = c.Content, // Nội dung.
-                CreatedAt = c.CreatedAt, // Thời gian.
-                PostId = c.PostId, // Post.
-                UserId = c.UserId, // User.
-                ParentId = c.ParentId // Cha.
-            }) // Kết thúc anonymous projection.
-            .FirstOrDefaultAsync(cancellationToken); // Một dòng hoặc null.
-
-    public async Task<(List<Comment> Items, long TotalCount)> SearchByContentInPostPagedAsync( // Tìm nội dung trong một post.
-        Guid postId, // Bài viết.
-        string contentContains, // Chuỗi con.
+    // [03] Route: GET /api/comments/user/{userId}.
+    public async Task<(List<Comment> Items, long TotalCount)> GetCommentsByUserRoutePagedAsync( // Phân trang comment của một user.
+        Guid userId, // Tác giả (UserId).
         int page, // Trang.
         int pageSize, // Cỡ trang.
         CancellationToken cancellationToken = default, // Hủy.
         DateTime? createdAtFrom = null, // Lọc CreatedAt.
         DateTime? createdAtTo = null) // Lọc CreatedAt.
-    { // Mở khối SearchByContentInPostPagedAsync.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments // DbSet.
-                .AsNoTracking() // Không track.
-                .Where(c => c.PostId == postId && c.Content.Contains(contentContains)), // Post + Contains.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var total = await q.LongCountAsync(cancellationToken); // Đếm khớp trong post.
-        var items = await q // Tiếp từ q.
-            .OrderBy(c => c.CreatedAt) // Sắp theo thời gian trong post.
+    { // Mở khối GetByUserIdPagedAsync.
+        var q = ApplyUniversalFilter(
+            _context.Comments.AsNoTracking(),
+            userId: userId,
+            createdAtFrom: createdAtFrom,
+            createdAtTo: createdAtTo); // Thu hẹp theo tác giả + khoảng thời gian.
+        var total = await q.LongCountAsync(cancellationToken); // Đếm khớp.
+        var items = await q // Cùng bộ lọc.
+            .OrderBy(c => c.PostId) // Ổn định theo bài.
+            .ThenBy(c => c.CreatedAt) // Rồi thời gian.
             .ThenBy(c => c.Id) // Tie-breaker.
             .Skip((page - 1) * pageSize) // OFFSET.
             .Take(pageSize) // FETCH.
-            .ToListAsync(cancellationToken); // Materialize trang.
-        return (items, total); // Trả trang và tổng trong post.
-    } // Kết thúc SearchByContentInPostPagedAsync.
+            .ToListAsync(cancellationToken); // Trang.
+        return (items, total); // Tuple.
+    } // Kết thúc GetCommentsByUserRoutePagedAsync.
 
-    // Toàn bộ dòng khớp nội dung (không OFFSET) — khi paginationEnable=false.
-    public async Task<List<Comment>> SearchByContentAllAsync( // Tìm Contains toàn bảng.
-        string contentContains, // Chuỗi con.
-        CancellationToken cancellationToken = default, // Hủy.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt.
-        DateTime? createdAtTo = null) // Lọc CreatedAt.
-    { // Mở khối.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments.AsNoTracking().Where(c => c.Content.Contains(contentContains)), // LIKE %term%.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        return await q // Tiếp từ q.
-            .OrderBy(c => c.PostId) // Thống nhất với bản phân trang.
-            .ThenBy(c => c.CreatedAt) // Thời gian.
-            .ThenBy(c => c.Id) // Id.
-            .ToListAsync(cancellationToken); // Một SELECT đầy đủ.
-    } // Kết thúc SearchByContentAllAsync.
+    // [04] Route: POST /api/comments
 
-    // Toàn bộ dòng khớp nội dung trong một post (không OFFSET).
-    public async Task<List<Comment>> SearchByContentInPostAllAsync( // Tìm trong một bài.
-        Guid postId, // Phạm vi post.
-        string contentContains, // Chuỗi con.
-        CancellationToken cancellationToken = default, // Hủy.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt.
-        DateTime? createdAtTo = null) // Lọc CreatedAt.
-    { // Mở khối.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments.AsNoTracking().Where(c => c.PostId == postId && c.Content.Contains(contentContains)), // AND post + Contains.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        return await q // Tiếp từ q.
-            .OrderBy(c => c.CreatedAt) // Trong post theo thời gian.
-            .ThenBy(c => c.Id) // Tie-breaker.
-            .ToListAsync(cancellationToken); // Một SELECT đầy đủ trong post.
-    } // Kết thúc SearchByContentInPostAllAsync.
+    // [05] Route: PUT /api/comments/{id}
 
-    public async Task<Comment?> GetByIdAsync(Guid id) // Nạp entity có thể tracked (sửa/xóa).
-    { // Mở khối GetByIdAsync.
-        return await _context.Comments // DbSet (mặc định có thể track entity).
-            .FirstOrDefaultAsync(x => x.Id == id); // Sinh SELECT TOP 1 ... WHERE Id = ...; entity có thể tracked để sửa/xóa.
-    } // Kết thúc GetByIdAsync.
+    // [06] Route: PUT /api/admin/comments/{id} (nạp tracked theo post để đổi subtree postId).
+    public async Task<List<Comment>> GetCommentsByPostTrackedForAdminRouteAsync( // Truy vấn tracked để SaveChanges cập nhật hàng loạt.
+        Guid postId, // Bài viết.
+        CancellationToken cancellationToken = default) => // Biểu thức thân phương thức bất đồng bộ.
+        await _context.Comments // DbSet (tracked mặc định khi không AsNoTracking).
+            .Where(x => x.PostId == postId) // Lọc theo post.
+            .OrderBy(x => x.CreatedAt) // Thứ tự ổn định.
+            .ThenBy(x => x.Id) // Tie-breaker.
+            .ToListAsync(cancellationToken); // Materialize danh sách tracked.
 
-    public async Task AddAsync(Comment comment) // Đánh dấu thêm entity.
-    { // Mở khối AddAsync.
-        await _context.Comments.AddAsync(comment); // Đánh dấu thêm vào DbContext; SQL khi SaveChanges.
-    } // Kết thúc AddAsync.
+    // [07] Route: DELETE /api/comments/{id}
 
-    public void Update(Comment comment) // Đánh dấu entity đã chỉnh sửa.
-    { // Mở khối Update.
-        _context.Comments.Update(comment); // Đánh dấu entity đã sửa; SQL khi SaveChanges.
-    } // Kết thúc Update.
+    // [08][10][12] Route: dữ liệu thô EF — service gọi với rootsOnly/loadCommentsForRootPosts tương ứng từng route.
+    public async Task<(List<Comment> Items, long TotalCount, List<Comment> RelatedComments)> LoadRawFlatAsync(
+        Guid? postId, // Lọc theo bài viết; null = toàn hệ thống.
+        int page, // Số trang bắt đầu từ 1.
+        int pageSize, // Số bản ghi mỗi trang.
+        bool rootsOnly, // true: chỉ lấy comment gốc (ParentId == null); false: mọi comment khớp bộ lọc (ví dụ [08]).
+        bool loadCommentsForRootPosts, // true: sau khi có trang gốc, nạp thêm mọi comment trong các PostId của trang đó ([12]).
+        CancellationToken cancellationToken = default, // Cho phép hủy truy vấn.
+        DateTime? createdAtFrom = null, // Cận dưới CreatedAt (bao gồm).
+        DateTime? createdAtTo = null) // Cận trên CreatedAt (bao gồm).
+    { // Bắt đầu pipeline nạp dữ liệu thô entity cho nhánh EF flat/tree.
+        var q = ApplyUniversalFilter( // Gom mọi điều kiện lọc vào một IQueryable<Comment>.
+            _context.Comments.AsNoTracking(), // Chỉ đọc; không theo dõi thay đổi (hiệu năng + an toàn cho read-only).
+            postId: postId, // Thu hẹp theo PostId nếu tham số có giá trị.
+            isRoot: rootsOnly ? true : null, // Nếu rootsOnly: ép chỉ gốc; null: không thêm điều kiện gốc/con.
+            createdAtFrom: createdAtFrom, // Áp lọc ngày từ (nếu có).
+            createdAtTo: createdAtTo); // Áp lọc ngày đến (nếu có).
+        var total = await q.LongCountAsync(cancellationToken); // Đếm tổng bản ghi khớp bộ lọc (phục vụ phân trang ở service/API).
+        var items = await q // Dùng lại cùng query đã lọc để lấy đúng một trang.
+            .OrderBy(c => c.PostId) // Sắp ổn định theo bài viết trước.
+            .ThenBy(c => c.CreatedAt) // Trong cùng post, theo thời điểm tạo.
+            .ThenBy(c => c.Id) // Tie-break khi CreatedAt trùng.
+            .Skip((page - 1) * pageSize) // Bỏ qua các dòng của các trang trước (OFFSET).
+            .Take(pageSize) // Giới hạn số dòng (FETCH).
+            .ToListAsync(cancellationToken); // Thực thi SQL và materialize List<Comment>.
 
-    public void Remove(Comment comment) // Đánh dấu xóa entity.
-    { // Mở khối Remove.
-        _context.Comments.Remove(comment); // Đánh dấu xóa; SQL khi SaveChanges.
-    } // Kết thúc Remove.
+        if (!loadCommentsForRootPosts || !rootsOnly || items.Count == 0) // Không cần nạp thêm “cây”, hoặc không phải chế độ gốc, hoặc trang rỗng.
+        {
+            return (items, total, new List<Comment>()); // Trả trang + tổng; RelatedComments để trống.
+        }
 
-    public async Task<bool> ExistsAsync(Guid id) // Kiểm tra tồn tại theo khóa chính.
-    { // Mở khối ExistsAsync.
-        return await _context.Comments // DbSet.
-            .AsNoTracking() // Không cần track cho kiểm tra tồn tại.
-            .AnyAsync(x => x.Id == id); // Sinh EXISTS/WHERE giới hạn 1 bit kết quả.
-    } // Kết thúc ExistsAsync.
+        var postIds = items.Select(x => x.PostId).Distinct().ToList(); // Tập PostId duy nhất xuất hiện trên trang gốc hiện tại.
+        var related = await GetCommentsForPostsAsync(postIds, cancellationToken); // Một truy vấn IN: mọi comment thuộc các post đó (phục vụ build tree/flatten ở service).
+        return (items, total, related); // Trả ba thành phần: trang gốc, tổng gốc, toàn bộ comment thô liên quan.
+    } // Kết thúc LoadRawFlatAsync.
 
-    public async Task<bool> PostExistsAsync(Guid postId) // Kiểm tra bài viết tồn tại.
-    { // Mở khối PostExistsAsync.
-        return await _context.Posts // DbSet Posts.
-            .AsNoTracking() // Chỉ đọc.
-            .AnyAsync(x => x.Id == postId); // Kiểm tra một Id post tồn tại.
-    } // Kết thúc PostExistsAsync.
+    // [09][11][13] Route: dữ liệu thô CTE (BFS + Level).
+    public async Task<List<CommentFlatDto>> LoadRawCteAsync(
+        Guid? postId, // Một post hoặc null để toàn cục.
+        CancellationToken cancellationToken = default, // Hủy truy vấn.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt trên từng hàng phẳng sau BFS.
+        DateTime? createdAtTo = null) // Lọc CreatedAt trên từng hàng phẳng sau BFS.
+    { // Bắt đầu tái tạo semantics CTE trong bộ nhớ (không đọc file .sql).
+        var allComments = await _context.Comments // Truy vấn DbSet Comments.
+            .AsNoTracking() // Không track entity.
+            .ToListAsync(cancellationToken); // Nạp toàn bộ bảng vào RAM (mô hình demo/so sánh).
 
-    public async Task<bool> UserExistsAsync(Guid userId) // Kiểm tra người dùng tồn tại.
-    { // Mở khối UserExistsAsync.
-        return await _context.Users // DbSet Users (Identity).
-            .AsNoTracking() // Chỉ đọc.
-            .AnyAsync(x => x.Id == userId); // Kiểm tra user tồn tại.
-    } // Kết thúc UserExistsAsync.
+        var source = postId is { } pid // Kiểm tra pattern: có PostId cụ thể.
+            ? allComments.Where(c => c.PostId == pid).ToList() // Thu hẹp danh sách entity theo một bài.
+            : allComments; // Giữ toàn bộ nếu không truyền postId.
 
-    public async Task<bool> ParentExistsAsync(Guid parentId, Guid postId) // Cha phải cùng post.
-    { // Mở khối ParentExistsAsync.
-        return await _context.Comments // DbSet Comments.
-            .AsNoTracking() // Chỉ đọc.
-            .AnyAsync(x => x.Id == parentId && x.PostId == postId); // Cha phải cùng post với con.
-    } // Kết thúc ParentExistsAsync.
+        var rows = BuildCteRows(source, c => c.ParentId == null); // BFS từ mọi gốc: sinh danh sách phẳng có Level.
+        var createdAtPredicate = BuildCteDateFilter(createdAtFrom, createdAtTo); // Biên dịch predicate lọc ngày trên CommentFlatDto.
+        var result = rows // Chuỗi xử lý LINQ trên bộ nhớ.
+            .Where(createdAtPredicate) // Giữ hàng có CreatedAt trong khoảng [from, to] nếu có.
+            .OrderBy(x => x.PostId) // Thứ tự giống pipeline trả về: theo bài.
+            .ThenBy(x => x.Level) // Rồi theo độ sâu.
+            .ThenBy(x => x.CreatedAt) // Rồi thời gian.
+            .ThenBy(x => x.Id) // Cuối cùng theo Id để thứ tự tuyệt đối.
+            .ToList(); // Materialize List<CommentFlatDto>.
 
-    public async Task<List<CommentFlatDto>> GetTreeRowsByCteAsync( // CTE một post qua ADO.
-        Guid postId, // Post.
-        CancellationToken cancellationToken = default, // Hủy.
-        DateTime? createdAtFrom = null, // Lọc hàng kết quả theo CreatedAt (SQL WHERE ngoài cùng).
-        DateTime? createdAtTo = null) // Cùng khoảng inclusive.
-    { // Mở khối GetTreeRowsByCteAsync.
-        var sql = QueryFileReader.ReadSql("CommentTree_ByPost.sql"); // File có @postId, @createdAtFrom, @createdAtTo.
-
-        var result = new List<CommentFlatDto>(); // Bộ chứa các hàng đọc từ reader.
-        DbConnection connection = _context.Database.GetDbConnection(); // Connection context.
-        var shouldClose = connection.State != ConnectionState.Open; // Cờ đóng.
-
-        if (shouldClose) // Mở nếu cần.
-        { // Mở khối.
-            await _context.Database.OpenConnectionAsync(cancellationToken); // Mở kết nối.
-        } // Kết thúc if.
-
-        try // Thực thi ADO.
-        { // Mở try.
-            await using var command = connection.CreateCommand(); // Lệnh ADO.
-            command.CommandText = sql; // Script CTE.
-
-            var postParam = command.CreateParameter(); // @postId.
-            postParam.ParameterName = "@postId"; // Tên SQL.
-            postParam.Value = postId; // Guid.
-            command.Parameters.Add(postParam); // Gắn.
-
-            AddNullableDateParameter(command, "@createdAtFrom", createdAtFrom); // Nullable datetime2.
-            AddNullableDateParameter(command, "@createdAtTo", createdAtTo); // Nullable datetime2.
-
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken); // Reader.
-            RequestPerformanceMiddleware.RecordAdoSqlCommand(_httpContextAccessor.HttpContext); // Đếm SQL thô.
-
-            while (await reader.ReadAsync(cancellationToken)) // Từng hàng.
-            { // Mở vòng lặp.
-                result.Add(MapCommentFlatRow(reader)); // Map DTO.
-            } // Kết thúc while.
-
-            return result; // Danh sách hàng CTE.
-        } // Kết thúc try.
-        finally // Đóng connection nếu method mở.
-        { // Mở finally.
-            if (shouldClose) // Đã mở ở đây.
-            { // Mở khối.
-                await _context.Database.CloseConnectionAsync(); // Đóng.
-            } // Kết thúc if.
-        } // Kết thúc finally.
-    } // Kết thúc GetTreeRowsByCteAsync.
-
-    public async Task<List<CommentFlatDto>> GetTreeRowsByCteAllAsync( // CTE toàn hệ.
-        CancellationToken cancellationToken = default, // Hủy.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt trên kết quả CTE.
-        DateTime? createdAtTo = null) // Inclusive.
-    { // Mở khối GetTreeRowsByCteAllAsync.
-        var sql = QueryFileReader.ReadSql("CommentTree_AllPosts.sql"); // @createdAtFrom / @createdAtTo.
-
-        var result = new List<CommentFlatDto>(); // Kết quả.
-        DbConnection connection = _context.Database.GetDbConnection(); // Connection.
-        var shouldClose = connection.State != ConnectionState.Open; // Cờ.
-
-        if (shouldClose) // Mở.
-        { // Mở khối.
-            await _context.Database.OpenConnectionAsync(cancellationToken); // Mở.
-        } // Kết thúc if.
-
-        try // ADO.
-        { // Mở try.
-            await using var command = connection.CreateCommand(); // Command.
-            command.CommandText = sql; // Text.
-
-            AddNullableDateParameter(command, "@createdAtFrom", createdAtFrom); // From.
-            AddNullableDateParameter(command, "@createdAtTo", createdAtTo); // To.
-
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken); // Reader.
-            RequestPerformanceMiddleware.RecordAdoSqlCommand(_httpContextAccessor.HttpContext); // Đếm.
-
-            while (await reader.ReadAsync(cancellationToken)) // Hàng.
-            { // Mở khối.
-                result.Add(MapCommentFlatRow(reader)); // Map.
-            } // Kết thúc while.
-
-            return result; // List đầy đủ.
-        } // Kết thúc try.
-        finally // Dọn.
-        { // Mở finally.
-            if (shouldClose) // Đóng.
-            { // Mở khối.
-                await _context.Database.CloseConnectionAsync(); // Close.
-            } // Kết thúc if.
-        } // Kết thúc finally.
-    } // Kết thúc GetTreeRowsByCteAllAsync.
-
-    private static CommentFlatDto MapCommentFlatRow(DbDataReader reader) // Ánh xạ một hàng reader → DTO (thứ tự cột cố định).
-    { // Mở khối MapCommentFlatRow.
-        return new CommentFlatDto // Tạo DTO từ một hàng reader (thứ tự cột khớp CommentTree_*.sql).
-        { // Mở initializer.
-            Id = reader.GetGuid(0), // Cột 0: Id.
-            Content = reader.GetString(1), // Cột 1: Content.
-            CreatedAt = reader.GetDateTime(2), // Cột 2: CreatedAt.
-            ParentId = reader.IsDBNull(3) ? null : reader.GetGuid(3), // Cột 3: ParentId nullable.
-            PostId = reader.GetGuid(4), // Cột 4: PostId.
-            UserId = reader.GetGuid(5), // Cột 5: UserId.
-            Level = reader.GetInt32(6) // Cột 6: Level.
-        }; // Kết thúc khởi tạo DTO.
-    } // Kết thúc MapCommentFlatRow.
+        RequestPerformanceMiddleware.RecordAdoSqlCommand(_httpContextAccessor.HttpContext); // Ghi nhận một “lệnh” cho thống kê request (demo).
+        return result; // Trả dữ liệu thô cho service xử lý tree/flatten/phân trang.
+    } // Kết thúc LoadRawCteAsync.
 
     // --- Demo loading (lazy / eager / explicit / projection) ---
     // Hợp đồng chung: cùng một CommentLoadingDemoDto — chỉ cần Post.Title, User.UserName, và số Children trực tiếp.
     // Không nạp Parent: DTO không hiển thị cha; nạp Parent ở một nhánh làm lệch số round-trip và mục tiêu so sánh.
     // Phân trang: cùng COUNT toàn bảng, cùng OrderBy PostId → CreatedAt → Id, cùng Skip/Take.
 
-    public async Task<CommentLoadingDemoDto?> GetCommentLazyLoadingDemoAsync(Guid id, CancellationToken cancellationToken = default) // Demo lazy.
-    { // Mở khối.
-        var comment = await _context.Comments // DbSet không AsNoTracking → entity tracked.
-            .FirstOrDefaultAsync(c => c.Id == id, cancellationToken); // Một SELECT nạp comment; navigation chưa nạp.
-        if (comment is null) // Không tìm thấy Id.
-        { // Mở khối.
-            return null; // Báo không có dữ liệu demo.
-        } // Kết thúc if.
-
-        // Thứ tự giống explicit: Post → User → Children (mỗi bước một round-trip lazy khi proxy bật).
-        var postTitle = comment.Post?.Title; // Truy cập Post có thể phát sinh thêm SELECT lazy (proxy).
-        var authorUserName = comment.User?.UserName; // Truy cập User có thể phát sinh thêm SELECT.
-        var childrenCount = comment.Children.Count; // Đếm con: lazy tương đương một truy vấn tới Children như explicit LoadAsync collection.
-
-        return new CommentLoadingDemoDto // Gói kết quả demo (không phải truy vấn SQL).
-        { // Mở initializer.
-            LoadingStrategy = "lazy", // Nhãn chiến lược nạp.
-            CommentId = comment.Id, // Id comment.
-            Content = comment.Content, // Nội dung.
-            PostId = comment.PostId, // Post.
-            PostTitle = postTitle, // Tiêu đề (có thể lazy).
-            UserId = comment.UserId, // User.
-            AuthorUserName = authorUserName, // Tên đăng nhập (có thể lazy).
-            ParentId = comment.ParentId, // Cha.
-            ChildrenCount = childrenCount // Số con (có thể lazy).
-        }; // Kết thúc DTO.
-    } // Kết thúc GetCommentLazyLoadingDemoAsync.
-
-    public async Task<CommentLoadingDemoDto?> GetCommentEagerLoadingDemoAsync(Guid id, CancellationToken cancellationToken = default) // Demo eager.
-    { // Mở khối.
-        var comment = await _context.Comments // DbSet.
-            .Include(c => c.Post) // Yêu cầu JOIN/nạp Post trong truy vấn (hoặc truy vấn split).
-            .Include(c => c.User) // Nạp User.
-            .Include(c => c.Children) // Nạp tập con (cùng phạm vi với lazy: không Include Parent vì DTO không dùng).
-            .AsSplitQuery() // Tách thành nhiều SELECT để tránh nhân bản hàng.
-            .AsNoTracking() // Không track sau khi đọc.
-            .FirstOrDefaultAsync(c => c.Id == id, cancellationToken); // Thực thi chuỗi Include + điều kiện Id.
-        if (comment is null) // Không có bản ghi.
-        { // Mở khối.
-            return null; // Null cho caller.
-        } // Kết thúc if.
-
-        return new CommentLoadingDemoDto // DTO kết quả.
-        { // Mở initializer.
-            LoadingStrategy = "eager", // Chiến lược nạp sớm.
-            CommentId = comment.Id, // Id.
-            Content = comment.Content, // Nội dung.
-            PostId = comment.PostId, // Post.
-            PostTitle = comment.Post?.Title, // Đã nạp sẵn, không lazy thêm.
-            UserId = comment.UserId, // User.
-            AuthorUserName = comment.User?.UserName, // Đã nạp.
-            ParentId = comment.ParentId, // Cha.
-            ChildrenCount = comment.Children.Count // Collection đã nạp, đếm trong bộ nhớ.
-        }; // Kết thúc DTO.
-    } // Kết thúc GetCommentEagerLoadingDemoAsync.
-
-    public async Task<CommentLoadingDemoDto?> GetCommentExplicitLoadingDemoAsync(Guid id, CancellationToken cancellationToken = default) // Demo explicit.
-    { // Mở khối.
-        var comment = await _context.Comments // DbSet tracked.
-            .FirstOrDefaultAsync(c => c.Id == id, cancellationToken); // SELECT đầu tiên chỉ comment.
-        if (comment is null) // Không tìm thấy.
-        { // Mở khối.
-            return null; // Null.
-        } // Kết thúc if.
-
-        // Cùng thứ tự nạp với thứ tự lazy kích hoạt: Post → User → Children (bỏ Parent — khớp DTO).
-        await _context.Entry(comment).Reference(c => c.Post).LoadAsync(cancellationToken); // SELECT nạp Post theo FK.
-        await _context.Entry(comment).Reference(c => c.User).LoadAsync(cancellationToken); // SELECT nạp User.
-        await _context.Entry(comment).Collection(c => c.Children).LoadAsync(cancellationToken); // SELECT nạp danh sách con.
-
-        return new CommentLoadingDemoDto // DTO sau khi nạp rõ ràng.
-        { // Mở initializer.
-            LoadingStrategy = "explicit", // Chiến lược nạp tường minh.
-            CommentId = comment.Id, // Id.
-            Content = comment.Content, // Nội dung.
-            PostId = comment.PostId, // Post.
-            PostTitle = comment.Post?.Title, // Đã LoadAsync.
-            UserId = comment.UserId, // User.
-            AuthorUserName = comment.User?.UserName, // Đã LoadAsync.
-            ParentId = comment.ParentId, // Cha.
-            ChildrenCount = comment.Children.Count // Đã nạp collection.
-        }; // Kết thúc DTO.
-    } // Kết thúc GetCommentExplicitLoadingDemoAsync.
-
-    public Task<CommentLoadingDemoDto?> GetCommentProjectionDemoAsync(Guid id, CancellationToken cancellationToken = default) => // Một query chiếu DTO.
-        _context.Comments // DbSet.
-            .AsNoTracking() // Không track.
-            .Where(c => c.Id == id) // Một Id.
-            .Select(c => new CommentLoadingDemoDto // Toàn bộ trong một biểu thức SQL.
-            { // Mở initializer.
-                LoadingStrategy = "projection", // Nhãn projection.
-                CommentId = c.Id, // Id.
-                Content = c.Content, // Nội dung.
-                PostId = c.PostId, // Post.
-                PostTitle = c.Post != null ? c.Post.Title : null, // LEFT JOIN hoặc subquery Post.Title.
-                UserId = c.UserId, // User.
-                AuthorUserName = c.User != null ? c.User.UserName : null, // LEFT JOIN User.
-                ParentId = c.ParentId, // Cha.
-                ChildrenCount = c.Children.Count() // COUNT(*) con trong SQL (IQueryable Count).
-            }) // Kết thúc projection.
-            .FirstOrDefaultAsync(cancellationToken); // Thực thi một SELECT chiếu DTO.
-
-    public async Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsLazyLoadingDemoPagedAsync( // Demo phân trang lazy.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
+    // [14] Route: GET /api/comments/demo/lazy-loading (mọi mode paginationEnabled).
+    public async Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsLazyLoadingDemoRouteAsync( // Demo lazy một hàm cho mọi mode.
+        bool paginationEnabled, // true = phân trang, false = lấy toàn bộ.
+        int page, // Trang (chỉ dùng khi paginationEnabled=true).
+        int pageSize, // Cỡ trang (chỉ dùng khi paginationEnabled=true).
         CancellationToken cancellationToken = default, // Hủy.
         Guid? postId = null, // Lọc theo bài (tùy chọn).
         DateTime? createdAtFrom = null, // Lọc CreatedAt.
         DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments // Tracked set (không AsNoTracking) để lazy sau này.
-                .Where(c => postId == null || c.PostId == postId), // Nếu có postId thì thu hẹp phạm vi demo.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var total = await q // Đếm trên toàn bộ Comments tracked queryable.
-            .LongCountAsync(cancellationToken); // COUNT_BIG toàn bảng (hoặc không lọc).
-        var rows = await q // Lại từ q.
-            .OrderBy(c => c.PostId) // ORDER BY PostId.
-            .ThenBy(c => c.CreatedAt) // Then CreatedAt.
-            .ThenBy(c => c.Id) // Then Id.
-            .Skip((page - 1) * pageSize) // OFFSET.
-            .Take(pageSize) // FETCH.
-            .ToListAsync(cancellationToken); // SELECT một trang entity tracked.
+        var q = ApplyUniversalFilter(
+            _context.Comments, // Tracked set (không AsNoTracking) để lazy sau này.
+            postId: postId,
+            createdAtFrom: createdAtFrom,
+            createdAtTo: createdAtTo); // Thu hẹp theo postId (nếu có) + khoảng thời gian.
+        var ordered = q // Query cơ sở dùng chung cho cả hai mode.
+            .OrderBy(c => c.PostId) // Sắp theo bài để thứ tự ổn định giữa các lần gọi.
+            .ThenBy(c => c.CreatedAt) // Trong cùng post, theo thời điểm tạo.
+            .ThenBy(c => c.Id); // Tie-break khi CreatedAt trùng.
+        List<Comment> rows; // Sẽ chứa dòng comment sau khi nạp (một trang hoặc toàn bộ).
+        long total; // Tổng số dòng dùng cho metadata phân trang hoặc totalCount unpaged.
+        if (paginationEnabled) // Nhánh bật Skip/Take.
+        {
+            total = await q.LongCountAsync(cancellationToken); // Đếm trên query gốc (trước OrderBy materialize) để tổng đúng bộ lọc.
+            rows = await ordered.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(cancellationToken); // Chỉ nạp một trang đã sắp.
+        }
+        else // Nhánh unpaged: lấy mọi dòng khớp filter.
+        {
+            rows = await ordered.ToListAsync(cancellationToken); // Nạp toàn bộ vào RAM (cẩn trọng kích thước dữ liệu).
+            total = rows.Count; // Tổng chính là số phần tử đã nạp.
+        }
 
         var list = new List<CommentLoadingDemoDto>(rows.Count); // Cấp phát sẵn dung lượng.
         foreach (var comment in rows) // Duyệt từng comment đã nạp.
@@ -621,6 +219,7 @@ public class CommentRepository : ICommentRepository
                 LoadingStrategy = "lazy", // Nhãn.
                 CommentId = comment.Id, // Id.
                 Content = comment.Content, // Nội dung.
+                CreatedAt = comment.CreatedAt, // Thời điểm tạo.
                 PostId = comment.PostId, // Post.
                 PostTitle = comment.Post?.Title, // Có thể lazy load Post.
                 UserId = comment.UserId, // User.
@@ -631,41 +230,45 @@ public class CommentRepository : ICommentRepository
         } // Kết thúc foreach.
 
         return (list, total); // Tuple kết quả và tổng.
-    } // Kết thúc GetCommentsLazyLoadingDemoPagedAsync.
+    } // Kết thúc GetCommentsLazyLoadingDemoRouteAsync.
 
-    public async Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsEagerLoadingDemoPagedAsync( // Phân trang eager.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
+    // [15] Route: GET /api/comments/demo/eager-loading (mọi mode paginationEnabled).
+    public async Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsEagerLoadingDemoRouteAsync( // Demo eager một hàm cho mọi mode.
+        bool paginationEnabled, // true = phân trang, false = lấy toàn bộ.
+        int page, // Trang (chỉ dùng khi paginationEnabled=true).
+        int pageSize, // Cỡ trang (chỉ dùng khi paginationEnabled=true).
         CancellationToken cancellationToken = default, // Hủy.
         Guid? postId = null, // Lọc post tùy chọn.
         DateTime? createdAtFrom = null, // Lọc CreatedAt.
         DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối.
-        var baseQuery = WhereCreatedAtRange( // Khoảng thời gian.
+        var baseQuery = ApplyUniversalFilter(
             _context.Comments // DbSet.
-                .AsNoTracking() // Không track.
-                .Where(c => postId == null || c.PostId == postId), // Thu hẹp theo PostId nếu client gửi.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var total = await baseQuery // Đếm trước khi Include để không đổi semantics lọc.
-            .LongCountAsync(cancellationToken); // COUNT.
-        var rows = await baseQuery // Cùng base không Include cho count, nhưng đây là query mới từ cùng baseQuery.
+                .AsNoTracking(), // Không track.
+            postId: postId,
+            createdAtFrom: createdAtFrom,
+            createdAtTo: createdAtTo); // Thu hẹp theo postId (nếu có) + khoảng thời gian.
+        var total = paginationEnabled // Nếu phân trang thì đếm trước trên query chưa Include (tránh đếm sai do join).
+            ? await baseQuery.LongCountAsync(cancellationToken) // Tổng dòng khớp filter thuần.
+            : 0L; // Unpaged: tạm 0; sẽ gán = list.Count sau khi nạp.
+        var query = baseQuery // Bắt đầu từ query đã lọc.
             .Include(c => c.Post) // Nạp Post.
             .Include(c => c.User) // Nạp User.
             .Include(c => c.Children) // Nạp Children (không Include Parent — đồng bộ demo).
             .AsSplitQuery() // Tách query.
             .OrderBy(c => c.PostId) // Sắp trang.
             .ThenBy(c => c.CreatedAt) // Thời gian.
-            .ThenBy(c => c.Id) // Id.
-            .Skip((page - 1) * pageSize) // OFFSET.
-            .Take(pageSize) // FETCH.
-            .ToListAsync(cancellationToken); // Thực thi chuỗi split + phân trang.
+            .ThenBy(c => c.Id); // Id.
+        var rows = paginationEnabled // Chọn nhánh materialize.
+            ? await query.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(cancellationToken) // Một trang sau Include.
+            : await query.ToListAsync(cancellationToken); // Toàn bộ sau Include (nhiều round-trip split).
 
         var list = rows.ConvertAll(comment => new CommentLoadingDemoDto // Ánh xạ trong RAM, không SQL.
         { // Mở initializer.
             LoadingStrategy = "eager", // Nhãn eager.
             CommentId = comment.Id, // Id.
             Content = comment.Content, // Nội dung.
+            CreatedAt = comment.CreatedAt, // Thời điểm tạo.
             PostId = comment.PostId, // Post.
             PostTitle = comment.Post?.Title, // Đã Include.
             UserId = comment.UserId, // User.
@@ -674,30 +277,44 @@ public class CommentRepository : ICommentRepository
             ChildrenCount = comment.Children.Count // Đã nạp collection.
         }); // Kết thúc ConvertAll.
 
+        if (!paginationEnabled) // Ở chế độ unpaged.
+        {
+            total = list.Count; // Tổng chính là số phần tử đã nạp và map.
+        }
         return (list, total); // Trả danh sách và tổng.
-    } // Kết thúc GetCommentsEagerLoadingDemoPagedAsync.
+    } // Kết thúc GetCommentsEagerLoadingDemoRouteAsync.
 
-    public async Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsExplicitLoadingDemoPagedAsync( // Phân trang explicit.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
+    // [16] Route: GET /api/comments/demo/explicit-loading (mọi mode paginationEnabled).
+    public async Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsExplicitLoadingDemoRouteAsync( // Demo explicit một hàm cho mọi mode.
+        bool paginationEnabled, // true = phân trang, false = lấy toàn bộ.
+        int page, // Trang (chỉ dùng khi paginationEnabled=true).
+        int pageSize, // Cỡ trang (chỉ dùng khi paginationEnabled=true).
         CancellationToken cancellationToken = default, // Hủy.
         Guid? postId = null, // Lọc post tùy chọn.
         DateTime? createdAtFrom = null, // Lọc CreatedAt.
         DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments // Tracked.
-                .Where(c => postId == null || c.PostId == postId), // Cùng phạm vi với lazy demo.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var total = await q.LongCountAsync(cancellationToken); // COUNT.
-        var rows = await q // Tiếp từ q.
+        var q = ApplyUniversalFilter(
+            _context.Comments, // Tracked.
+            postId: postId,
+            createdAtFrom: createdAtFrom,
+            createdAtTo: createdAtTo); // Cùng phạm vi với lazy demo.
+        var ordered = q // Query cơ sở dùng chung.
             .OrderBy(c => c.PostId) // Sắp post.
             .ThenBy(c => c.CreatedAt) // Thời gian.
-            .ThenBy(c => c.Id) // Id.
-            .Skip((page - 1) * pageSize) // OFFSET.
-            .Take(pageSize) // FETCH.
-            .ToListAsync(cancellationToken); // SELECT trang tracked.
+            .ThenBy(c => c.Id); // Id.
+        List<Comment> rows; // Buffer chứa entity sau khi nạp.
+        long total; // Tổng dòng hoặc độ dài list unpaged.
+        if (paginationEnabled) // Bật phân trang.
+        {
+            total = await q.LongCountAsync(cancellationToken); // COUNT trên filter gốc.
+            rows = await ordered.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(cancellationToken); // Một trang đã sắp.
+        }
+        else // Unpaged.
+        {
+            rows = await ordered.ToListAsync(cancellationToken); // Nạp mọi dòng khớp filter.
+            total = rows.Count; // Tổng = số phần tử.
+        }
 
         var list = new List<CommentLoadingDemoDto>(rows.Count); // Danh sách đích.
         foreach (var comment in rows) // Từng dòng trang.
@@ -712,6 +329,7 @@ public class CommentRepository : ICommentRepository
                 LoadingStrategy = "explicit", // Nhãn.
                 CommentId = comment.Id, // Id.
                 Content = comment.Content, // Nội dung.
+                CreatedAt = comment.CreatedAt, // Thời điểm tạo.
                 PostId = comment.PostId, // Post.
                 PostTitle = comment.Post?.Title, // Đã Load.
                 UserId = comment.UserId, // User.
@@ -722,206 +340,293 @@ public class CommentRepository : ICommentRepository
         } // Kết thúc foreach.
 
         return (list, total); // Trả tuple.
-    } // Kết thúc GetCommentsExplicitLoadingDemoPagedAsync.
+    } // Kết thúc GetCommentsExplicitLoadingDemoRouteAsync.
 
-    public async Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsProjectionDemoPagedAsync( // Phân trang projection.
-        int page, // Trang.
-        int pageSize, // Cỡ trang.
+    // [17] Route: GET /api/comments/demo/projection (mọi mode paginationEnabled).
+    public async Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsProjectionDemoRouteAsync( // Demo projection một hàm cho mọi mode.
+        bool paginationEnabled, // true = phân trang, false = lấy toàn bộ.
+        int page, // Trang (chỉ dùng khi paginationEnabled=true).
+        int pageSize, // Cỡ trang (chỉ dùng khi paginationEnabled=true).
         CancellationToken cancellationToken = default, // Hủy.
         Guid? postId = null, // Lọc post tùy chọn.
         DateTime? createdAtFrom = null, // Lọc CreatedAt.
         DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
+        var q = ApplyUniversalFilter(
             _context.Comments // DbSet.
-                .AsNoTracking() // Không track.
-                .Where(c => postId == null || c.PostId == postId), // Filter một bài nếu có postId.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var total = await q.LongCountAsync(cancellationToken); // COUNT.
-        var items = await q // Tiếp từ q.
+                .AsNoTracking(), // Không track.
+            postId: postId,
+            createdAtFrom: createdAtFrom,
+            createdAtTo: createdAtTo); // Filter một bài nếu có postId + khoảng thời gian.
+        var total = paginationEnabled // Đếm trước khi Select nếu paged.
+            ? await q.LongCountAsync(cancellationToken) // Tổng khớp filter trên entity.
+            : 0L; // Unpaged: gán sau từ items.Count.
+        var query = q // Tiếp từ q.
             .OrderBy(c => c.PostId) // Sắp.
             .ThenBy(c => c.CreatedAt) // Thời gian.
             .ThenBy(c => c.Id) // Id.
-            .Skip((page - 1) * pageSize) // OFFSET.
-            .Take(pageSize) // FETCH.
             .Select(c => new CommentLoadingDemoDto // Toàn bộ phân trang + projection trên server.
             { // Mở initializer.
                 LoadingStrategy = "projection", // Nhãn.
                 CommentId = c.Id, // Id.
                 Content = c.Content, // Nội dung.
+                CreatedAt = c.CreatedAt, // Thời điểm tạo.
                 PostId = c.PostId, // Post.
                 PostTitle = c.Post != null ? c.Post.Title : null, // Title trong SQL.
                 UserId = c.UserId, // User.
                 AuthorUserName = c.User != null ? c.User.UserName : null, // UserName trong SQL.
                 ParentId = c.ParentId, // Cha.
                 ChildrenCount = c.Children.Count() // Đếm con trong SQL.
-            }) // Kết thúc Select projection.
-            .ToListAsync(cancellationToken); // Thực thi SELECT trả DTO trực tiếp.
-
+            }); // Kết thúc Select projection.
+        var items = paginationEnabled // Materialize IQueryable<CommentLoadingDemoDto>.
+            ? await query.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(cancellationToken) // Một trang DTO (SQL đã projection).
+            : await query.ToListAsync(cancellationToken); // Toàn bộ DTO trong một (hoặc vài) câu SQL.
+        if (!paginationEnabled) // Unpaged.
+        {
+            total = items.Count; // Đồng bộ tổng với số phần tử trả về.
+        }
         return (items, total); // Trả trang DTO và tổng.
-    } // Kết thúc GetCommentsProjectionDemoPagedAsync.
+    } // Kết thúc GetCommentsProjectionDemoRouteAsync.
 
-    // --- Demo loading: toàn bộ comment (không phân trang); cùng OrderBy và cùng phạm vi Post/User/Children như bản paged. ---
-    public async Task<List<CommentLoadingDemoDto>> GetAllCommentsLazyLoadingDemoAsync(
+
+    #endregion
+
+    #region Helpers
+
+    // Helper support: [01][14][15][16][17] validate postId.
+    public async Task<bool> PostExistsAsync(Guid postId) // Kiểm tra bài viết tồn tại.
+    { // Mở khối PostExistsAsync.
+        return await _context.Posts // DbSet Posts.
+            .AsNoTracking() // Chỉ đọc.
+            .AnyAsync(x => x.Id == postId); // Kiểm tra một Id post tồn tại.
+    } // Kết thúc PostExistsAsync.
+
+    // Helper support: [03][04][06] validate userId.
+    public async Task<bool> UserExistsAsync(Guid userId) // Kiểm tra người dùng tồn tại.
+    { // Mở khối UserExistsAsync.
+        return await _context.Users // DbSet Users (Identity).
+            .AsNoTracking() // Chỉ đọc.
+            .AnyAsync(x => x.Id == userId); // Kiểm tra user tồn tại.
+    } // Kết thúc UserExistsAsync.
+
+    // Helper support: [04][06] validate parent comment cùng post.
+    public async Task<bool> ParentExistsAsync(Guid parentId, Guid postId) // Cha phải cùng post.
+    { // Mở khối ParentExistsAsync.
+        return await _context.Comments // DbSet Comments.
+            .AsNoTracking() // Chỉ đọc.
+            .AnyAsync(x => x.Id == parentId && x.PostId == postId); // Cha phải cùng post với con.
+    } // Kết thúc ParentExistsAsync.
+
+    // Helper support: [10][12] nạp toàn bộ comment theo post/all để dựng tree, flatten.
+    public async Task<List<Comment>> GetCommentsRouteAllAsync(
+        Guid? postId = null, // null: mọi post; có giá trị: chỉ một bài.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt từ.
+        DateTime? createdAtTo = null) // Lọc CreatedAt đến.
+    { // Nạp toàn bộ entity khớp bộ lọc (không phân trang tại đây).
+        var q = ApplyUniversalFilter(_context.Comments.AsNoTracking(), postId: postId, createdAtFrom: createdAtFrom, createdAtTo: createdAtTo); // IQueryable đã lọc post + ngày.
+        return await q // Tiếp tục từ cùng nguồn.
+            .OrderBy(x => x.CreatedAt) // Thứ tự đơn giản theo thời gian (service có thể dựng cây theo ParentId).
+            .ToListAsync(); // Thực thi và trả List (sync-over-async không dùng ở đây — gọi từ async caller).
+    } // Kết thúc GetCommentsRouteAllAsync.
+
+    // Helper support: [01] nhánh unpaged/search nội bộ service.
+    public async Task<List<Comment>> SearchCommentsRouteAllAsync(
+        Guid? postId, // Giới hạn post tùy chọn.
+        string contentContains, // Chuỗi tìm trong Content (Contains).
         CancellationToken cancellationToken = default, // Hủy.
-        Guid? postId = null, // Lọc post tùy chọn.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt.
-        DateTime? createdAtTo = null) // Lọc CreatedAt.
-    { // Mở khối.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments // Tracked để proxy lazy.
-                .Where(c => postId == null || c.PostId == postId), // Thu hẹp demo theo bài.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var rows = await q // Tiếp từ q.
-            .OrderBy(c => c.PostId) // Đồng bộ với demo phân trang.
-            .ThenBy(c => c.CreatedAt) // Thời gian.
-            .ThenBy(c => c.Id) // Id.
-            .ToListAsync(cancellationToken); // Một SELECT toàn bộ comment.
+        DateTime? createdAtFrom = null, // Lọc ngày từ.
+        DateTime? createdAtTo = null) // Lọc ngày đến.
+    { // Trả mọi comment khớp post + content + khoảng ngày.
+        var q = ApplyUniversalFilter( // Pipeline lọc thống nhất.
+            _context.Comments.AsNoTracking(), // Read-only.
+            postId: postId, // Lọc post nếu có.
+            contentContains: contentContains, // Điều kiện Contains trên nội dung.
+            createdAtFrom: createdAtFrom, // Cận dưới CreatedAt.
+            createdAtTo: createdAtTo); // Cận trên CreatedAt.
+        return await q // Materialize sau khi sắp.
+            .OrderBy(c => c.PostId) // Ổn định theo bài.
+            .ThenBy(c => c.CreatedAt) // Rồi thời gian.
+            .ThenBy(c => c.Id) // Tie-break.
+            .ToListAsync(cancellationToken); // Trả danh sách đầy đủ (unpaged).
+    } // Kết thúc SearchCommentsRouteAllAsync.
 
-        var list = new List<CommentLoadingDemoDto>(rows.Count); // Danh sách đích.
-        foreach (var comment in rows) // Mỗi dòng: Post, User, Children qua lazy.
-        { // Mở foreach.
-            list.Add(new CommentLoadingDemoDto // DTO một dòng.
-            { // Mở initializer.
-                LoadingStrategy = "lazy", // Nhãn.
-                CommentId = comment.Id, // Id.
-                Content = comment.Content, // Nội dung.
-                PostId = comment.PostId, // Post FK.
-                PostTitle = comment.Post?.Title, // Lazy Post.
-                UserId = comment.UserId, // User FK.
-                AuthorUserName = comment.User?.UserName, // Lazy User.
-                ParentId = comment.ParentId, // Cha (scalar).
-                ChildrenCount = comment.Children.Count // Lazy Children.
-            }); // Kết thúc Add.
-        } // Kết thúc foreach.
+    // Helper nội bộ: nạp comment cho nhiều post bằng một truy vấn IN.
+    private async Task<List<Comment>> GetCommentsForPostsAsync(
+        IReadOnlyCollection<Guid> postIds, // Danh sách PostId cần nạp hết comment.
+        CancellationToken cancellationToken = default) // Hủy.
+    { // Một round-trip SQL thay vì N truy vấn từng post.
+        if (postIds.Count == 0) // Không có post nào.
+        {
+            return new List<Comment>(); // Trả rỗng sớm, tránh SQL vô nghĩa.
+        }
 
-        return list; // Toàn bộ DTO.
-    } // Kết thúc GetAllCommentsLazyLoadingDemoAsync.
+        return await _context.Comments // DbSet.
+            .AsNoTracking() // Không track.
+            .Where(c => postIds.Contains(c.PostId)) // Điều kiện IN trên PostId.
+            .OrderBy(c => c.PostId) // Gom nhóm theo bài khi đọc.
+            .ThenBy(c => c.CreatedAt) // Trong post, theo thời gian.
+            .ThenBy(c => c.Id) // Tie-break.
+            .ToListAsync(cancellationToken); // Trả toàn bộ comment thuộc các post đã liệt kê.
+    } // Kết thúc GetCommentsForPostsAsync.
 
-    public async Task<List<CommentLoadingDemoDto>> GetAllCommentsEagerLoadingDemoAsync(
-        CancellationToken cancellationToken = default, // Hủy.
-        Guid? postId = null, // Lọc post tùy chọn.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt.
-        DateTime? createdAtTo = null) // Lọc CreatedAt.
-    { // Mở khối.
-        var baseQ = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments // DbSet.
-                .AsNoTracking() // Không track.
-                .Where(c => postId == null || c.PostId == postId), // Phạm vi một bài nếu có.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var rows = await baseQ // Tiếp từ baseQ.
-            .Include(c => c.Post) // Nạp Post.
-            .Include(c => c.User) // Nạp User.
-            .Include(c => c.Children) // Nạp Children.
-            .AsSplitQuery() // Tách SELECT.
-            .OrderBy(c => c.PostId) // Sắp giống lazy/explicit.
-            .ThenBy(c => c.CreatedAt) // Thời gian.
-            .ThenBy(c => c.Id) // Id.
-            .ToListAsync(cancellationToken); // Thực thi chuỗi Include + split.
+    // Universal filter duy nhất cho Comment: gom điều kiện route vào một pipeline IQueryable.
+    private static IQueryable<Comment> ApplyUniversalFilter(
+        IQueryable<Comment> query, // Nguồn truy vấn gốc (DbSet hoặc đã Where sẵn).
+        Guid? postId = null, // Lọc theo PostId nếu có.
+        Guid? userId = null, // Lọc theo UserId (tác giả) nếu có.
+        string? contentContains = null, // Lọc Contains trên Content nếu chuỗi khác null/blank.
+        Guid? parentId = null, // Lọc theo ParentId cụ thể nếu có.
+        bool? isRoot = null, // true: chỉ gốc; false: chỉ không phải gốc; null: bỏ qua.
+        DateTime? createdAtFrom = null, // CreatedAt >= from nếu có.
+        DateTime? createdAtTo = null) // CreatedAt <= to nếu có.
+    { // Trả IQueryable mới; không thực thi SQL tại đây.
+        if (postId is { } pid) // Pattern matching: có Guid post.
+        {
+            query = query.Where(c => c.PostId == pid); // Thu hẹp theo một bài viết.
+        }
 
-        return rows.ConvertAll(comment => new CommentLoadingDemoDto // Ánh xạ RAM.
-        { // Mở initializer.
-            LoadingStrategy = "eager", // Nhãn.
-            CommentId = comment.Id, // Id.
-            Content = comment.Content, // Nội dung.
-            PostId = comment.PostId, // Post.
-            PostTitle = comment.Post?.Title, // Đã Include.
-            UserId = comment.UserId, // User.
-            AuthorUserName = comment.User?.UserName, // Đã Include.
-            ParentId = comment.ParentId, // Cha.
-            ChildrenCount = comment.Children.Count // Collection đã nạp.
-        }); // Kết thúc ConvertAll.
-    } // Kết thúc GetAllCommentsEagerLoadingDemoAsync.
+        if (userId is { } uid) // Có Guid user.
+        {
+            query = query.Where(c => c.UserId == uid); // Chỉ comment của tác giả đó.
+        }
 
-    public async Task<List<CommentLoadingDemoDto>> GetAllCommentsExplicitLoadingDemoAsync(
-        CancellationToken cancellationToken = default, // Hủy.
-        Guid? postId = null, // Lọc post tùy chọn.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt.
-        DateTime? createdAtTo = null) // Lọc CreatedAt.
-    { // Mở khối.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments // Tracked.
-                .Where(c => postId == null || c.PostId == postId), // Giới hạn một post khi cần.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        var rows = await q // Tiếp từ q.
-            .OrderBy(c => c.PostId) // Sắp đồng nhất.
-            .ThenBy(c => c.CreatedAt) // Thời gian.
-            .ThenBy(c => c.Id) // Id.
-            .ToListAsync(cancellationToken); // SELECT tất cả comment.
+        if (!string.IsNullOrWhiteSpace(contentContains)) // Chuỗi tìm kiếm hợp lệ.
+        {
+            query = query.Where(c => c.Content.Contains(contentContains)); // Tìm kiếm chuỗi con trong nội dung.
+        }
 
-        var list = new List<CommentLoadingDemoDto>(rows.Count); // Đích.
-        foreach (var comment in rows) // Từng entity.
-        { // Mở foreach.
-            await _context.Entry(comment).Reference(c => c.Post).LoadAsync(cancellationToken); // Nạp Post.
-            await _context.Entry(comment).Reference(c => c.User).LoadAsync(cancellationToken); // Nạp User.
-            await _context.Entry(comment).Collection(c => c.Children).LoadAsync(cancellationToken); // Nạp Children.
+        if (parentId is { } parent) // Có Id comment cha.
+        {
+            query = query.Where(c => c.ParentId == parent); // Lọc con trực tiếp của cha đó.
+        }
 
-            list.Add(new CommentLoadingDemoDto // DTO sau LoadAsync.
-            { // Mở initializer.
-                LoadingStrategy = "explicit", // Nhãn.
-                CommentId = comment.Id, // Id.
-                Content = comment.Content, // Nội dung.
-                PostId = comment.PostId, // Post.
-                PostTitle = comment.Post?.Title, // Đã Load.
-                UserId = comment.UserId, // User.
-                AuthorUserName = comment.User?.UserName, // Đã Load.
-                ParentId = comment.ParentId, // Cha.
-                ChildrenCount = comment.Children.Count // Đã Load collection.
-            }); // Kết thúc Add.
-        } // Kết thúc foreach.
+        if (isRoot is { } root) // Có yêu cầu lọc gốc/không gốc.
+        {
+            query = root // Nếu root == true.
+                ? query.Where(c => c.ParentId == null) // Chỉ các comment không có cha (gốc cây).
+                : query.Where(c => c.ParentId != null); // Ngược lại: chỉ comment có cha.
+        }
 
-        return list; // Danh sách đầy đủ.
-    } // Kết thúc GetAllCommentsExplicitLoadingDemoAsync.
+        if (createdAtFrom is { } from) // Có cận dưới ngày.
+        {
+            query = query.Where(c => c.CreatedAt >= from); // Inclusive: lớn hơn hoặc bằng from.
+        }
 
-    public async Task<List<CommentLoadingDemoDto>> GetAllCommentsProjectionDemoAsync( // Demo projection toàn bộ.
-        CancellationToken cancellationToken = default, // Hủy.
-        Guid? postId = null, // Lọc post tùy chọn.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt.
-        DateTime? createdAtTo = null) // Lọc CreatedAt.
-    { // Mở khối.
-        var q = WhereCreatedAtRange( // Khoảng thời gian.
-            _context.Comments // DbSet.
-                .AsNoTracking() // Không track.
-                .Where(c => postId == null || c.PostId == postId), // Một bài hoặc toàn hệ.
-            createdAtFrom,
-            createdAtTo); // Hai biên.
-        return await q // Tiếp từ q.
-            .OrderBy(c => c.PostId) // Sắp đồng nhất các demo.
-            .ThenBy(c => c.CreatedAt) // Thời gian.
-            .ThenBy(c => c.Id) // Id.
-            .Select(c => new CommentLoadingDemoDto // Chiếu DTO trên server.
-            { // Mở initializer.
-                LoadingStrategy = "projection", // Nhãn.
-                CommentId = c.Id, // Id.
-                Content = c.Content, // Nội dung.
-                PostId = c.PostId, // Post.
-                PostTitle = c.Post != null ? c.Post.Title : null, // Join Post.
-                UserId = c.UserId, // User.
-                AuthorUserName = c.User != null ? c.User.UserName : null, // Join User.
-                ParentId = c.ParentId, // Cha.
-                ChildrenCount = c.Children.Count() // COUNT con trong SQL.
-            }) // Kết thúc Select.
-            .ToListAsync(cancellationToken); // Thực thi một pipeline projection.
-    } // Kết thúc GetAllCommentsProjectionDemoAsync.
+        if (createdAtTo is { } to) // Có cận trên ngày.
+        {
+            query = query.Where(c => c.CreatedAt <= to); // Inclusive: nhỏ hơn hoặc bằng to.
+        }
 
-    public async Task<List<Comment>> GetAllAsync( // Đọc toàn bộ comment, không phân trang.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt tùy chọn.
-        DateTime? createdAtTo = null) // Lọc CreatedAt tùy chọn.
-    { // Mở khối GetAllAsync.
-        var q = WhereCreatedAtRange(_context.Comments.AsNoTracking(), createdAtFrom, createdAtTo); // Áp khoảng thời gian.
-        return await q // Tiếp từ q.
-            .OrderBy(x => x.CreatedAt) // Sắp xếp tăng dần theo CreatedAt (sinh ORDER BY trong SQL).
-            .ToListAsync(); // Biên dịch và thực thi SQL, đọc toàn bộ kết quả vào List<Comment>.
-    } // Kết thúc GetAllAsync.
+        return query; // Trả pipeline cuối để caller OrderBy/Skip/Take/ToListAsync.
+    } // Kết thúc ApplyUniversalFilter.
 
-    public async Task SaveChangesAsync() // Flush thay đổi tracked xuống database.
-    { // Mở khối.
-        await _context.SaveChangesAsync(); // Gửi mọi thay đổi tracked xuống DB (INSERT/UPDATE/DELETE tùy trạng thái).
-    } // Kết thúc SaveChangesAsync.
+    // Ánh xạ entity + level sang hàng phẳng như output CTE.
+    private static CommentFlatDto MapToFlatRow(Comment c, int level) => new() // Một dòng trong “kết quả CTE” giả lập.
+    {
+        Id = c.Id, // Khóa comment.
+        Content = c.Content, // Nội dung.
+        CreatedAt = c.CreatedAt, // Thời điểm tạo (dùng cho lọc sau BFS).
+        ParentId = c.ParentId, // Tham chiếu cha (null nếu gốc).
+        PostId = c.PostId, // Thuộc bài viết nào.
+        UserId = c.UserId, // Tác giả.
+        Level = level // Độ sâu BFS so với gốc (0 tại gốc).
+    }; // Kết thúc biểu thức MapToFlatRow.
+
+    // Duyệt cây theo level-order (BFS) để tái tạo semantics CTE đệ quy: chỉ lấy node reachable từ roots.
+    private static List<CommentFlatDto> BuildCteRows(
+        IReadOnlyList<Comment> sourceComments, // Tập entity đã nạp (một post hoặc toàn hệ).
+        Func<Comment, bool> rootPredicate) // Điều kiện nhận diện gốc (thường ParentId == null).
+    { // Sinh danh sách phẳng có Level, thứ tự duyệt giống mở rộng CTE.
+        var rows = new List<CommentFlatDto>(sourceComments.Count); // Dự trữ dung lượng tối đa bằng số entity (thường ít hơn sau lọc).
+        var childrenByParentId = sourceComments // Xây chỉ mục con theo ParentId để tra O(1).
+            .Where(c => c.ParentId is not null) // Bỏ gốc khỏi nhóm “là con”.
+            .GroupBy(c => c.ParentId!.Value) // Gom theo Id cha.
+            .ToDictionary( // Dictionary ParentId → danh sách con đã sắp.
+                g => g.Key, // Khóa là Id cha.
+                g => g.OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).ToList()); // Con cùng cha: thứ tự ổn định.
+
+        var queue = new Queue<(Comment Node, int Level)>(); // Hàng đợi BFS: nút + độ sâu.
+        var visited = new HashSet<Guid>(); // Tránh xử lý lặp (chu trình / dữ liệu lệch).
+        foreach (var root in sourceComments // Duyệt mọi ứng viên gốc theo predicate.
+                     .Where(rootPredicate) // Ví dụ ParentId == null.
+                     .OrderBy(x => x.CreatedAt) // Thứ tự enqueue gốc ổn định.
+                     .ThenBy(x => x.Id)) // Tie-break.
+        {
+            if (visited.Add(root.Id)) // Add trả true nếu Id chưa có trong visited.
+            {
+                queue.Enqueue((root, 0)); // Đưa gốc vào hàng đợi với Level 0.
+            }
+        }
+
+        while (queue.Count > 0) // Còn nút để duyệt.
+        {
+            var (current, level) = queue.Dequeue(); // Lấy nút tiếp theo và độ sâu hiện tại.
+            rows.Add(MapToFlatRow(current, level)); // Ghi một hàng phẳng tương ứng nút.
+
+            if (!childrenByParentId.TryGetValue(current.Id, out var children)) // Không có con trong tập nguồn.
+            {
+                continue; // Bỏ qua mở rộng nhánh.
+            }
+
+            foreach (var child in children) // Duyệt từng con đã sắp của current.
+            {
+                // Khớp SQL CTE: child phải cùng PostId với parent khi nối đệ quy.
+                if (child.PostId != current.PostId) // Tránh nối nhầm giữa hai bài.
+                {
+                    continue; // Bỏ qua cạnh không hợp lệ.
+                }
+
+                if (visited.Add(child.Id)) // Con chưa thăm.
+                {
+                    queue.Enqueue((child, level + 1)); // Đưa con vào BFS với Level tăng 1.
+                }
+            }
+        }
+
+        return rows; // Danh sách hàng phẳng đầy đủ từ mọi gốc reachable.
+    } // Kết thúc BuildCteRows.
+
+    // Khai báo hàm nhận vào range 2 input createdAt (có thể null) và trả về một Delegate (hàm) để kiểm tra điều kiện
+    private static Func<CommentFlatDto, bool> BuildCteDateFilter(DateTime? createdAtFrom, DateTime? createdAtTo)
+    {
+        // 1. Tạo tham số đầu vào cho biểu thức lambda, tương đương với biến "x" trong (x => ...)
+        // Kiểu dữ liệu của x là CommentFlatDto
+        var parameter = Expression.Parameter(typeof(CommentFlatDto), "x");
+
+        // 2. Khởi tạo phần thân của biểu thức là một hằng số 'true'. 
+        // Nếu không có bộ lọc nào được truyền vào, nó sẽ luôn trả về true (lấy tất cả dữ liệu).
+        Expression body = Expression.Constant(true);
+
+        // 3. Truy cập vào thuộc tính 'CreatedAt' của tham số 'x' (tương đương x.CreatedAt)
+        var createdAtProp = Expression.Property(parameter, nameof(CommentFlatDto.CreatedAt));
+
+        // 4. Kiểm tra nếu ngày bắt đầu (createdAtFrom) có giá trị (không null)
+        if (createdAtFrom is { } from)
+        {
+            // Tạo biểu thức so sánh: x.CreatedAt >= createdAtFrom
+            var fromExpr = Expression.GreaterThanOrEqual(createdAtProp, Expression.Constant(from));
+
+            // Gộp vào biểu thức chính bằng phép AND: body = (true && x.CreatedAt >= from)
+            body = Expression.AndAlso(body, fromExpr);
+        }
+
+        // 5. Kiểm tra nếu ngày kết thúc (createdAtTo) có giá trị (không null)
+        if (createdAtTo is { } to)
+        {
+            // Tạo biểu thức so sánh: x.CreatedAt <= createdAtTo
+            var toExpr = Expression.LessThanOrEqual(createdAtProp, Expression.Constant(to));
+
+            // Tiếp tục gộp vào biểu thức chính bằng phép AND: body = (body && x.CreatedAt <= to)
+            body = Expression.AndAlso(body, toExpr);
+        }
+
+        // 6. Xây dựng một biểu thức Lambda hoàn chỉnh: (CommentFlatDto x) => body
+        var lambda = Expression.Lambda<Func<CommentFlatDto, bool>>(body, parameter);
+
+        // 7. Biên dịch (Compile) cái "cây biểu thức" này thành một hàm thực thi (Delegate) 
+        // để có thể sử dụng được trong các hàm như .Where() của List/IEnumerable
+        return lambda.Compile();
+    }
 
     #endregion
 } // Kết thúc lớp CommentRepository.

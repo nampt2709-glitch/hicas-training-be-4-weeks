@@ -78,6 +78,7 @@ public static class EntityCacheKeys // Factory khóa string thống nhất.
     public static string PostsPaged(int page, int pageSize) => $"l:posts:{page}:{pageSize}"; // List posts (không filter).
 
     public static string CommentsAll(int page, int pageSize) => $"l:comments:all:{page}:{pageSize}"; // All comments page.
+    public static string CommentsFlatAll(int page, int pageSize) => $"l:comments:flat:all:{page}:{pageSize}"; // Flat route page.
 
     public static string CommentsByUser(Guid userId, int page, int pageSize) => // Comment theo tác giả (UserId).
         $"l:comments:u:{userId:N}:{page}:{pageSize}"; // Khóa cache list-by-user.

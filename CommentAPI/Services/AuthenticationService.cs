@@ -42,9 +42,11 @@ public class AuthenticationService : IAuthenticationService
 
     #endregion
 
-    #region POST — AuthController (signup, login, refresh)
+    #region Route Functions
 
-    // Đăng ký công khai: CreateAsync đã đặt EmailConfirmed và AddToRole User; sau đó phát token giống Login.
+    /// <summary>
+    /// [1] Route: POST /api/auth/signup
+    /// </summary>
     public async Task<TokenResponseDto> SignUpAsync(SignUpRequestDto request, CancellationToken cancellationToken = default)
     {
         var created = await _userService.CreateAsync(new CreateUserDto
@@ -68,7 +70,9 @@ public class AuthenticationService : IAuthenticationService
         return await CreateTokenPairAsync(user, roles, cancellationToken);
     }
 
-    // Đăng nhập: tìm user, kiểm tra mật khẩu, lấy role, tạo cặp token.
+    /// <summary>
+    /// [2] Route: POST /api/auth/login
+    /// </summary>
     public async Task<TokenResponseDto> LoginAsync(LoginRequestDto request, CancellationToken cancellationToken = default)
     {
         var user = await _authRepository.GetByUserNameAsync(request.UserName, cancellationToken); // Identity FindByName
@@ -92,7 +96,9 @@ public class AuthenticationService : IAuthenticationService
         return await CreateTokenPairAsync(user, roles, cancellationToken); // Phát cả access lẫn refresh
     }
 
-    // Làm mới: validate JWT refresh, đối chiếu security stamp, phát cặp mới.
+    /// <summary>
+    /// [3] Route: POST /api/auth/refresh
+    /// </summary>
     public async Task<TokenResponseDto> RefreshAsync(RefreshRequestDto request, CancellationToken cancellationToken = default)
     {
         var principal = ValidateRefreshTokenPrincipal(request.RefreshToken); // Ký, issuer, aud, type=refresh
@@ -136,11 +142,9 @@ public class AuthenticationService : IAuthenticationService
         return await CreateTokenPairAsync(user, roles, cancellationToken); // Mỗi lần refresh: cả hai token mới
     }
 
-    #endregion
-
-    #region POST — AuthController (logout)
-
-    // Đăng xuất: tăng security stamp để mọi token cũ (OnTokenValidated) thất bại.
+    /// <summary>
+    /// [4] Route: POST /api/auth/logout
+    /// </summary>
     public async Task LogoutAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var user = await _authRepository.GetByIdAsync(userId, cancellationToken);
@@ -152,7 +156,7 @@ public class AuthenticationService : IAuthenticationService
 
     #endregion
 
-    #region Private — JWT
+    #region Helpers
 
     // Tạo access + refresh: cùng stamp; access có role, refresh không role.
     private async Task<TokenResponseDto> CreateTokenPairAsync(User user, IReadOnlyList<string> roles, CancellationToken cancellationToken)

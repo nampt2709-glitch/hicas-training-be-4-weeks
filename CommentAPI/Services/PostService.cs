@@ -7,31 +7,33 @@ using Microsoft.AspNetCore.Http;
 
 namespace CommentAPI.Services; 
 
-public class PostService : IPostService // CRUD + search + author/admin update paths.
+public class PostService : ServiceBase, IPostService // CRUD + search + author/admin update paths.
 {
     #region Trường & hàm tạo — PostsController
 
     private readonly IPostRepository _repository; // Post persistence.
     private readonly IUserRepository _userRepository; // Kiểm tra FK UserId.
     private readonly IMapper _mapper; // AutoMapper.
-    private readonly IEntityResponseCache _cache; // Response cache.
 
     public PostService( // DI ctor.
         IPostRepository repository, // Post repo.
         IUserRepository userRepository, // User existence.
         IMapper mapper, // Mapper.
         IEntityResponseCache cache) // Cache.
+        : base(cache)
     {
         _repository = repository; // Field.
         _userRepository = userRepository; // Field.
         _mapper = mapper; // Field.
-        _cache = cache; // Field.
     }
 
     #endregion
 
-    #region GET — PostsController (GetAll, GetById)
+    #region Route Functions
 
+    /// <summary>
+    /// [1] Route: GET /api/posts
+    /// </summary>
     public async Task<PagedResult<PostDto>> GetPagedAsync( // List posts paged.
         int page, // Page index.
         int pageSize, // Page size.
@@ -44,7 +46,7 @@ public class PostService : IPostService // CRUD + search + author/admin update p
         if (!HasPostListFilter(createdAtFrom, createdAtTo, titleContains, contentContains)) // Chỉ cache danh sách “thuần”.
         {
             var cacheKey = EntityCacheKeys.PostsPaged(page, pageSize); // Cache key.
-            var cached = await _cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken); // Try cache.
+            var cached = await Cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken); // Try cache.
             if (cached is not null) // Hit.
                 return cached; // Fast path.
         }
@@ -65,14 +67,17 @@ public class PostService : IPostService // CRUD + search + author/admin update p
             TotalCount = total // Count.
         };
         if (!HasPostListFilter(createdAtFrom, createdAtTo, titleContains, contentContains))
-            await _cache.SetJsonAsync(EntityCacheKeys.PostsPaged(page, pageSize), result, cancellationToken); // Store.
+            await Cache.SetJsonAsync(EntityCacheKeys.PostsPaged(page, pageSize), result, cancellationToken); // Store.
         return result; // Out.
     }
 
+    /// <summary>
+    /// [2] Route: GET /api/posts/{id}
+    /// </summary>
     public async Task<PostDto> GetByIdAsync(Guid id) // Single post read.
     {
         var cacheKey = EntityCacheKeys.Post(id); // Key by id.
-        var cached = await _cache.GetJsonAsync<PostDto>(cacheKey, default); // Read cache.
+        var cached = await Cache.GetJsonAsync<PostDto>(cacheKey, default); // Read cache.
         if (cached is not null) // Hit.
         {
             return cached; // DTO.
@@ -87,14 +92,13 @@ public class PostService : IPostService // CRUD + search + author/admin update p
                 ApiMessages.PostNotFound); // Msg.
         }
 
-        await _cache.SetJsonAsync(cacheKey, dto, default); // Populate cache.
+        await Cache.SetJsonAsync(cacheKey, dto, default); // Populate cache.
         return dto; // DTO.
     }
 
-    #endregion
-
-    #region POST — PostsController (Create)
-
+    /// <summary>
+    /// [3] Route: POST /api/posts
+    /// </summary>
     public async Task<PostDto> CreateAsync(CreatePostDto dto) // Insert post.
     {
         if (!await _userRepository.ExistsAsync(dto.UserId)) // FK guard.
@@ -114,11 +118,9 @@ public class PostService : IPostService // CRUD + search + author/admin update p
         return _mapper.Map<PostDto>(entity); // Return mapped DTO (client nhận id mới).
     }
 
-    #endregion
-
-    #region PUT — PostsController (Update, UpdateAsAdmin)
-
-    // User: chỉ chủ bài (UserId trùng JWT) được cập nhật tiêu đề/nội dung.
+    /// <summary>
+    /// [4] Route: PUT /api/posts/{id}
+    /// </summary>
     public async Task UpdateAsAuthorAsync(Guid id, UpdatePostDto dto, Guid currentUserId) // Author path.
     {
         var entity = await _repository.GetByIdAsync(id); // Load for update.
@@ -143,10 +145,12 @@ public class PostService : IPostService // CRUD + search + author/admin update p
         _repository.Update(entity); // Mark modified.
         await _repository.SaveChangesAsync(); // Persist.
 
-        await _cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Invalidate read model.
+        await Cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Invalidate read model.
     }
 
-    // Admin: cập nhật tiêu đề/nội dung, tùy chọn đổi UserId nếu gửi giá trị.
+    /// <summary>
+    /// [5] Route: PUT /api/admin/posts/{id}
+    /// </summary>
     public async Task UpdateAsAdminAsync(Guid id, AdminUpdatePostDto dto) // Admin path.
     {
         var entity = await _repository.GetByIdAsync(id); // Load.
@@ -176,13 +180,12 @@ public class PostService : IPostService // CRUD + search + author/admin update p
         _repository.Update(entity); // Modified.
         await _repository.SaveChangesAsync(); // Save.
 
-        await _cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Invalidate cache entry.
+        await Cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Invalidate cache entry.
     }
 
-    #endregion
-
-    #region DELETE — PostsController (Delete)
-
+    /// <summary>
+    /// [6] Route: DELETE /api/posts/{id}
+    /// </summary>
     public async Task DeleteAsync(Guid id) // Remove post.
     {
         var entity = await _repository.GetByIdAsync(id); // Find tracked entity.
@@ -194,7 +197,7 @@ public class PostService : IPostService // CRUD + search + author/admin update p
                 ApiMessages.PostNotFound); // Msg.
         }
 
-        await _cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Drop cache before delete.
+        await Cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Drop cache before delete.
 
         _repository.Remove(entity); // Stage delete.
         await _repository.SaveChangesAsync(); // Commit cascade rules theo model.
@@ -202,7 +205,7 @@ public class PostService : IPostService // CRUD + search + author/admin update p
 
     #endregion
 
-    #region Private helpers
+    #region Helpers
 
     // Có bất kỳ filter list nào → không cache (tránh khóa sai hoặc bùng nổ).
     private static bool HasPostListFilter(
@@ -210,8 +213,7 @@ public class PostService : IPostService // CRUD + search + author/admin update p
         DateTime? createdAtTo,
         string? titleContains,
         string? contentContains) =>
-        createdAtFrom.HasValue
-        || createdAtTo.HasValue
+        HasCreatedAtFilter(createdAtFrom, createdAtTo)
         || !string.IsNullOrWhiteSpace(titleContains)
         || !string.IsNullOrWhiteSpace(contentContains);
 

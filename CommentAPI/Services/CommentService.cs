@@ -9,7 +9,6 @@ namespace CommentAPI.Services;
 
 public class CommentService : ICommentService // Lớp dịch vụ triển khai ICommentService.
 { // Mở khối thân lớp CommentService.
-    private const int MaxCommentsToComputeLevels = 25_000; // Ngưỡng số comment tối đa để còn tính Level đệ quy an toàn.
 
     private readonly ICommentRepository _repository; // Truy cập EF/SQL.
     private readonly IMapper _mapper; // Ánh xạ Entity ↔ DTO.
@@ -27,6 +26,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     #region CommentsController — GET /api/comments, user/{userId}, CRUD
 
     // Gom GET /api/comments: postId, content, khoảng CreatedAt — thứ tự ưu tiên content → post-only → toàn hệ (một id dùng GET /{id}).
+    // [01] Route: GET /api/comments
     public async Task<PagedResult<CommentDto>> GetCommentListAsync( // Một hàm cho nhiều bộ lọc query.
         Guid? postId, // Lọc theo bài (tuỳ chọn).
         string? contentContains, // Tìm theo nội dung (tuỳ chọn).
@@ -46,7 +46,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             { // Mở unpaged search.
                 List<Comment> entities = postId is { } spid // Có postId → giới hạn trong bài.
                     ? await SearchByContentInPostAllValidatedAsync(spid, term, cancellationToken, createdAtFrom, createdAtTo) // Kiểm tra post + SELECT.
-                    : await _repository.SearchByContentAllAsync(term, cancellationToken, createdAtFrom, createdAtTo); // Toàn hệ thống.
+                    : await _repository.SearchCommentsRouteAllAsync(null, term, cancellationToken, createdAtFrom, createdAtTo); // Toàn hệ thống.
 
                 var list = entities.Select(_mapper.Map<CommentDto>).ToList(); // Map sang DTO.
                 return ToUnpagedCommentDtoResult(list); // PageSize = số phần tử thực tế.
@@ -76,7 +76,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
 
         if (unpaged) // Toàn bộ comment mọi bài — không cache (khối lượng lớn).
         { // Mở khối global unpaged.
-            var entities = await _repository.GetAllAsync(createdAtFrom, createdAtTo); // SELECT có lọc ngày ở SQL.
+            var entities = await _repository.GetCommentsRouteAllAsync(null, createdAtFrom, createdAtTo); // SELECT có lọc ngày ở SQL.
             var list = entities.Select(_mapper.Map<CommentDto>).ToList(); // Ánh xạ DTO.
             return ToUnpagedCommentDtoResult(list); // Trả PagedResult “giả” một trang đủ dài.
         } // Kết thúc global unpaged.
@@ -85,6 +85,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetCommentListAsync.
 
     // Đọc một comment theo Id với cache; 404 nếu không có — cùng thứ tự GET /api/comments/{id} trong CommentsController.
+    // [02] Route: GET /api/comments/{id}
     public async Task<CommentDto> GetByIdAsync(Guid id) // Khóa chính comment.
     { // Mở khối GetByIdAsync.
         var cacheKey = EntityCacheKeys.Comment(id); // Khóa theo Guid comment.
@@ -94,7 +95,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             return cached; // Trả ngay không truy vấn DB.
         } // Hết nhánh cache.
 
-        var dto = await _repository.GetByIdForReadAsync(id, default); // SELECT projection một comment.
+        var dto = await _repository.GetCommentByIdRouteReadAsync(id, default); // SELECT projection một comment.
         if (dto is null) // Không tồn tại.
         { // Mở khối.
             throw new ApiException( // Ném ngoại lệ thống nhất.
@@ -108,6 +109,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetByIdAsync.
 
     // Phân trang comment của một user (UserId); 404 nếu user không tồn tại.
+    // [03] Route: GET /api/comments/user/{userId}
     public async Task<PagedResult<CommentDto>> GetCommentsByUserIdPagedAsync( // List by author.
         Guid userId, // Tác giả.
         int page, // Trang.
@@ -127,7 +129,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             } // Kết thúc hit.
         } // Kết thúc nhánh cache.
 
-        var (items, total) = await _repository.GetByUserIdPagedAsync(userId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // DB.
+        var (items, total) = await _repository.GetCommentsByUserRoutePagedAsync(userId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // DB.
         var result = new PagedResult<CommentDto> // Gói phân trang.
         { // Mở khối.
             Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Map DTO.
@@ -144,6 +146,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetCommentsByUserIdPagedAsync.
 
     // Tạo comment mới sau khi kiểm tra post, user và parent hợp lệ.
+    // [04] Route: POST /api/comments
     public async Task<CommentDto> CreateAsync(CreateCommentDto dto) // Payload tạo mới.
     { // Mở khối CreateAsync.
         if (!await _repository.PostExistsAsync(dto.PostId)) // Any trên Posts.
@@ -185,6 +188,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc CreateAsync.
 
     // Người dùng: chỉ tác giả (UserId trùng JWT) sửa nội dung; không đổi cây hay post.
+    // [05] Route: PUT /api/comments/{id}
     public async Task UpdateAsAuthorAsync(Guid id, UpdateCommentDto dto, Guid currentUserId) // id comment, payload, user hiện tại.
     { // Mở khối UpdateAsAuthorAsync.
         var entity = await _repository.GetByIdAsync(id); // Nạp entity tracked.
@@ -220,6 +224,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc UpdateAsAuthorAsync.
 
     // Quản trị: cập nhật đủ trường; chuyển post cập nhật PostId cả cây con; chặn parent tạo chu trình hoặc sai post.
+    // [06] Route: PUT /api/admin/comments/{id}
     public async Task UpdateAsAdminAsync(Guid id, AdminUpdateCommentDto dto) // id gốc và payload admin.
     { // Mở khối UpdateAsAdminAsync.
         if (!await _repository.UserExistsAsync(dto.UserId)) // User đích phải tồn tại.
@@ -248,7 +253,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         } // Hết null root.
 
         // Lấy toàn bộ comment phẳng của bài cũ (AsNoTracking) để suy ra tập Id cây con qua BFS.
-        var inOldFlat = await _repository.GetByPostIdAsync(root.PostId); // List comment một post.
+        var inOldFlat = await _repository.GetCommentsRouteAllAsync(root.PostId); // List comment một post.
         var subtree = BuildSubtreeIdSet(inOldFlat, root.Id); // Tập Id gốc + hậu duệ.
 
         if (dto.ParentId is { } newParentId) // Có gán cha mới (pattern deconstruct).
@@ -295,7 +300,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         if (oldPostId != dto.PostId) // Di chuyển cây sang bài khác.
         { // Mở khối.
             // Cập nhật PostId đồng loạt cho mọi entity tracked thuộc subtree.
-            var tracked = await _repository.GetByPostIdTrackedAsync(oldPostId, default); // Nạp tracked toàn post cũ.
+            var tracked = await _repository.GetCommentsByPostTrackedForAdminRouteAsync(oldPostId, default); // Nạp tracked toàn post cũ.
             foreach (var c in tracked) // Duyệt từng entity.
             { // Mở khối.
                 if (subtree.Contains(c.Id)) // Thuộc cây con đang chuyển.
@@ -323,6 +328,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc UpdateAsAdminAsync.
 
     // Xóa một comment và toàn bộ hậu duệ trong cùng post; vô hiệu cache liên quan.
+    // [07] Route: DELETE /api/comments/{id}
     public async Task DeleteAsync(Guid id) // Id comment gốc cần xóa.
     { // Mở khối DeleteAsync.
         var entity = await _repository.GetByIdAsync(id); // Nạp entity gốc cần xóa.
@@ -342,7 +348,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
                 ApiMessages.PostNotFound); // Thông báo.
         } // Hết kiểm tra post.
 
-        var allCommentsInPost = await _repository.GetByPostIdAsync(entity.PostId); // SELECT toàn comment của post vào RAM.
+        var allCommentsInPost = await _repository.GetCommentsRouteAllAsync(entity.PostId); // SELECT toàn comment của post vào RAM.
         var toDelete = new HashSet<Guid> { entity.Id }; // Tập Id sẽ xóa, khởi tạo với gốc.
         var queue = new Queue<Guid>(); // Hàng đợi BFS các Id con.
         queue.Enqueue(entity.Id); // Bắt đầu từ comment gốc.
@@ -383,8 +389,25 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
 
     #region CommentsController — GET flat / cte / tree (post trước, toàn hệ sau, như nhánh if trong controller)
 
+    // [08] Route: GET /api/comments/flat
+    public async Task<PagedResult<CommentDto>> GetFlatRoutePagedAsync(
+        Guid? postId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default,
+        DateTime? createdAtFrom = null,
+        DateTime? createdAtTo = null)
+    {
+        // Điều phối một hàm route duy nhất: có postId thì nhánh theo post, ngược lại toàn hệ.
+        return postId is { } pid
+            // Nhánh có post: phân trang phẳng trong phạm vi một bài.
+            ? await GetFlatByPostIdPagedAsync(pid, page, pageSize, cancellationToken, createdAtFrom, createdAtTo)
+            // Nhánh không post: phân trang phẳng toàn hệ.
+            : await GetAllFlatPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo);
+    }
+
     // Phân trang comment phẳng (DTO cơ bản) theo một post.
-    public async Task<PagedResult<CommentDto>> GetFlatByPostIdPagedAsync( // Phân trang DTO phẳng theo post.
+    private async Task<PagedResult<CommentDto>> GetFlatByPostIdPagedAsync( // Phân trang DTO phẳng theo post.
         Guid postId, // Bài viết.
         int page, // Trang.
         int pageSize, // Cỡ trang.
@@ -402,14 +425,26 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        await EnsurePostExistsAsync(postId); // Any post.
-        var (items, total) = await _repository.GetByPostIdPagedAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT trong post.
+        var (roots, total) = await BuildFlatTreesPagedCoreAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
+        var items = new List<CommentFlatNoLevelDto>(); // Danh sách phẳng sau khi flatten từ tree.
+        foreach (var root in roots) // Duyệt từng cây gốc trong trang.
+        {
+            FlattenTreeFlat(root, items); // Flatten preorder vào danh sách phẳng.
+        }
         var result = new PagedResult<CommentDto> // Gói phân trang.
         { // Mở khối.
-            Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Map sang DTO.
+            Items = items.Select(x => new CommentDto // Map thủ công từ flat-no-level sang CommentDto.
+            { // Mở initializer.
+                Id = x.Id, // Id comment.
+                Content = x.Content, // Nội dung.
+                CreatedAt = x.CreatedAt, // Thời gian tạo.
+                PostId = x.PostId, // Post chứa comment.
+                UserId = x.UserId, // Tác giả.
+                ParentId = x.ParentId // Cha (nullable).
+            }).ToList(), // List DTO kết quả.
             Page = page, // Trang.
             PageSize = pageSize, // Cỡ trang.
-            TotalCount = total // Tổng comment post.
+            TotalCount = total // Tổng số gốc của route tree-based paging.
         }; // Kết thúc initializer.
         if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
         { // Mở khối.
@@ -420,18 +455,71 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetFlatByPostIdPagedAsync.
 
     // Alias phân trang phẳng toàn cục: cùng implementation với GetAllPagedAsync (GET /api/comments/flat khi không có postId).
-    public Task<PagedResult<CommentDto>> GetAllFlatPagedAsync( // Alias phân trang phẳng (Task đồng bộ hóa với GetAllPagedAsync).
+    private async Task<PagedResult<CommentDto>> GetAllFlatPagedAsync( // Route /api/comments/flat toàn hệ, không tái sử dụng route /api/comments.
         int page, // Trang.
         int pageSize, // Cỡ trang.
         CancellationToken cancellationToken = default, // Hủy.
         DateTime? createdAtFrom = null, // Lọc CreatedAt.
         DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối GetAllFlatPagedAsync.
-        return GetAllPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Ủy quyền — cùng SQL và cache.
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
+        {
+            var cacheKey = EntityCacheKeys.CommentsFlatAll(page, pageSize); // Key riêng cho route /api/comments/flat.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken);
+            if (cached is not null)
+            {
+                return cached;
+            }
+        }
+
+        var (roots, total) = await BuildFlatTreesPagedCoreAsync(null, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
+        var items = new List<CommentFlatNoLevelDto>(); // Danh sách phẳng sau flatten.
+        foreach (var root in roots) // Duyệt từng cây gốc.
+        {
+            FlattenTreeFlat(root, items); // Flatten preorder.
+        }
+        var result = new PagedResult<CommentDto>
+        {
+            Items = items.Select(x => new CommentDto
+            {
+                Id = x.Id,
+                Content = x.Content,
+                CreatedAt = x.CreatedAt,
+                PostId = x.PostId,
+                UserId = x.UserId,
+                ParentId = x.ParentId
+            }).ToList(),
+            Page = page,
+            PageSize = pageSize,
+            TotalCount = total
+        };
+        if (!HasCreatedAtFilter(createdAtFrom, createdAtTo))
+        {
+            await _cache.SetJsonAsync(EntityCacheKeys.CommentsFlatAll(page, pageSize), result, cancellationToken);
+        }
+
+        return result;
     } // Kết thúc GetAllFlatPagedAsync.
 
+    // [09] Route: GET /api/comments/cte
+    public async Task<PagedResult<CommentFlatDto>> GetCteFlatRoutePagedAsync(
+        Guid? postId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default,
+        DateTime? createdAtFrom = null,
+        DateTime? createdAtTo = null)
+    {
+        // Điều phối route CTE phẳng: một hàm xử lý cả postId/null theo rule 1-route-1-method.
+        return postId is { } pid
+            // Có postId: lấy dữ liệu CTE của một bài.
+            ? await GetCteFlatByPostIdPagedAsync(pid, page, pageSize, cancellationToken, createdAtFrom, createdAtTo)
+            // Không postId: lấy dữ liệu CTE toàn cục.
+            : await GetAllCteFlatPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo);
+    }
+
     // Phân trang phẳng có Level trong một post — hàng thô từ CTE @postId (không EF phân trang).
-    public async Task<PagedResult<CommentFlatDto>> GetCteFlatByPostIdPagedAsync( // Phân trang CommentFlatDto theo post (CTE).
+    private async Task<PagedResult<CommentFlatDto>> GetCteFlatByPostIdPagedAsync( // Phân trang CommentFlatDto theo post (CTE).
         Guid postId, // Bài viết.
         int page, // Trang.
         int pageSize, // Cỡ trang.
@@ -449,13 +537,12 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        await EnsurePostExistsAsync(postId); // Kiểm tra post tồn tại.
-        var rows = await _repository.GetTreeRowsByCteAsync(postId, cancellationToken, createdAtFrom, createdAtTo); // CTE theo post có lọc ngày.
-        var total = (long)rows.Count; // Tổng hàng trong post theo CTE.
-        var slice = rows // Thứ tự như reader.
-            .Skip((page - 1) * pageSize) // Trang.
-            .Take(pageSize) // Cỡ.
-            .ToList(); // List response.
+        var (roots, total) = await BuildCteTreesPagedCoreAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
+        var slice = new List<CommentFlatDto>(); // Danh sách phẳng CTE sau flatten.
+        foreach (var root in roots) // Duyệt từng cây gốc của trang.
+        {
+            FlattenTreeCte(root, slice); // Flatten preorder, giữ Level.
+        }
         var result = new PagedResult<CommentFlatDto> // Gói phân trang.
         { // Mở khối.
             Items = slice, // Hàng thô phẳng.
@@ -472,7 +559,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetCteFlatByPostIdPagedAsync.
 
     // Phân trang danh sách phẳng có Level từ CTE SQL toàn hệ (GET /api/comments/cte khi không có postId).
-    public async Task<PagedResult<CommentFlatDto>> GetAllCteFlatPagedAsync( // Phân trang hàng thô CTE toàn hệ.
+    private async Task<PagedResult<CommentFlatDto>> GetAllCteFlatPagedAsync( // Phân trang hàng thô CTE toàn hệ.
         int page, // Trang.
         int pageSize, // Cỡ trang.
         CancellationToken cancellationToken = default, // Hủy.
@@ -489,12 +576,12 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        var allRows = await _repository.GetTreeRowsByCteAllAsync(cancellationToken, createdAtFrom, createdAtTo); // CTE toàn cục có lọc ngày.
-        var total = (long)allRows.Count; // Tổng hàng phẳng trước khi cắt trang trong RAM.
-        var slice = allRows // Giữ thứ tự kết quả CTE.
-            .Skip((page - 1) * pageSize) // Bỏ các hàng trang trước.
-            .Take(pageSize) // Lấy đúng cỡ trang.
-            .ToList(); // Materialize cho response.
+        var (roots, total) = await BuildCteTreesPagedCoreAsync(null, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
+        var slice = new List<CommentFlatDto>(); // Danh sách phẳng sau flatten.
+        foreach (var root in roots) // Duyệt từng cây gốc.
+        {
+            FlattenTreeCte(root, slice); // Flatten preorder CTE.
+        }
         var result = new PagedResult<CommentFlatDto> // Gói phân trang.
         { // Mở khối.
             Items = slice, // Trang con hàng thô có Level.
@@ -510,8 +597,25 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         return result; // Trả về.
     } // Kết thúc GetAllCteFlatPagedAsync.
 
+    // [10] Route: GET /api/comments/tree/flat
+    public async Task<PagedResult<CommentTreeFlatDto>> GetTreeFlatRoutePagedAsync(
+        Guid? postId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default,
+        DateTime? createdAtFrom = null,
+        DateTime? createdAtTo = null)
+    {
+        // Điều phối route tree/flat: tách rõ nhánh một bài và toàn hệ.
+        return postId is { } pid
+            // Có postId: dựng cây trong một bài.
+            ? await GetTreeByPostIdPagedAsync(pid, page, pageSize, cancellationToken, createdAtFrom, createdAtTo)
+            // Không postId: dựng rừng gốc toàn hệ.
+            : await GetAllTreePagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo);
+    }
+
     // Phân trang cây theo gốc trong một post (dựng cây EF; lặp BuildTree theo từng gốc trang).
-    public async Task<PagedResult<CommentTreeDto>> GetTreeByPostIdPagedAsync( // Cây theo post, phân trang gốc.
+    private async Task<PagedResult<CommentTreeFlatDto>> GetTreeByPostIdPagedAsync( // Cây theo post, phân trang gốc.
         Guid postId, // Bài viết.
         int page, // Trang gốc.
         int pageSize, // Cỡ trang.
@@ -522,30 +626,18 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
         { // Mở khối.
             var cacheKey = EntityCacheKeys.CommentsTreeByPost(postId, page, pageSize); // Khóa cache.
-            var cached = await _cache.GetJsonAsync<PagedResult<CommentTreeDto>>(cacheKey, cancellationToken); // Đọc cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentTreeFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
             if (cached is not null) // Hit.
             { // Mở khối.
                 return cached; // Trả ngay.
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        await EnsurePostExistsAsync(postId); // Kiểm tra post.
-        var (roots, total) = await _repository.GetRootsByPostIdPagedAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Trang gốc trong post.
-        var allInPost = await _repository.GetByPostIdAsync(postId); // Toàn bộ comment của post — một SELECT lớn.
-        var trees = new List<CommentTreeDto>(); // Chứa cây con ứng mỗi gốc trang.
-        foreach (var root in roots) // Duyệt từng gốc trong trang hiện tại.
-        { // Mở khối.
-            var forest = BuildTreeFromComments(allInPost); // Dựng toàn rừng từ list phẳng (lặp lại mỗi gốc — chi phí CPU).
-            var node = forest.FirstOrDefault(t => t.Id == root.Id); // Tìm nút gốc tương ứng trong rừng vừa build.
-            if (node is not null) // Tìm thấy nút.
-            { // Mở khối.
-                trees.Add(node); // Thêm subtree đầy đủ vào kết quả.
-            } // Hết nhánh tìm thấy.
-        } // Hết foreach roots.
+        var (trees, total) = await BuildFlatTreesPagedCoreAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
 
-        var result = new PagedResult<CommentTreeDto> // Gói phân trang.
+        var result = new PagedResult<CommentTreeFlatDto> // Gói phân trang.
         { // Mở khối.
-            Items = trees, // Danh sách cây.
+            Items = trees.Select(MapTreeFlat).ToList(), // Danh sách cây flat không có Level.
             Page = page, // Trang.
             PageSize = pageSize, // Cỡ trang.
             TotalCount = total // Tổng gốc trong post.
@@ -559,7 +651,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetTreeByPostIdPagedAsync.
 
     // Phân trang comment dạng cây gốc toàn hệ (GET /api/comments/tree/flat khi không có postId).
-    public async Task<PagedResult<CommentTreeDto>> GetAllTreePagedAsync( // Phân trang cây toàn hệ thống (EF).
+    private async Task<PagedResult<CommentTreeFlatDto>> GetAllTreePagedAsync( // Phân trang cây toàn hệ thống (EF).
         int page, // Trang.
         int pageSize, // Cỡ trang.
         CancellationToken cancellationToken = default, // Hủy.
@@ -569,18 +661,17 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
         { // Mở khối.
             var cacheKey = EntityCacheKeys.CommentsAllTreeFlat(page, pageSize); // Khóa cây EF theo trang.
-            var cached = await _cache.GetJsonAsync<PagedResult<CommentTreeDto>>(cacheKey, cancellationToken); // Thử cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentTreeFlatDto>>(cacheKey, cancellationToken); // Thử cache.
             if (cached is not null) // Hit.
             { // Mở khối.
                 return cached; // Trả ngay.
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        var (roots, total) = await _repository.GetRootCommentsPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT trang gốc.
-        var trees = await BuildSubtreesForRootsAsync(roots, cancellationToken); // Nạp comment theo post + dựng cây RAM.
-        var result = new PagedResult<CommentTreeDto> // Gói phân trang.
+        var (trees, total) = await BuildFlatTreesPagedCoreAsync(null, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
+        var result = new PagedResult<CommentTreeFlatDto> // Gói phân trang.
         { // Mở khối.
-            Items = trees, // Danh sách cây đã dựng.
+            Items = trees.Select(MapTreeFlat).ToList(), // Danh sách cây flat không có Level.
             Page = page, // Trang.
             PageSize = pageSize, // Cỡ trang.
             TotalCount = total // Tổng số gốc.
@@ -593,8 +684,25 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         return result; // Trả kết quả.
     } // Kết thúc GetAllTreePagedAsync.
 
-    // Cây trong post từ CTE: hàng thô → BuildTreeFromFlatDtosForOnePost → phân trang danh sách gốc (không dùng EF tree).
-    public async Task<PagedResult<CommentTreeDto>> GetCteTreeByPostIdPagedAsync( // Cây CTE theo post.
+    // [11] Route: GET /api/comments/tree/cte
+    public async Task<PagedResult<CommentTreeDto>> GetTreeCteRoutePagedAsync(
+        Guid? postId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default,
+        DateTime? createdAtFrom = null,
+        DateTime? createdAtTo = null)
+    {
+        // Điều phối route tree/cte: cùng chữ ký, xử lý mọi trạng thái input postId.
+        return postId is { } pid
+            // Có postId: cây CTE trong một bài.
+            ? await GetCteTreeByPostIdPagedAsync(pid, page, pageSize, cancellationToken, createdAtFrom, createdAtTo)
+            // Không postId: rừng CTE toàn hệ.
+            : await GetAllCteTreePagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo);
+    }
+
+    // Cây trong post từ CTE: hàng thô → BuildTreeCte → phân trang danh sách gốc (không dùng EF tree).
+    private async Task<PagedResult<CommentTreeDto>> GetCteTreeByPostIdPagedAsync( // Cây CTE theo post.
         Guid postId, // Bài viết.
         int page, // Trang gốc.
         int pageSize, // Cỡ trang.
@@ -612,18 +720,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        await EnsurePostExistsAsync(postId); // Post phải tồn tại.
-        var rows = await _repository.GetTreeRowsByCteAsync(postId, cancellationToken, createdAtFrom, createdAtTo); // Hàng CTE một post có lọc ngày.
-        var roots = BuildTreeFromFlatDtosForOnePost(rows); // Rừng gốc đã lồng Children.
-        var orderedRoots = roots // Cùng thứ tự hiển thị gốc như EF: CreatedAt, Id.
-            .OrderBy(r => r.CreatedAt) // Thời gian tạo gốc.
-            .ThenBy(r => r.Id) // Tie-break.
-            .ToList(); // List để Skip/Take.
-        var total = (long)orderedRoots.Count; // Tổng số gốc trong post.
-        var items = orderedRoots // Phân trang gốc.
-            .Skip((page - 1) * pageSize) // OFFSET.
-            .Take(pageSize) // FETCH.
-            .ToList(); // Trang hiện tại.
+        var (items, total) = await BuildCteTreesPagedCoreAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
         var result = new PagedResult<CommentTreeDto> // Gói phân trang.
         { // Mở khối.
             Items = items, // Mỗi mục là subtree đầy đủ từ CTE.
@@ -640,7 +737,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetCteTreeByPostIdPagedAsync.
 
     // Phân trang cây gốc toàn hệ từ CTE (GET /api/comments/tree/cte khi không có postId).
-    public async Task<PagedResult<CommentTreeDto>> GetAllCteTreePagedAsync( // Cây từ hàng CTE, phân trang theo gốc.
+    private async Task<PagedResult<CommentTreeDto>> GetAllCteTreePagedAsync( // Cây từ hàng CTE, phân trang theo gốc.
         int page, // Trang.
         int pageSize, // Cỡ trang.
         CancellationToken cancellationToken = default, // Hủy.
@@ -657,13 +754,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        var allRows = await _repository.GetTreeRowsByCteAllAsync(cancellationToken, createdAtFrom, createdAtTo); // Hàng thô CTE mọi post.
-        var rootForest = BuildGlobalRootForestFromCteAllRows(allRows); // Danh sách gốc đã có subtree đầy đủ, thứ tự ổn định.
-        var total = (long)rootForest.Count; // Tổng số gốc toàn hệ (cùng ý nghĩa phân trang với GetRootCommentsPagedAsync).
-        var items = rootForest // Cắt trang trên tập gốc.
-            .Skip((page - 1) * pageSize) // OFFSET theo trang.
-            .Take(pageSize) // FETCH cỡ trang.
-            .ToList(); // List cho JSON.
+        var (items, total) = await BuildCteTreesPagedCoreAsync(null, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
         var result = new PagedResult<CommentTreeDto> // Gói phân trang.
         { // Mở khối.
             Items = items, // Mỗi phần tử là một cây CommentTreeDto lồng nhau.
@@ -679,8 +770,25 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         return result; // Trả về.
     } // Kết thúc GetAllCteTreePagedAsync.
 
+    // [12] Route: GET /api/comments/tree/flat/flatten
+    public async Task<PagedResult<CommentFlatNoLevelDto>> GetTreeFlatFlattenRoutePagedAsync(
+        Guid? postId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default,
+        DateTime? createdAtFrom = null,
+        DateTime? createdAtTo = null)
+    {
+        // Điều phối route flatten tree/flat: vẫn một hàm public duy nhất cho route.
+        return postId is { } pid
+            // Có postId: flatten cây của một bài.
+            ? await GetFlattenedTreeByPostIdPagedAsync(pid, page, pageSize, cancellationToken, createdAtFrom, createdAtTo)
+            // Không postId: flatten rừng toàn hệ.
+            : await GetFlattenedForestPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo);
+    }
+
     // Làm phẳng cây EF trong một post theo trang gốc (một lần dựng rừng, trích subtree theo gốc trang).
-    public async Task<PagedResult<CommentFlatDto>> GetFlattenedTreeByPostIdPagedAsync( // Làm phẳng cây EF trong post.
+    private async Task<PagedResult<CommentFlatNoLevelDto>> GetFlattenedTreeByPostIdPagedAsync( // Làm phẳng cây EF trong post.
         Guid postId, // Bài viết.
         int page, // Trang gốc.
         int pageSize, // Cỡ trang.
@@ -691,29 +799,20 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
         { // Mở khối.
             var cacheKey = EntityCacheKeys.CommentsFlattenedEfTreeByPost(postId, page, pageSize); // Khóa cache.
-            var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatNoLevelDto>>(cacheKey, cancellationToken); // Đọc cache.
             if (cached is not null) // Hit.
             { // Mở khối.
                 return cached; // Trả ngay.
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        await EnsurePostExistsAsync(postId); // Kiểm tra post.
-        var (roots, total) = await _repository.GetRootsByPostIdPagedAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Trang gốc.
-        var allInPost = await _repository.GetByPostIdAsync(postId); // Nạp toàn comment post.
-        var forest = BuildTreeFromComments(allInPost); // Một lần dựng rừng cho cả post.
-        var trees = new List<CommentTreeDto>(); // Subtree theo từng gốc trang.
-        foreach (var root in roots) // Duyệt gốc trang.
-        { // Mở khối.
-            var node = forest.FirstOrDefault(t => t.Id == root.Id); // Tìm subtree theo gốc trang.
-            if (node is not null) // Có nút.
-            { // Mở khối.
-                trees.Add(node); // Thu thập subtree.
-            } // Hết nhánh.
-        } // Hết foreach.
-
-        var flat = FlattenForestPreorder(trees); // Preorder → danh sách CommentFlatDto.
-        var result = new PagedResult<CommentFlatDto> // Gói phân trang.
+        var (roots, total) = await BuildFlatTreesPagedCoreAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
+        var flat = new List<CommentFlatNoLevelDto>(); // Kết quả làm phẳng cuối cùng của route.
+        foreach (var root in roots) // Duyệt các cây gốc đã build.
+        {
+            FlattenTreeFlat(root, flat); // Flatten trực tiếp vì roots đã là tree node đầy đủ.
+        }
+        var result = new PagedResult<CommentFlatNoLevelDto> // Gói phân trang.
         { // Mở khối.
             Items = flat, // Dòng phẳng.
             Page = page, // Trang.
@@ -729,7 +828,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetFlattenedTreeByPostIdPagedAsync.
 
     // Làm phẳng rừng cây EF toàn hệ (GET /api/comments/tree/flat/flatten khi không có postId).
-    public async Task<PagedResult<CommentFlatDto>> GetFlattenedForestPagedAsync( // Rừng EF làm phẳng preorder, phân trang theo gốc.
+    private async Task<PagedResult<CommentFlatNoLevelDto>> GetFlattenedForestPagedAsync( // Rừng EF làm phẳng preorder, phân trang theo gốc.
         int page, // Trang.
         int pageSize, // Cỡ trang.
         CancellationToken cancellationToken = default, // Hủy.
@@ -739,17 +838,20 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Cache khi không lọc ngày.
         { // Mở khối.
             var cacheKey = EntityCacheKeys.CommentsAllFlattenEfTree(page, pageSize); // Khóa cache.
-            var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Đọc cache.
+            var cached = await _cache.GetJsonAsync<PagedResult<CommentFlatNoLevelDto>>(cacheKey, cancellationToken); // Đọc cache.
             if (cached is not null) // Hit.
             { // Mở khối.
                 return cached; // Trả ngay.
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        var (roots, total) = await _repository.GetRootCommentsPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Trang gốc.
-        var trees = await BuildSubtreesForRootsAsync(roots, cancellationToken); // Dựng subtree đầy đủ cho mỗi gốc.
-        var flat = FlattenForestPreorder(trees); // Duyệt DFS gán Level — chỉ CPU.
-        var result = new PagedResult<CommentFlatDto> // Gói phân trang.
+        var (roots, total) = await BuildFlatTreesPagedCoreAsync(null, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
+        var flat = new List<CommentFlatNoLevelDto>(); // Kết quả làm phẳng cuối cùng của route.
+        foreach (var root in roots) // Duyệt các cây gốc đã build.
+        {
+            FlattenTreeFlat(root, flat); // Flatten trực tiếp từ node tree.
+        }
+        var result = new PagedResult<CommentFlatNoLevelDto> // Gói phân trang.
         { // Mở khối.
             Items = flat, // Danh sách phẳng có Level.
             Page = page, // Trang.
@@ -764,8 +866,25 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         return result; // Trả về.
     } // Kết thúc GetFlattenedForestPagedAsync.
 
+    // [13] Route: GET /api/comments/tree/cte/flatten
+    public async Task<PagedResult<CommentFlatDto>> GetTreeCteFlattenRoutePagedAsync(
+        Guid? postId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default,
+        DateTime? createdAtFrom = null,
+        DateTime? createdAtTo = null)
+    {
+        // Điều phối route flatten tree/cte: gom cả 2 mode postId/null vào một cổng.
+        return postId is { } pid
+            // Có postId: flatten tree CTE trong một bài.
+            ? await GetFlattenedCteTreeByPostIdPagedAsync(pid, page, pageSize, cancellationToken, createdAtFrom, createdAtTo)
+            // Không postId: flatten rừng CTE toàn cục.
+            : await GetFlattenedFromCtePagedAsync(page, pageSize, cancellationToken, null, createdAtFrom, createdAtTo);
+    }
+
     // CTE theo post: dựng cây từ hàng SQL, làm phẳng, phân trang trong RAM.
-    public async Task<PagedResult<CommentFlatDto>> GetFlattenedCteTreeByPostIdPagedAsync( // CTE một post, phẳng, cắt trang.
+    private async Task<PagedResult<CommentFlatDto>> GetFlattenedCteTreeByPostIdPagedAsync( // CTE một post, phẳng, cắt trang.
         Guid postId, // Bài viết.
         int page, // Trang.
         int pageSize, // Cỡ trang.
@@ -783,22 +902,18 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        await EnsurePostExistsAsync(postId); // Kiểm tra post.
-
-        var cteRows = await _repository.GetTreeRowsByCteAsync(postId, cancellationToken, createdAtFrom, createdAtTo); // ADO CTE một post có lọc ngày.
-        var roots = BuildTreeFromFlatDtosForOnePost(cteRows); // Dựng cây từ hàng có Level.
-        var flatList = FlattenForestPreorder(roots); // Làm phẳng preorder.
-        var total = flatList.Count; // Tổng dòng phẳng.
-        var slice = flatList // Nguồn cho Skip/Take sau khi làm phẳng CTE.
-            .Skip((page - 1) * pageSize) // Bỏ trang trước.
-            .Take(pageSize) // Lấy cỡ trang.
-            .ToList(); // Materialize.
+        var (pagedRoots, total) = await BuildCteTreesPagedCoreAsync(postId, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
+        var slice = new List<CommentFlatDto>();
+        foreach (var root in pagedRoots)
+        {
+            FlattenTreeCte(root, slice); // Quá trình flatten preorder sau khi build tree CTE.
+        }
         var result = new PagedResult<CommentFlatDto> // Gói phân trang.
         { // Mở khối.
             Items = slice, // Trang con.
             Page = page, // Trang.
             PageSize = pageSize, // Cỡ trang.
-            TotalCount = total // Tổng dòng.
+            TotalCount = total // Tổng gốc tree CTE theo trang hiện tại.
         }; // Kết thúc initializer.
         if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
         { // Mở khối.
@@ -809,7 +924,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetFlattenedCteTreeByPostIdPagedAsync.
 
     // Làm phẳng CTE toàn hệ rồi cắt trang trong RAM (GET /api/comments/tree/cte/flatten khi không có postId).
-    public async Task<PagedResult<CommentFlatDto>> GetFlattenedFromCtePagedAsync( // CTE toàn cục rồi cắt trang trong RAM.
+    private async Task<PagedResult<CommentFlatDto>> GetFlattenedFromCtePagedAsync( // CTE toàn cục rồi cắt trang trong RAM.
         int page, // Trang.
         int pageSize, // Cỡ trang.
         CancellationToken cancellationToken = default, // Hủy.
@@ -832,19 +947,18 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             } // Hết cache.
         } // Kết thúc nhánh cache.
 
-        var allRows = await _repository.GetTreeRowsByCteAllAsync(cancellationToken, createdAtFrom, createdAtTo); // ADO CTE toàn cục có lọc ngày.
-        var flatList = BuildGlobalFlatFromCteAllRows(allRows); // Nhóm post + cây + flatten trong RAM.
-        var total = flatList.Count; // Tổng số dòng phẳng (int) từ Count collection.
-        var slice = flatList // Nguồn cho biểu thức Skip/Take (phân trang trong RAM).
-            .Skip((page - 1) * pageSize) // Bỏ các dòng của trang trước (LINQ to Objects).
-            .Take(pageSize) // Lấy đúng pageSize phần tử.
-            .ToList(); // List vật lý cho response.
+        var (pagedRoots, total) = await BuildCteTreesPagedCoreAsync(null, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // Đồng bộ pipeline: raw -> tree.
+        var slice = new List<CommentFlatDto>();
+        foreach (var root in pagedRoots)
+        {
+            FlattenTreeCte(root, slice); // Quá trình flatten preorder sau khi build tree CTE.
+        }
         var result = new PagedResult<CommentFlatDto> // Gói phân trang.
         { // Mở khối.
             Items = slice, // Trang con của danh sách phẳng.
             Page = page, // Trang.
             PageSize = pageSize, // Cỡ trang.
-            TotalCount = total // Tổng dòng phẳng toàn cục.
+            TotalCount = total // Tổng gốc tree CTE theo trang hiện tại.
         }; // Kết thúc initializer.
         if (!HasCreatedAtFilter(createdAtFrom, createdAtTo)) // Chỉ cache khi không lọc ngày.
         { // Mở khối.
@@ -859,6 +973,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     #region CommentsController — demo danh sách (lazy / eager / explicit / projection)
 
     // Demo phân trang lazy: normalize rồi gọi repository.
+    // [14] Route: GET /api/comments/demo/lazy-loading (paged)
     public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsLazyLoadingDemoPagedAsync( // Demo phân trang lazy.
         int page, // Trang yêu cầu.
         int pageSize, // Cỡ trang yêu cầu.
@@ -873,7 +988,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         } // Kết thúc kiểm tra post.
 
         var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa số trang/cỡ trang (không SQL).
-        var (items, total) = await _repository.GetCommentsLazyLoadingDemoPagedAsync(p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // COUNT + SELECT.
+        var (items, total) = await _repository.GetCommentsLazyLoadingDemoRouteAsync(true, p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // COUNT + SELECT.
         return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
         { // Mở khối.
             Items = items, // Danh sách đã map từ repository.
@@ -884,6 +999,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetCommentsLazyLoadingDemoPagedAsync.
 
     // Demo phân trang eager: normalize rồi gọi repository.
+    // [15] Route: GET /api/comments/demo/eager-loading (paged)
     public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsEagerLoadingDemoPagedAsync( // Demo phân trang eager.
         int page, // Trang.
         int pageSize, // Cỡ trang.
@@ -898,7 +1014,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         } // Kết thúc kiểm tra.
 
         var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa tham số phân trang.
-        var (items, total) = await _repository.GetCommentsEagerLoadingDemoPagedAsync(p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // Include + phân trang.
+        var (items, total) = await _repository.GetCommentsEagerLoadingDemoRouteAsync(true, p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // Include + phân trang.
         return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
         { // Mở khối.
             Items = items, // Dòng demo.
@@ -909,6 +1025,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetCommentsEagerLoadingDemoPagedAsync.
 
     // Demo phân trang explicit loading.
+    // [16] Route: GET /api/comments/demo/explicit-loading (paged)
     public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsExplicitLoadingDemoPagedAsync( // Demo phân trang explicit.
         int page, // Trang.
         int pageSize, // Cỡ trang.
@@ -923,7 +1040,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         } // Kết thúc kiểm tra.
 
         var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa.
-        var (items, total) = await _repository.GetCommentsExplicitLoadingDemoPagedAsync(p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // LoadAsync sau phân trang.
+        var (items, total) = await _repository.GetCommentsExplicitLoadingDemoRouteAsync(true, p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // LoadAsync sau phân trang.
         return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
         { // Mở khối.
             Items = items, // Dòng demo.
@@ -934,6 +1051,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetCommentsExplicitLoadingDemoPagedAsync.
 
     // Demo phân trang projection (DTO ngay trong SQL).
+    // [17] Route: GET /api/comments/demo/projection (paged)
     public async Task<PagedResult<CommentLoadingDemoDto>> GetCommentsProjectionDemoPagedAsync( // Demo phân trang projection.
         int page, // Trang.
         int pageSize, // Cỡ trang.
@@ -948,7 +1066,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         } // Kết thúc kiểm tra.
 
         var (p, s) = PaginationQuery.Normalize(page, pageSize); // Chuẩn hóa.
-        var (items, total) = await _repository.GetCommentsProjectionDemoPagedAsync(p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // Select DTO phân trang.
+        var (items, total) = await _repository.GetCommentsProjectionDemoRouteAsync(true, p, s, cancellationToken, postId, createdAtFrom, createdAtTo); // Select DTO phân trang.
         return new PagedResult<CommentLoadingDemoDto> // Gói kết quả.
         { // Mở khối.
             Items = items, // Dòng demo.
@@ -959,6 +1077,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetCommentsProjectionDemoPagedAsync.
 
     // Demo toàn bộ comment + lazy: không COUNT/Skip/Take; ủy quyền repository (cảnh báo dữ liệu lớn).
+    // [14] Route: GET /api/comments/demo/lazy-loading (unpaged)
     public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsLazyLoadingDemoAsync(
         CancellationToken cancellationToken = default, // Hủy.
         Guid? postId = null, // Lọc một bài.
@@ -970,11 +1089,12 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             await EnsurePostExistsAsync(pid); // 404 nếu không có.
         } // Kết thúc kiểm tra.
 
-        var items = await _repository.GetAllCommentsLazyLoadingDemoAsync(cancellationToken, postId, createdAtFrom, createdAtTo); // SELECT all + lazy nav.
+        var (items, _) = await _repository.GetCommentsLazyLoadingDemoRouteAsync(false, 1, 1, cancellationToken, postId, createdAtFrom, createdAtTo); // Unpaged cùng route function.
         return items; // List → IReadOnlyList.
     } // Kết thúc GetAllCommentsLazyLoadingDemoAsync.
 
     // Demo toàn bộ comment + eager.
+    // [15] Route: GET /api/comments/demo/eager-loading (unpaged)
     public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsEagerLoadingDemoAsync(
         CancellationToken cancellationToken = default, // Hủy.
         Guid? postId = null, // Lọc một bài.
@@ -986,11 +1106,12 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             await EnsurePostExistsAsync(pid); // 404.
         } // Kết thúc kiểm tra.
 
-        var items = await _repository.GetAllCommentsEagerLoadingDemoAsync(cancellationToken, postId, createdAtFrom, createdAtTo); // Include + split.
+        var (items, _) = await _repository.GetCommentsEagerLoadingDemoRouteAsync(false, 1, 1, cancellationToken, postId, createdAtFrom, createdAtTo); // Unpaged cùng route function.
         return items; // Trả danh sách.
     } // Kết thúc GetAllCommentsEagerLoadingDemoAsync.
 
     // Demo toàn bộ comment + explicit.
+    // [16] Route: GET /api/comments/demo/explicit-loading (unpaged)
     public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsExplicitLoadingDemoAsync(
         CancellationToken cancellationToken = default, // Hủy.
         Guid? postId = null, // Lọc một bài.
@@ -1002,11 +1123,12 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             await EnsurePostExistsAsync(pid); // 404.
         } // Kết thúc kiểm tra.
 
-        var items = await _repository.GetAllCommentsExplicitLoadingDemoAsync(cancellationToken, postId, createdAtFrom, createdAtTo); // LoadAsync từng quan hệ.
+        var (items, _) = await _repository.GetCommentsExplicitLoadingDemoRouteAsync(false, 1, 1, cancellationToken, postId, createdAtFrom, createdAtTo); // Unpaged cùng route function.
         return items; // Trả danh sách.
     } // Kết thúc GetAllCommentsExplicitLoadingDemoAsync.
 
     // Demo toàn bộ comment + projection.
+    // [17] Route: GET /api/comments/demo/projection (unpaged)
     public async Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsProjectionDemoAsync(
         CancellationToken cancellationToken = default, // Hủy.
         Guid? postId = null, // Lọc một bài.
@@ -1018,7 +1140,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             await EnsurePostExistsAsync(pid); // 404.
         } // Kết thúc kiểm tra.
 
-        var items = await _repository.GetAllCommentsProjectionDemoAsync(cancellationToken, postId, createdAtFrom, createdAtTo); // SQL projection.
+        var (items, _) = await _repository.GetCommentsProjectionDemoRouteAsync(false, 1, 1, cancellationToken, postId, createdAtFrom, createdAtTo); // Unpaged cùng route function.
         return items; // Trả danh sách.
     } // Kết thúc GetAllCommentsProjectionDemoAsync.
 
@@ -1027,7 +1149,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     #region ICommentService — Bổ trợ (phân trang toàn hệ, tìm kiếm, đọc theo post; demo một Id không có route trong CommentsController)
 
     // Phân trang toàn hệ — dùng nội bộ GetCommentListAsync, GetAllFlatPagedAsync và unit test.
-    public async Task<PagedResult<CommentDto>> GetAllPagedAsync( // Phân trang toàn cục CommentDto.
+    private async Task<PagedResult<CommentDto>> GetAllPagedAsync( // Phân trang toàn cục CommentDto.
         int page, // Số trang (1-based).
         int pageSize, // Số bản ghi mỗi trang.
         CancellationToken cancellationToken = default, // Hủy bất đồng bộ.
@@ -1044,7 +1166,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             } // Kết thúc nhánh cache hit.
         } // Kết thúc nhánh có thể dùng cache.
 
-        var (items, total) = await _repository.GetPagedAsync(page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT có lọc ngày.
+        var (items, total) = await _repository.GetCommentsRoutePagedAsync(null, null, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT có lọc ngày.
         var result = new PagedResult<CommentDto> // Tạo object kết quả phân trang API.
         { // Mở khối.
             Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Biến mỗi Comment thành CommentDto trong RAM (LINQ to Objects, không SQL).
@@ -1061,17 +1183,17 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetAllPagedAsync.
 
     // Toàn bộ comment phẳng một post một lần — dùng nội bộ GetCommentListAsync (unpaged + postId).
-    public async Task<IReadOnlyList<CommentDto>> GetAllByPostIdAsync( // Toàn bộ DTO theo PostId.
+    private async Task<IReadOnlyList<CommentDto>> GetAllByPostIdAsync( // Toàn bộ DTO theo PostId.
         Guid postId, // Bài viết.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở khối GetAllByPostIdAsync.
         await EnsurePostExistsAsync(postId); // 404 nếu post không tồn tại.
-        var entities = await _repository.GetByPostIdAsync(postId); // Một SELECT toàn comment thuộc post (AsNoTracking trong repo).
+        var entities = await _repository.GetCommentsRouteAllAsync(postId); // Một SELECT toàn comment thuộc post (AsNoTracking trong repo).
         return entities.Select(_mapper.Map<CommentDto>).ToList(); // Map sang DTO, trả IReadOnlyList qua List.
     } // Kết thúc GetAllByPostIdAsync.
 
     // Tìm theo nội dung toàn hệ — dùng nội bộ GetCommentListAsync (nhánh content + phân trang).
-    public async Task<PagedResult<CommentDto>> SearchByContentPagedAsync( // Tìm kiếm nội dung toàn hệ thống.
+    private async Task<PagedResult<CommentDto>> SearchByContentPagedAsync( // Tìm kiếm nội dung toàn hệ thống.
         string? content, // Chuỗi tìm kiếm có thể null.
         int page, // Số trang.
         int pageSize, // Cỡ trang.
@@ -1090,7 +1212,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
             } // Hết nhánh cache.
         } // Kết thúc nhánh có cache.
 
-        var (items, total) = await _repository.SearchByContentPagedAsync(term, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT.
+        var (items, total) = await _repository.GetCommentsRoutePagedAsync(null, term, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT.
         var result = new PagedResult<CommentDto> // Gói trang kết quả.
         { // Mở khối.
             Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Map từng phần tử trong bộ nhớ.
@@ -1107,13 +1229,13 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc SearchByContentPagedAsync.
 
     // Đọc một comment trong phạm vi post — mở rộng API / test (không có action riêng trong CommentsController hiện tại).
-    public async Task<CommentDto> GetByIdInPostAsync( // Đọc comment trong một post.
+    private async Task<CommentDto> GetByIdInPostAsync( // Đọc comment trong một post.
         Guid postId, // Định danh bài viết chứa comment.
         Guid commentId, // Định danh comment cần đọc.
         CancellationToken cancellationToken = default) // Token hủy thao tác bất đồng bộ.
     { // Mở khối GetByIdInPostAsync.
         await EnsurePostExistsAsync(postId); // Gọi Any Post — một truy vấn SQL trong repository.
-        var dto = await _repository.GetByIdForReadInPostAsync(postId, commentId, cancellationToken); // SELECT projection một dòng hoặc null.
+        var dto = await _repository.GetCommentByIdRouteReadAsync(commentId, postId, cancellationToken); // SELECT projection một dòng hoặc null.
         if (dto is null) // Không có comment đó trong post.
         { // Mở khối.
             throw new ApiException( // Ném lỗi HTTP 404 thống nhất API.
@@ -1126,7 +1248,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc GetByIdInPostAsync.
 
     // Tìm theo nội dung trong một post — dùng nội bộ GetCommentListAsync.
-    public async Task<PagedResult<CommentDto>> SearchByContentInPostPagedAsync( // Tìm theo nội dung trong post.
+    private async Task<PagedResult<CommentDto>> SearchByContentInPostPagedAsync( // Tìm theo nội dung trong post.
         Guid postId, // Bài viết giới hạn phạm vi tìm kiếm.
         string? content, // Chuỗi tìm kiếm.
         int page, // Trang.
@@ -1147,7 +1269,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         } // Kết thúc nhánh cache.
 
         await EnsurePostExistsAsync(postId); // Kiểm tra post tồn tại (SQL Any).
-        var (items, total) = await _repository.SearchByContentInPostPagedAsync(postId, term, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT trong post.
+        var (items, total) = await _repository.GetCommentsRoutePagedAsync(postId, term, page, pageSize, cancellationToken, createdAtFrom, createdAtTo); // COUNT + SELECT trong post.
         var result = new PagedResult<CommentDto> // Đối tượng phân trang.
         { // Mở khối.
             Items = items.Select(_mapper.Map<CommentDto>).ToList(), // Ánh xạ sang DTO.
@@ -1162,66 +1284,6 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
 
         return result; // Trả kết quả.
     } // Kết thúc SearchByContentInPostPagedAsync.
-
-    // Demo một bản ghi + lazy — ủy quyền repository (không map GET demo/* list trong CommentsController).
-    public async Task<CommentLoadingDemoDto> GetCommentLazyLoadingDemoAsync(Guid id, CancellationToken cancellationToken = default) // Id comment.
-    { // Mở khối GetCommentLazyLoadingDemoAsync.
-        var dto = await _repository.GetCommentLazyLoadingDemoAsync(id, cancellationToken); // Ủy quyền repository (SQL + lazy tiềm ẩn).
-        if (dto is null) // Không tìm thấy.
-        { // Mở khối.
-            throw new ApiException( // 404.
-                StatusCodes.Status404NotFound, // HTTP.
-                ApiErrorCodes.CommentNotFound, // Mã.
-                ApiMessages.CommentNotFound); // Thông báo.
-        } // Hết null.
-
-        return dto; // Trả DTO demo.
-    } // Kết thúc GetCommentLazyLoadingDemoAsync.
-
-    // Demo một bản ghi + eager.
-    public async Task<CommentLoadingDemoDto> GetCommentEagerLoadingDemoAsync(Guid id, CancellationToken cancellationToken = default) // Id comment.
-    { // Mở khối GetCommentEagerLoadingDemoAsync.
-        var dto = await _repository.GetCommentEagerLoadingDemoAsync(id, cancellationToken); // Nạp quan hệ trong ít round-trip có kiểm soát.
-        if (dto is null) // Không tìm thấy.
-        { // Mở khối.
-            throw new ApiException( // 404.
-                StatusCodes.Status404NotFound, // HTTP.
-                ApiErrorCodes.CommentNotFound, // Mã.
-                ApiMessages.CommentNotFound); // Thông báo.
-        } // Hết null.
-
-        return dto; // Trả DTO demo.
-    } // Kết thúc GetCommentEagerLoadingDemoAsync.
-
-    // Demo một bản ghi + explicit.
-    public async Task<CommentLoadingDemoDto> GetCommentExplicitLoadingDemoAsync(Guid id, CancellationToken cancellationToken = default) // Id comment.
-    { // Mở khối GetCommentExplicitLoadingDemoAsync.
-        var dto = await _repository.GetCommentExplicitLoadingDemoAsync(id, cancellationToken); // Nạp có điều khiển sau truy vấn đầu.
-        if (dto is null) // Không tìm thấy.
-        { // Mở khối.
-            throw new ApiException( // 404.
-                StatusCodes.Status404NotFound, // HTTP.
-                ApiErrorCodes.CommentNotFound, // Mã.
-                ApiMessages.CommentNotFound); // Thông báo.
-        } // Hết null.
-
-        return dto; // Trả DTO demo.
-    } // Kết thúc GetCommentExplicitLoadingDemoAsync.
-
-    // Demo một bản ghi + projection.
-    public async Task<CommentLoadingDemoDto> GetCommentProjectionDemoAsync(Guid id, CancellationToken cancellationToken = default) // Id comment.
-    { // Mở khối GetCommentProjectionDemoAsync.
-        var dto = await _repository.GetCommentProjectionDemoAsync(id, cancellationToken); // SELECT chiếu thẳng sang DTO.
-        if (dto is null) // Không tìm thấy.
-        { // Mở khối.
-            throw new ApiException( // 404.
-                StatusCodes.Status404NotFound, // HTTP.
-                ApiErrorCodes.CommentNotFound, // Mã.
-                ApiMessages.CommentNotFound); // Thông báo.
-        } // Hết null.
-
-        return dto; // Trả DTO demo.
-    } // Kết thúc GetCommentProjectionDemoAsync.
 
     #endregion
 
@@ -1255,7 +1317,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         DateTime? createdAtTo = null) // Lọc CreatedAt.
     { // Mở khối.
         await EnsurePostExistsAsync(postId); // 404 nếu không có post.
-        return await _repository.SearchByContentInPostAllAsync(postId, term, cancellationToken, createdAtFrom, createdAtTo); // List khớp.
+        return await _repository.SearchCommentsRouteAllAsync(postId, term, cancellationToken, createdAtFrom, createdAtTo); // List khớp.
     } // Kết thúc SearchByContentInPostAllValidatedAsync.
 
     // Gói danh sách đầy đủ thành PagedResult (Page=1, PageSize=số phần tử hoặc mặc định khi rỗng).
@@ -1272,115 +1334,81 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         }; // Kết thúc object.
     } // Kết thúc ToUnpagedCommentDtoResult.
 
-    // Với mỗi gốc trong trang: nạp comment các post liên quan và trích subtree tương ứng.
-    private async Task<List<CommentTreeDto>> BuildSubtreesForRootsAsync( // Helper: dựng subtree cho danh sách gốc.
-        List<Comment> roots, // Các comment gốc (ParentId null) của trang hiện tại.
-        CancellationToken cancellationToken) // Hủy.
-    { // Mở khối BuildSubtreesForRootsAsync.
-        if (roots.Count == 0) // Không có gốc.
-        { // Mở khối.
-            return new List<CommentTreeDto>(); // Trả list rỗng, không gọi SQL.
-        } // Hết nhánh rỗng.
+    // Pipeline lõi cho toàn bộ route flat [08][10][12]: lấy raw EF theo gốc trang, dựng tree một lần, trả cây theo đúng gốc trang.
+    private async Task<(List<CommentTreeDto> Roots, long TotalCount)> BuildFlatTreesPagedCoreAsync(
+        Guid? postId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default,
+        DateTime? createdAtFrom = null,
+        DateTime? createdAtTo = null)
+    {
+        if (postId is { } pid)
+        {
+            await EnsurePostExistsAsync(pid); // Đồng bộ validation giữa tất cả route flat theo post.
+        }
 
-        var postIds = roots.Select(r => r.PostId) // Lấy PostId từ mỗi gốc.
-            .Distinct() // Loại trùng post.
-            .ToList(); // Materialize danh sách Guid.
-        var allInPosts = await _repository.GetCommentsForPostsAsync(postIds, cancellationToken); // Một SELECT IN PostId.
-        var trees = new List<CommentTreeDto>(); // Kết quả cây theo thứ tự gốc.
-        foreach (var root in roots) // Xử lý từng gốc trang.
-        { // Mở khối.
-            var inPost = allInPosts.Where(c => c.PostId == root.PostId).ToList(); // Lọc comment cùng post với gốc (RAM).
-            var forest = BuildTreeFromComments(inPost); // Dựng rừng trong post.
-            var node = forest.FirstOrDefault(t => t.Id == root.Id); // Tìm nút gốc trong rừng.
-            if (node is not null) // Tìm thấy subtree.
-            { // Mở khối.
-                trees.Add(node); // Thu thập.
-            } // Hết nhánh.
-        } // Hết foreach.
+        var (pagedRoots, totalCount, rawComments) = await _repository.LoadRawFlatAsync(
+            postId,
+            page,
+            pageSize,
+            rootsOnly: true,
+            loadCommentsForRootPosts: true,
+            cancellationToken,
+            createdAtFrom,
+            createdAtTo); // Một nguồn raw duy nhất cho nhóm route flat benchmark.
 
-        return trees; // Danh sách cây theo thứ tự gốc đầu vào.
-    } // Kết thúc BuildSubtreesForRootsAsync.
+        if (pagedRoots.Count == 0 || rawComments.Count == 0)
+        {
+            return (new List<CommentTreeDto>(), totalCount); // Không có dữ liệu thì trả rỗng sớm.
+        }
 
-    // Chuyển một trang entity Comment sang CommentFlatDto; tính Level nếu đủ nhỏ, ngược lại gán 0.
-    private async Task<List<CommentFlatDto>> ToCommentFlatDtosAsync( // Helper: trang entity → CommentFlatDto có Level.
-        List<Comment> pageItems, // Các bản ghi của trang hiện tại.
-        CancellationToken cancellationToken) // Hủy.
-    { // Mở khối ToCommentFlatDtosAsync.
-        if (pageItems.Count == 0) // Trang rỗng.
-        { // Mở khối.
-            return new List<CommentFlatDto>(); // Không gọi DB thêm.
-        } // Hết nhánh rỗng.
+        var forest = BuildTreeFlat(rawComments); // Build tree một lần duy nhất.
+        var byRootId = forest.ToDictionary(root => root.Id, root => root); // Lookup subtree theo root id.
+        var roots = new List<CommentTreeDto>(pagedRoots.Count); // Kết quả theo thứ tự phân trang gốc.
+        foreach (var root in pagedRoots)
+        {
+            if (byRootId.TryGetValue(root.Id, out var node))
+            {
+                roots.Add(node); // Chỉ thêm subtree thuộc các root đã phân trang.
+            }
+        }
 
-        var postIds = pageItems.Select(c => c.PostId).Distinct().ToList(); // Các post xuất hiện trong trang hiện tại.
-        var allForPosts = await _repository.GetCommentsForPostsAsync(postIds, cancellationToken); // Nạp đủ comment các post để biết cây.
+        return (roots, totalCount); // Trả cây đã đồng bộ quy trình.
+    }
 
-        if (allForPosts.Count > MaxCommentsToComputeLevels) // Quá nhiều bản ghi.
-        { // Mở khối.
-            return pageItems.Select(c => new CommentFlatDto // Chiếu từng phần tử trang sang DTO.
-            { // Mở khối.
-                Id = c.Id, // Khóa comment.
-                Content = c.Content, // Nội dung.
-                CreatedAt = c.CreatedAt, // Thời điểm tạo.
-                PostId = c.PostId, // Bài viết.
-                UserId = c.UserId, // Người viết.
-                ParentId = c.ParentId, // Cha.
-                Level = 0 // Không tính độ sâu — gán 0 an toàn.
-            }).ToList(); // List kết quả.
-        } // Hết nhánh ngưỡng.
+    // Pipeline lõi cho toàn bộ route cte [09][11][13]: lấy raw CTE, dựng tree, phân trang theo gốc.
+    private async Task<(List<CommentTreeDto> Roots, long TotalCount)> BuildCteTreesPagedCoreAsync(
+        Guid? postId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default,
+        DateTime? createdAtFrom = null,
+        DateTime? createdAtTo = null)
+    {
+        if (postId is { } pid)
+        {
+            await EnsurePostExistsAsync(pid); // Đồng bộ validation giữa tất cả route cte theo post.
+        }
 
-        var byPost = allForPosts.GroupBy(x => x.PostId).ToDictionary(g => g.Key, g => g.ToList()); // Dictionary PostId → list comment trong post.
-        var depthByPost = byPost.ToDictionary(kv => kv.Key, kv => BuildDepthById(kv.Value)); // Mỗi post → map Id → độ sâu.
+        var rows = await _repository.LoadRawCteAsync(postId, cancellationToken, createdAtFrom, createdAtTo); // Một nguồn raw duy nhất cho nhóm route cte benchmark.
+        var roots = postId.HasValue
+            ? BuildTreeCte(rows) // Một post.
+            : BuildForestCte(rows); // Toàn hệ.
 
-        var list = new List<CommentFlatDto>(pageItems.Count); // Dự trữ đúng cỡ trang.
-        foreach (var c in pageItems) // Duyệt từng phần tử trang.
-        { // Mở khối.
-            depthByPost[c.PostId].TryGetValue(c.Id, out var lv); // Lấy Level đã memo trong post tương ứng.
-            list.Add(new CommentFlatDto // Thêm DTO phẳng.
-            { // Mở khối.
-                Id = c.Id, // Khóa.
-                Content = c.Content, // Nội dung.
-                CreatedAt = c.CreatedAt, // Thời gian.
-                PostId = c.PostId, // Post.
-                UserId = c.UserId, // User.
-                ParentId = c.ParentId, // Cha.
-                Level = lv // Độ sâu tính được hoặc 0 mặc định struct.
-            }); // Kết thúc Add.
-        } // Hết foreach.
+        var orderedRoots = roots
+            .OrderBy(root => root.CreatedAt)
+            .ThenBy(root => root.Id)
+            .ToList(); // Thứ tự ổn định giống nhau cho mọi route cte.
 
-        return list; // Danh sách đầy đủ Level (hoặc 0 khi vượt ngưỡng đã xử lý ở nhánh trên).
-    } // Kết thúc ToCommentFlatDtosAsync.
+        var totalCount = (long)orderedRoots.Count; // Tổng số gốc trước khi cắt trang.
+        var pagedRoots = orderedRoots
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
 
-    // Tính độ sâu từng Id trong một post bằng đệ quy có ghi nhớ (memoization).
-    private static Dictionary<Guid, int> BuildDepthById(List<Comment> inPost) // Toàn comment một post.
-    { // Mở khối BuildDepthById.
-        var parentById = inPost.ToDictionary(c => c.Id, c => c.ParentId); // Map Id → ParentId nullable.
-        var memo = new Dictionary<Guid, int>(); // Nhớ độ sâu đã tính.
-
-        int Depth(Guid id) // Hàm local đệ quy có memo.
-        { // Mở khối.
-            if (memo.TryGetValue(id, out var d)) // Đã tính id này.
-            { // Mở khối.
-                return d; // Trả sâu đã lưu.
-            } // Hết cache hit.
-
-            if (!parentById.TryGetValue(id, out var p) || !p.HasValue) // Không có cha → gốc.
-            { // Mở khối.
-                memo[id] = 0; // Ghi nhớ độ sâu 0.
-                return 0; // Gốc.
-            } // Hết nhánh gốc.
-
-            var v = 1 + Depth(p.Value); // Độ sâu = 1 + độ sâu cha.
-            memo[id] = v; // Lưu memo.
-            return v; // Trả độ sâu.
-        } // Kết thúc local function Depth.
-
-        foreach (var c in inPost) // Đảm bảo mọi Id trong list đều được tính.
-        { // Mở khối.
-            _ = Depth(c.Id); // Gọi Depth vì tác dụng phụ điền memo.
-        } // Hết foreach.
-
-        return memo; // Map Id → độ sâu.
-    } // Kết thúc BuildDepthById.
+        return (pagedRoots, totalCount); // Trả cây đã phân trang gốc.
+    }
 
     // Ném 404 nếu post không tồn tại; dùng chung cho endpoint theo postId.
     private async Task EnsurePostExistsAsync(Guid postId) // Id bài viết cần kiểm tra.
@@ -1407,8 +1435,8 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
     } // Kết thúc EnsureUserExistsAsync.
 
     // Dựng rừng CommentTreeDto từ danh sách phẳng entity; xử lý dữ liệu lệch và chu kỳ bằng cách nâng nút lên gốc.
-    private static List<CommentTreeDto> BuildTreeFromComments(List<Comment> comments) // Danh sách comment một hoặc nhiều cây.
-    { // Mở khối BuildTreeFromComments.
+    private static List<CommentTreeDto> BuildTreeFlat(List<Comment> comments) // Danh sách comment flat (EF) một hoặc nhiều cây.
+    { // Mở khối BuildTreeFlat.
         var lookup = comments.ToDictionary( // Từ Id → nút DTO trống chưa gắn con.
             x => x.Id, // Khóa dictionary.
             x => new CommentTreeDto // Khởi tạo nút lá/chưa có con.
@@ -1418,7 +1446,8 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
                 CreatedAt = x.CreatedAt, // Thời gian.
                 PostId = x.PostId, // Bài viết.
                 UserId = x.UserId, // Người viết.
-                ParentId = x.ParentId // Tham chiếu cha.
+                ParentId = x.ParentId, // Tham chiếu cha.
+                Level = 0 // Cây EF không mang sẵn level; sẽ là 0 nếu route không tính theo CTE.
             }); // Kết thúc ToDictionary.
 
         var roots = new List<CommentTreeDto>(); // Danh sách gốc trả về (có thể nhiều cây).
@@ -1439,7 +1468,7 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
                 continue; // Bỏ gắn.
             } // Hết cha thiếu.
 
-            if (CreatesCycleFromComments(comment.Id, comments)) // Phát hiện chu kỳ parent.
+            if (HasCycleFlat(comment.Id, comments)) // Phát hiện chu kỳ parent.
             { // Mở khối.
                 roots.Add(node); // Tách nút ra gốc để tránh vòng lặp vô hạn.
                 continue; // Không gắn vào cây có chu kỳ.
@@ -1449,11 +1478,11 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         } // Hết foreach.
 
         return roots; // Rừng các cây độc lập.
-    } // Kết thúc BuildTreeFromComments.
+    } // Kết thúc BuildTreeFlat.
 
     // Leo chuỗi ParentId từ commentId để phát hiện chu kỳ hoặc đường đi lặp trong tập hữu hạn.
-    private static bool CreatesCycleFromComments(Guid commentId, List<Comment> comments) // Id xuất phát và tập entity.
-    { // Mở khối CreatesCycleFromComments.
+    private static bool HasCycleFlat(Guid commentId, List<Comment> comments) // Id xuất phát và tập entity.
+    { // Mở khối HasCycleFlat.
         var map = comments.ToDictionary(x => x.Id, x => x); // Id → entity để leo cha.
         var visited = new HashSet<Guid>(); // Đã thăm Id cha trên đường leo.
         Guid? currentParentId = map[commentId].ParentId; // Bắt đầu từ cha của commentId.
@@ -1479,148 +1508,163 @@ public class CommentService : ICommentService // Lớp dịch vụ triển khai 
         } // Hết while.
 
         return false; // Hết chuỗi cha, không chu kỳ.
-    } // Kết thúc CreatesCycleFromComments.
+    } // Kết thúc HasCycleFlat.
 
-    // Gom hàng CTE toàn cục theo PostId, dựng cây từng post rồi nối preorder thành một danh sách phẳng.
-    private static List<CommentFlatDto> BuildGlobalFlatFromCteAllRows(List<CommentFlatDto> allRows) // Mọi hàng CTE đã map DTO.
-    { // Mở khối BuildGlobalFlatFromCteAllRows.
-        var result = new List<CommentFlatDto>(); // Phẳng toàn cục sẽ nối từng post.
-        foreach (var group in allRows.GroupBy(r => r.PostId).OrderBy(g => g.Key)) // Nhóm theo PostId, sort key PostId.
-        { // Mở khối.
-            var roots = BuildTreeFromFlatDtosForOnePost(group.ToList()); // Dựng cây một post từ list hàng.
-            result.AddRange(FlattenForestPreorder(roots)); // Nối preorder vào cuối result.
-        } // Hết foreach nhóm.
+    // Dựng tree CTE cho một post từ danh sách hàng phẳng có Level.
+    private static List<CommentTreeDto> BuildTreeCte(List<CommentFlatDto> rows) // Input là các dòng phẳng CTE của một post hoặc đã tách theo post.
+    { // Mở khối BuildTreeCte.
+        // Tạo lookup Id -> node đích để gắn liên kết cha-con nhanh O(1).
+        var lookup = rows.ToDictionary(
+            x => x.Id, // Khóa dictionary theo Id comment.
+            x => new CommentTreeDto // Tạo node cây từ mỗi row phẳng.
+            { // Mở initializer node.
+                Id = x.Id, // Ánh xạ khóa nút.
+                Content = x.Content, // Ánh xạ nội dung.
+                CreatedAt = x.CreatedAt, // Ánh xạ thời gian.
+                PostId = x.PostId, // Ánh xạ bài viết.
+                UserId = x.UserId, // Ánh xạ tác giả.
+                ParentId = x.ParentId, // Ánh xạ liên kết cha.
+                Level = x.Level // Giữ level CTE đã tính từ raw rows.
+            }); // Kết thúc initializer node.
 
-        return result; // Danh sách phẳng toàn hệ thống.
-    } // Kết thúc BuildGlobalFlatFromCteAllRows.
+        var roots = new List<CommentTreeDto>(); // Danh sách gốc trả về sau cùng.
+        // Duyệt theo Level trước để cha thường được xử lý trước con, rồi ổn định theo thời gian/Id.
+        foreach (var row in rows.OrderBy(x => x.Level).ThenBy(x => x.CreatedAt).ThenBy(x => x.Id)) // Duyệt tất cả row theo thứ tự ổn định.
+        { // Mở foreach dựng cây.
+            var node = lookup[row.Id]; // Nút hiện tại tương ứng row.
+            if (row.ParentId is null) // Nút gốc.
+            { // Mở nhánh gốc.
+                roots.Add(node); // Không có cha -> gốc.
+                continue; // Đi node tiếp theo.
+            } // Hết nhánh gốc.
 
-    // Từ hàng CTE toàn cục: nhóm PostId → dựng rừng mỗi post → nối các gốc theo PostId rồi CreatedAt/Id (khớp GetRootCommentsPagedAsync).
-    private static List<CommentTreeDto> BuildGlobalRootForestFromCteAllRows(List<CommentFlatDto> allRows) // Gốc đã lồng subtree.
-    { // Mở khối BuildGlobalRootForestFromCteAllRows.
-        var rootForest = new List<CommentTreeDto>(); // Tất cả gốc toàn hệ theo thứ tự ổn định.
-        foreach (var group in allRows.GroupBy(r => r.PostId).OrderBy(g => g.Key)) // Theo PostId tăng dần.
-        { // Mở khối từng bài.
-            var postRoots = BuildTreeFromFlatDtosForOnePost(group.ToList()); // Cây logic trong một post.
-            foreach (var root in postRoots.OrderBy(r => r.CreatedAt).ThenBy(r => r.Id)) // Gốc trong post giống thứ tự EF.
-            { // Mở khối từng gốc.
-                rootForest.Add(root); // Nối vào rừng toàn cục.
-            } // Hết foreach gốc.
-        } // Hết foreach post.
+            if (!lookup.TryGetValue(row.ParentId.Value, out var parent)) // Không tìm thấy cha trong lookup.
+            { // Mở nhánh cha thiếu.
+                roots.Add(node); // Cha thiếu trong tập -> nâng thành gốc để không mất dữ liệu.
+                continue; // Bỏ gắn cha-con vì dữ liệu lệch.
+            } // Hết nhánh cha thiếu.
 
-        return rootForest; // Danh sách gốc để phân trang (mỗi phần tử là một cây đầy đủ).
-    } // Kết thúc BuildGlobalRootForestFromCteAllRows.
+            if (HasCycleCte(row.Id, rows)) // Phát hiện vòng lặp trên chuỗi parent.
+            { // Mở nhánh cycle.
+                roots.Add(node); // Có chu kỳ -> tách nút ra gốc, tránh gắn tạo vòng.
+                continue; // Không gắn để tránh tạo vòng.
+            } // Hết nhánh cycle.
 
-    // Dựng cây từ các hàng phẳng có Level (từ SQL); thứ tự duyệt ổn định theo Level rồi thời gian.
-    private static List<CommentTreeDto> BuildTreeFromFlatDtosForOnePost(List<CommentFlatDto> rows) // Hàng một post.
-    { // Mở khối BuildTreeFromFlatDtosForOnePost.
-        var lookup = rows.ToDictionary( // Id → nút cây.
-            x => x.Id, // Khóa.
-            x => new CommentTreeDto // Nút.
-            { // Mở khối.
-                Id = x.Id, // Id.
-                Content = x.Content, // Nội dung.
-                CreatedAt = x.CreatedAt, // Thời gian.
-                PostId = x.PostId, // Post.
-                UserId = x.UserId, // User.
-                ParentId = x.ParentId // Cha.
-            }); // Kết thúc ToDictionary.
+            parent.Children.Add(node); // Gắn node vào danh sách con của cha.
+        } // Hết foreach dựng cây.
 
-        var roots = new List<CommentTreeDto>(); // Gốc logic của post.
+        return roots; // Trả cây/rừng đã dựng.
+    } // Kết thúc BuildTreeCte.
 
-        foreach (var row in rows.OrderBy(x => x.Level).ThenBy(x => x.CreatedAt).ThenBy(x => x.Id)) // Thứ tự an toàn theo Level SQL.
-        { // Mở khối.
-            var node = lookup[row.Id]; // Nút hiện tại.
+    // Dựng rừng tree CTE toàn cục từ raw rows của nhiều post.
+    private static List<CommentTreeDto> BuildForestCte(List<CommentFlatDto> allRows) // Input là rows toàn cục nhiều post.
+    { // Mở khối BuildForestCte.
+        var forest = new List<CommentTreeDto>(); // Kết quả rừng toàn cục.
+        // Tách theo từng post để không gắn chéo cây giữa các bài viết.
+        foreach (var group in allRows.GroupBy(r => r.PostId).OrderBy(g => g.Key)) // Mỗi group đại diện một post.
+        { // Mở foreach group theo post.
+            var postRoots = BuildTreeCte(group.ToList()); // Dựng cây riêng cho từng post.
+            foreach (var root in postRoots.OrderBy(r => r.CreatedAt).ThenBy(r => r.Id)) // Duyệt root theo thời gian/Id.
+            { // Mở foreach root.
+                forest.Add(root); // Thêm từng gốc vào rừng kết quả, giữ thứ tự ổn định.
+            } // Hết foreach root.
+        } // Hết foreach group.
 
-            if (row.ParentId is null) // Gốc.
-            { // Mở khối.
-                roots.Add(node); // Thêm gốc.
-                continue; // Không gắn cha.
-            } // Hết gốc.
+        return forest; // Trả rừng gốc của nhiều post.
+    } // Kết thúc BuildForestCte.
 
-            if (!lookup.TryGetValue(row.ParentId.Value, out var parent)) // Cha không có trong lookup.
-            { // Mở khối.
-                roots.Add(node); // Nâng lên gốc để không mất nút.
-                continue; // Bỏ gắn.
-            } // Hết cha thiếu.
+    // Kiểm tra cycle khi dựng tree CTE từ raw rows.
+    private static bool HasCycleCte(Guid commentId, List<CommentFlatDto> rows) // commentId là nút cần kiểm tra chu kỳ.
+    { // Mở khối HasCycleCte.
+        var parentById = rows.ToDictionary(x => x.Id, x => x.ParentId); // Bản đồ Id -> ParentId để leo ngược.
+        if (!parentById.ContainsKey(commentId)) // Không có node đích trong tập rows.
+        { // Mở nhánh không có node.
+            return false; // Id không có trong tập -> không đánh dấu cycle.
+        } // Hết nhánh không có node.
 
-            if (CreatesCycleFromFlatRows(row.Id, rows)) // Chu kỳ trên hàng phẳng.
-            { // Mở khối.
-                roots.Add(node); // Tách khỏi cây lỗi.
-                continue; // Không gắn.
-            } // Hết chu kỳ.
+        var visited = new HashSet<Guid>(); // Tập Id đã đi qua khi leo cha.
+        Guid? parentId = parentById[commentId]; // Bắt đầu từ cha trực tiếp của nút đang kiểm tra.
+        while (parentId is not null) // Leo dần lên cha đến khi gặp null.
+        { // Mở while leo cha.
+            if (parentId == commentId) // Quay về node ban đầu.
+            { // Mở nhánh cycle trực tiếp.
+                return true; // Quay lại chính nó -> cycle.
+            } // Hết nhánh cycle trực tiếp.
 
-            parent.Children.Add(node); // Gắn con vào cha.
-        } // Hết foreach.
+            if (!visited.Add(parentId.Value)) // Id cha đã xuất hiện trước đó.
+            { // Mở nhánh cycle do lặp.
+                return true; // Gặp lại một cha đã thăm -> cycle/lặp vòng.
+            } // Hết nhánh cycle do lặp.
 
-        return roots; // Rừng cây (thường một cây hoặc nhiều gốc).
-    } // Kết thúc BuildTreeFromFlatDtosForOnePost.
+            if (!parentById.TryGetValue(parentId.Value, out var nextParent)) // Không còn record cho cha hiện tại.
+            { // Mở nhánh kết thúc không cycle.
+                return false; // Leo tới nút cha không còn bản ghi -> chuỗi kết thúc, không cycle.
+            } // Hết nhánh kết thúc không cycle.
 
-    // Duyệt từng cây gốc theo thứ tự ổn định; gọi DFS preorder để làm phẳng.
-    private static List<CommentFlatDto> FlattenForestPreorder(List<CommentTreeDto> roots) // Danh sách gốc các cây.
-    { // Mở khối FlattenForestPreorder.
-        var result = new List<CommentFlatDto>(); // Danh sách phẳng đầu ra.
-        foreach (var root in roots.OrderBy(r => r.CreatedAt).ThenBy(r => r.Id)) // Thứ tự gốc ổn định.
-        { // Mở khối.
-            VisitPreorder(root, 0, result); // DFS từ depth 0.
-        } // Hết foreach.
+            parentId = nextParent; // Tiếp tục leo lên cha kế tiếp.
+        } // Hết while leo cha.
 
-        return result; // Rừng đã phẳng thành một list.
-    } // Kết thúc FlattenForestPreorder.
+        return false; // Leo hết lên null mà không vòng -> hợp lệ.
+    } // Kết thúc HasCycleCte.
 
-    // DFS preorder: thêm nút với Level hiện tại, rồi đệ quy con theo thứ tự thời gian/Id.
-    private static void VisitPreorder(CommentTreeDto node, int level, List<CommentFlatDto> sink) // Nút, độ sâu, đích ghi.
-    { // Mở khối VisitPreorder.
-        sink.Add(new CommentFlatDto // Thêm nút hiện tại vào danh sách phẳng.
-        { // Mở khối.
-            Id = node.Id, // Id.
+    // Flatten preorder cho tree flat (không có Level trong response).
+    private static void FlattenTreeFlat(CommentTreeDto node, ICollection<CommentFlatNoLevelDto> sink) // node là gốc subtree cần flatten.
+    { // Mở khối FlattenTreeFlat.
+        // Bước preorder: ghi node hiện tại trước.
+        sink.Add(new CommentFlatNoLevelDto // Thêm node hiện tại vào output phẳng.
+        { // Mở initializer DTO flat.
+            Id = node.Id, // Id nút.
+            Content = node.Content, // Nội dung nút.
+            CreatedAt = node.CreatedAt, // Thời gian tạo nút.
+            PostId = node.PostId, // Post của nút.
+            UserId = node.UserId, // User của nút.
+            ParentId = node.ParentId // Liên kết cha của nút.
+        }); // Kết thúc initializer DTO flat.
+
+        // Sau node hiện tại, duyệt con theo thứ tự ổn định và đệ quy preorder.
+        foreach (var child in node.Children.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id)) // Duyệt con theo thứ tự ổn định.
+        { // Mở foreach flatten con.
+            FlattenTreeFlat(child, sink); // Ghi toàn bộ nhánh con.
+        } // Hết foreach flatten con.
+    } // Kết thúc FlattenTreeFlat.
+
+    // Flatten preorder cho tree CTE (giữ Level).
+    private static void FlattenTreeCte(CommentTreeDto node, ICollection<CommentFlatDto> sink) // node là gốc subtree CTE cần flatten.
+    { // Mở khối FlattenTreeCte.
+        // Bước preorder: ghi node hiện tại trước, giữ nguyên Level của cây CTE.
+        sink.Add(new CommentFlatDto // Thêm node hiện tại vào output phẳng có Level.
+        { // Mở initializer DTO cte-flat.
+            Id = node.Id, // Id nút.
+            Content = node.Content, // Nội dung nút.
+            CreatedAt = node.CreatedAt, // Thời gian tạo nút.
+            PostId = node.PostId, // Post của nút.
+            UserId = node.UserId, // User của nút.
+            ParentId = node.ParentId, // Liên kết cha.
+            Level = node.Level // Level được bảo toàn từ tree CTE.
+        }); // Kết thúc initializer DTO cte-flat.
+
+        // Duyệt con theo thứ tự ổn định để output phẳng nhất quán giữa các lần gọi.
+        foreach (var child in node.Children.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id)) // Duyệt con theo thứ tự ổn định.
+        { // Mở foreach flatten con CTE.
+            FlattenTreeCte(child, sink); // Flatten toàn bộ subtree con.
+        } // Hết foreach flatten con CTE.
+    } // Kết thúc FlattenTreeCte.
+
+    // Map cây nội bộ sang DTO tree-flat không có Level trong response.
+    private static CommentTreeFlatDto MapTreeFlat(CommentTreeDto node) // Map một node tree chung sang node tree-flat.
+    { // Mở khối MapTreeFlat.
+        // Map node hiện tại và đệ quy map toàn bộ children sang DTO không Level.
+        return new CommentTreeFlatDto // Trả DTO tree-flat mới.
+        { // Mở initializer tree-flat.
+            Id = node.Id, // Id nút.
             Content = node.Content, // Nội dung.
-            CreatedAt = node.CreatedAt, // Thời gian.
-            PostId = node.PostId, // Post.
-            UserId = node.UserId, // User.
-            ParentId = node.ParentId, // Cha.
-            Level = level // Độ sâu DFS hiện tại.
-        }); // Kết thúc Add.
-
-        foreach (var child in node.Children.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id)) // Con sắp ổn định.
-        { // Mở khối.
-            VisitPreorder(child, level + 1, sink); // Đệ quy với level tăng 1.
-        } // Hết foreach con.
-    } // Kết thúc VisitPreorder.
-
-    // Kiểm tra chu kỳ trên biểu đồ cha được mô tả bởi danh sách hàng phẳng (ParentId).
-    private static bool CreatesCycleFromFlatRows(Guid commentId, List<CommentFlatDto> rows) // Id xuất phát và hàng.
-    { // Mở khối CreatesCycleFromFlatRows.
-        var parentById = rows.ToDictionary(x => x.Id, x => x.ParentId); // Id → ParentId.
-        if (!parentById.ContainsKey(commentId)) // Không có nút trong map.
-        { // Mở khối.
-            return false; // Không leo được → không chu kỳ từ Id này.
-        } // Hết thiếu khóa.
-
-        var visited = new HashSet<Guid>(); // Đường đi các Id cha đã qua.
-        Guid? parentId = parentById[commentId]; // Bắt đầu từ cha.
-
-        while (parentId is not null) // Còn bậc leo.
-        { // Mở khối.
-            if (parentId == commentId) // Cha trỏ về chính nút xuất phát.
-            { // Mở khối.
-                return true; // Chu kỳ trực tiếp.
-            } // Hết nhánh.
-
-            if (!visited.Add(parentId.Value)) // Trùng đường đi.
-            { // Mở khối.
-                return true; // Chu kỳ gián tiếp.
-            } // Hết nhánh.
-
-            if (!parentById.TryGetValue(parentId.Value, out var nextParent)) // Hết chuỗi.
-            { // Mở khối.
-                return false; // Không còn cha trong tập.
-            } // Hết chuỗi.
-
-            parentId = nextParent; // Leo tiếp.
-        } // Hết while.
-
-        return false; // Đến gốc null an toàn.
-    } // Kết thúc CreatesCycleFromFlatRows.
+            CreatedAt = node.CreatedAt, // Thời điểm tạo.
+            PostId = node.PostId, // Post chứa nút.
+            UserId = node.UserId, // Tác giả nút.
+            ParentId = node.ParentId, // Id cha (nullable).
+            Children = node.Children.Select(MapTreeFlat).ToList() // Đệ quy map toàn bộ con.
+        }; // Kết thúc initializer tree-flat.
+    } // Kết thúc MapTreeFlat.
 
     // Tập định danh cây con (gồm rootId) bằng BFS theo quan hệ ParentId trên danh sách phẳng một post.
     private static HashSet<Guid> BuildSubtreeIdSet(IReadOnlyList<Comment> inPost, Guid rootId) // Danh sách trong post và Id gốc.

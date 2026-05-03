@@ -8,421 +8,382 @@ using Moq;
 
 namespace CommentAPI.Tests;
 
-// Nhóm unit test CommentService: mock repository + cache + AutoMapper thật (MappingProfile).
 public class CommentServiceTests
 {
+    private static CommentService CreateSut(Mock<ICommentRepository> repo, Mock<IEntityResponseCache> cache)
+        => new(repo.Object, TestMapperFactory.CreateMapper(), cache.Object);
+
     // F.I.R.S.T: nhanh, độc lập, lặp lại ổn định, tự kiểm chứng, kịp thời.
-    // 3A — Arrange: cache trả sẵn DTO. Act: gọi GetByIdAsync. Assert: không gọi repository đọc.
+    // 3A — Arrange: cache có sẵn DTO. Act: gọi GetByIdAsync. Assert: không truy vấn repository.
     [Fact]
     public async Task CM01_GetByIdAsync_ShouldReturnFromCache_WhenCacheHit()
     {
         var id = Guid.NewGuid();
-        var cached = new CommentDto
-        {
-            Id = id,
-            Content = "cached",
-            CreatedAt = DateTime.UtcNow,
-            PostId = Guid.NewGuid(),
-            UserId = Guid.NewGuid(),
-            ParentId = null
-        };
-
+        var cached = new CommentDto { Id = id, Content = "cached", CreatedAt = DateTime.UtcNow, PostId = Guid.NewGuid(), UserId = Guid.NewGuid() };
         var repo = new Mock<ICommentRepository>(MockBehavior.Strict);
         var cache = new Mock<IEntityResponseCache>();
-        cache.Setup(c => c.GetJsonAsync<CommentDto>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(cached);
+        cache.Setup(x => x.GetJsonAsync<CommentDto>(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(cached);
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo, cache);
         var result = await sut.GetByIdAsync(id);
 
         Assert.Same(cached, result);
-        repo.Verify(r => r.GetByIdForReadAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    // F.I.R.S.T: độc lập, không phụ thuộc thứ tự chạy test khác.
-    // 3A — Arrange: cache miss, repo trả DTO. Act: GetByIdAsync. Assert: SetJsonAsync được gọi đúng kiểu.
+    // F.I.R.S.T: xác minh đường cache-miss.
+    // 3A — Arrange: cache miss, repo trả DTO. Act: gọi GetByIdAsync. Assert: DTO trả đúng và có Set cache.
     [Fact]
-    public async Task CM02_GetByIdAsync_ShouldQueryRepository_AndPopulateCache_WhenCacheMiss()
+    public async Task CM02_GetByIdAsync_ShouldReadRepository_AndSetCache_WhenCacheMiss()
     {
         var id = Guid.NewGuid();
-        var dto = new CommentDto
-        {
-            Id = id,
-            Content = "db",
-            CreatedAt = DateTime.UtcNow,
-            PostId = Guid.NewGuid(),
-            UserId = Guid.NewGuid(),
-            ParentId = null
-        };
-
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.GetByIdForReadAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(dto);
+        repo.Setup(x => x.GetCommentByIdRouteReadAsync(id, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CommentDto { Id = id, Content = "db", CreatedAt = DateTime.UtcNow, PostId = Guid.NewGuid(), UserId = Guid.NewGuid() });
 
         var cache = new Mock<IEntityResponseCache>();
-        cache.Setup(c => c.GetJsonAsync<CommentDto>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        cache.Setup(x => x.GetJsonAsync<CommentDto>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((CommentDto?)null);
-        cache.Setup(c => c.SetJsonAsync(It.IsAny<string>(), It.IsAny<CommentDto>(), It.IsAny<CancellationToken>()))
+        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<CommentDto>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo, cache);
         var result = await sut.GetByIdAsync(id);
 
         Assert.Equal(id, result.Id);
-        Assert.Equal("db", result.Content);
-        cache.Verify(
-            c => c.SetJsonAsync(It.IsAny<string>(), It.Is<CommentDto>(x => x.Id == id), It.IsAny<CancellationToken>()),
-            Times.Once);
+        cache.Verify(x => x.SetJsonAsync(It.IsAny<string>(), It.Is<CommentDto>(d => d.Id == id), It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // F.I.R.S.T: tự kiểm chứng qua ApiException cố định.
-    // 3A — Arrange: miss + repo null. Act/Assert: ném 404 đúng mã lỗi.
+    // F.I.R.S.T: kiểm chứng lỗi ổn định.
+    // 3A — Arrange: cache miss + repo null. Act/Assert: ném 404 CommentNotFound.
     [Fact]
     public async Task CM03_GetByIdAsync_ShouldThrow404_WhenNotFound()
     {
         var id = Guid.NewGuid();
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.GetByIdForReadAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync((CommentDto?)null);
-
+        repo.Setup(x => x.GetCommentByIdRouteReadAsync(id, null, It.IsAny<CancellationToken>())).ReturnsAsync((CommentDto?)null);
         var cache = new Mock<IEntityResponseCache>();
-        cache.Setup(c => c.GetJsonAsync<CommentDto>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((CommentDto?)null);
+        cache.Setup(x => x.GetJsonAsync<CommentDto>(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync((CommentDto?)null);
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo, cache);
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.GetByIdAsync(id));
 
         Assert.Equal(StatusCodes.Status404NotFound, ex.StatusCode);
         Assert.Equal(ApiErrorCodes.CommentNotFound, ex.ErrorCode);
     }
 
-    // F.I.R.S.T: lặp lại ổn định với Theory biên chuỗi rỗng.
-    // 3A — Arrange: term null hoặc chỉ khoảng trắng. Act: SearchByContentPagedAsync. Assert: 400 SEARCH_TERM_REQUIRED.
+    // F.I.R.S.T: phủ đường list unpaged không filter content.
+    // 3A — Arrange: repo trả 2 entity. Act: gọi GetCommentListAsync(unpaged=true). Assert: trả đủ 2 dòng và TotalCount đúng.
+    [Fact]
+    public async Task CM04_GetCommentListAsync_ShouldReturnUnpagedGlobal_WhenNoContentAndNoPost()
+    {
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.GetCommentsRouteAllAsync(null, null, null))
+            .ReturnsAsync(new List<Comment>
+            {
+                new() { Id = Guid.NewGuid(), Content = "a", CreatedAt = DateTime.UtcNow, PostId = Guid.NewGuid(), UserId = Guid.NewGuid() },
+                new() { Id = Guid.NewGuid(), Content = "b", CreatedAt = DateTime.UtcNow, PostId = Guid.NewGuid(), UserId = Guid.NewGuid() }
+            });
+        var cache = new Mock<IEntityResponseCache>();
+        var sut = CreateSut(repo, cache);
+
+        var result = await sut.GetCommentListAsync(null, null, true, 1, 10);
+
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal(2, result.TotalCount);
+    }
+
+    // F.I.R.S.T: kiểm tra biên search term.
+    // 3A — Arrange: content trắng được xem như không search; cache trả trang. Act: gọi list. Assert: không ném và trả từ cache.
     [Theory]
-    [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("\t\n")]
-    public async Task CM04_SearchByContentPagedAsync_ShouldThrow400_WhenTermMissing(string? raw)
+    [InlineData("\n\t")]
+    public async Task CM05_GetCommentListAsync_ShouldTreatWhitespaceAsNoSearch_AndUsePagedFlow(string content)
     {
         var repo = new Mock<ICommentRepository>(MockBehavior.Strict);
-        var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);
-
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), cache.Object);
-        var ex = await Assert.ThrowsAsync<ApiException>(() =>
-            sut.SearchByContentPagedAsync(raw, page: 1, pageSize: 10, CancellationToken.None));
-
-        Assert.Equal(StatusCodes.Status400BadRequest, ex.StatusCode);
-        Assert.Equal(ApiErrorCodes.SearchTermRequired, ex.ErrorCode);
-    }
-
-    // F.I.R.S.T: một ký tự không trắng là term hợp lệ (biên dưới độ dài).
-    // 3A — Arrange: repo trả rỗng, cache miss. Act: search "a". Assert: không ném, TotalCount = 0.
-    [Fact]
-    public async Task CM05_SearchByContentPagedAsync_ShouldSucceed_WhenSingleCharTerm()
-    {
-        var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.SearchByContentPagedAsync("a", 1, 10, It.IsAny<CancellationToken>(), null, null))
-            .ReturnsAsync((new List<Comment>(), 0L));
-
+        var expected = new PagedResult<CommentDto> { Items = new List<CommentDto>(), Page = 1, PageSize = 10, TotalCount = 0 };
         var cache = new Mock<IEntityResponseCache>();
-        cache.Setup(c => c.GetJsonAsync<PagedResult<CommentDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((PagedResult<CommentDto>?)null);
-        cache.Setup(c => c.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentDto>>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
+        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expected);
+        var sut = CreateSut(repo, cache);
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), cache.Object);
-        var page = await sut.SearchByContentPagedAsync("a", 1, 10);
+        var result = await sut.GetCommentListAsync(null, content, false, 1, 10);
 
-        Assert.Empty(page.Items);
-        Assert.Equal(0L, page.TotalCount);
+        Assert.Same(expected, result);
     }
 
-    // F.I.R.S.T: độc lập với DB thật.
-    // 3A — Arrange: PostExists false. Act: CreateAsync. Assert: PostNotFound.
+    // F.I.R.S.T: xác minh validation tạo mới theo thứ tự guard.
+    // 3A — Arrange: PostExists=false. Act/Assert: CreateAsync ném PostNotFound và không gọi UserExists.
     [Fact]
-    public async Task CM06_CreateAsync_ShouldThrow404_WhenPostMissing()
+    public async Task CM06_CreateAsync_ShouldThrow404_WhenPostNotFound()
     {
-        var dto = new CreateCommentDto
-        {
-            Content = "x",
-            PostId = Guid.NewGuid(),
-            UserId = Guid.NewGuid(),
-            ParentId = null
-        };
-
+        var dto = new CreateCommentDto { Content = "x", PostId = Guid.NewGuid(), UserId = Guid.NewGuid() };
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.PostExistsAsync(dto.PostId)).ReturnsAsync(false);
+        repo.Setup(x => x.PostExistsAsync(dto.PostId)).ReturnsAsync(false);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.CreateAsync(dto));
 
         Assert.Equal(ApiErrorCodes.PostNotFound, ex.ErrorCode);
-        repo.Verify(r => r.UserExistsAsync(It.IsAny<Guid>()), Times.Never);
+        repo.Verify(x => x.UserExistsAsync(It.IsAny<Guid>()), Times.Never);
     }
 
-    // F.I.R.S.T: kiểm tra thứ tự guard (post ok, user fail).
-    // 3A — Arrange: post tồn tại, user không. Act: CreateAsync. Assert: UserNotFound.
+    // F.I.R.S.T: xác minh nhánh parent không hợp lệ.
+    // 3A — Arrange: post/user có, parent không hợp lệ. Act/Assert: ném 400 CommentParentInvalid.
     [Fact]
-    public async Task CM07_CreateAsync_ShouldThrow404_WhenUserMissing()
+    public async Task CM07_CreateAsync_ShouldThrow400_WhenParentInvalid()
     {
         var dto = new CreateCommentDto
         {
             Content = "x",
             PostId = Guid.NewGuid(),
             UserId = Guid.NewGuid(),
-            ParentId = null
+            ParentId = Guid.NewGuid()
         };
-
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.PostExistsAsync(dto.PostId)).ReturnsAsync(true);
-        repo.Setup(r => r.UserExistsAsync(dto.UserId)).ReturnsAsync(false);
+        repo.Setup(x => x.PostExistsAsync(dto.PostId)).ReturnsAsync(true);
+        repo.Setup(x => x.UserExistsAsync(dto.UserId)).ReturnsAsync(true);
+        repo.Setup(x => x.ParentExistsAsync(dto.ParentId!.Value, dto.PostId)).ReturnsAsync(false);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
-        var ex = await Assert.ThrowsAsync<ApiException>(() => sut.CreateAsync(dto));
-
-        Assert.Equal(ApiErrorCodes.UserNotFound, ex.ErrorCode);
-    }
-
-    // F.I.R.S.T: biên ParentId có giá trị nhưng cha không tồn tại trong post.
-    // 3A — Arrange: post+user ok, ParentExists false. Act: CreateAsync. Assert: CommentParentInvalid.
-    [Fact]
-    public async Task CM08_CreateAsync_ShouldThrow400_WhenParentInvalid()
-    {
-        var parentId = Guid.NewGuid();
-        var dto = new CreateCommentDto
-        {
-            Content = "x",
-            PostId = Guid.NewGuid(),
-            UserId = Guid.NewGuid(),
-            ParentId = parentId
-        };
-
-        var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.PostExistsAsync(dto.PostId)).ReturnsAsync(true);
-        repo.Setup(r => r.UserExistsAsync(dto.UserId)).ReturnsAsync(true);
-        repo.Setup(r => r.ParentExistsAsync(parentId, dto.PostId)).ReturnsAsync(false);
-
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.CreateAsync(dto));
 
         Assert.Equal(StatusCodes.Status400BadRequest, ex.StatusCode);
         Assert.Equal(ApiErrorCodes.CommentParentInvalid, ex.ErrorCode);
     }
 
-    // F.I.R.S.T: mapper + repository tương tác được kiểm chứng bằng AddAsync/SaveChanges.
-    // 3A — Arrange: đủ điều kiện. Act: CreateAsync. Assert: Id không rỗng, nội dung khớp; nếu kỳ vọng Id sai cố ý thì test sẽ fail.
+    // F.I.R.S.T: đường thành công tạo mới.
+    // 3A — Arrange: mọi guard pass. Act: CreateAsync. Assert: Add + SaveChanges được gọi đúng 1 lần.
     [Fact]
-    public async Task CM09_CreateAsync_ShouldPersist_AndReturnMappedDto_WhenValid()
+    public async Task CM08_CreateAsync_ShouldPersist_WhenValid()
     {
-        var dto = new CreateCommentDto
-        {
-            Content = "hello",
-            PostId = Guid.NewGuid(),
-            UserId = Guid.NewGuid(),
-            ParentId = null
-        };
-
-        Comment? captured = null;
+        var dto = new CreateCommentDto { Content = "ok", PostId = Guid.NewGuid(), UserId = Guid.NewGuid() };
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.PostExistsAsync(dto.PostId)).ReturnsAsync(true);
-        repo.Setup(r => r.UserExistsAsync(dto.UserId)).ReturnsAsync(true);
-        repo.Setup(r => r.AddAsync(It.IsAny<Comment>())).Callback<Comment>(c => captured = c).Returns(Task.CompletedTask);
-        repo.Setup(r => r.SaveChangesAsync()).Returns(Task.CompletedTask);
+        repo.Setup(x => x.PostExistsAsync(dto.PostId)).ReturnsAsync(true);
+        repo.Setup(x => x.UserExistsAsync(dto.UserId)).ReturnsAsync(true);
+        repo.Setup(x => x.AddAsync(It.IsAny<Comment>())).Returns(Task.CompletedTask);
+        repo.Setup(x => x.SaveChangesAsync()).Returns(Task.CompletedTask);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
         var result = await sut.CreateAsync(dto);
 
-        Assert.NotEqual(Guid.Empty, result.Id);
-        Assert.Equal("hello", result.Content);
-        Assert.Equal(dto.PostId, result.PostId);
-        Assert.Equal(dto.UserId, result.UserId);
-        Assert.NotNull(captured);
-        Assert.Equal(result.Id, captured!.Id);
-        // Nếu cố ý Assert.Equal(Guid.Empty, result.Id) thì test fail — chứng tỏ assert chặt với lỗi gán Id.
-        repo.Verify(r => r.SaveChangesAsync(), Times.Once);
+        Assert.Equal("ok", result.Content);
+        repo.Verify(x => x.AddAsync(It.IsAny<Comment>()), Times.Once);
+        repo.Verify(x => x.SaveChangesAsync(), Times.Once);
     }
 
-    // F.I.R.S.T: không cần DB.
-    // 3A — Arrange: GetById null. Act: UpdateAsAuthorAsync. Assert: CommentNotFound.
+    // F.I.R.S.T: kiểm chứng quyền tác giả.
+    // 3A — Arrange: comment có UserId khác currentUserId. Act/Assert: ném 403 NotResourceAuthor.
     [Fact]
-    public async Task CM10_UpdateAsAuthorAsync_ShouldThrow404_WhenCommentMissing()
+    public async Task CM09_UpdateAsAuthorAsync_ShouldThrow403_WhenNotAuthor()
     {
         var id = Guid.NewGuid();
+        var entity = new Comment { Id = id, Content = "old", PostId = Guid.NewGuid(), UserId = Guid.NewGuid(), CreatedAt = DateTime.UtcNow };
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.GetByIdAsync(id)).ReturnsAsync((Comment?)null);
+        repo.Setup(x => x.GetByIdAsync(id)).ReturnsAsync(entity);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
-        var ex = await Assert.ThrowsAsync<ApiException>(() =>
-            sut.UpdateAsAuthorAsync(id, new UpdateCommentDto { Content = "z" }, Guid.NewGuid()));
-
-        Assert.Equal(ApiErrorCodes.CommentNotFound, ex.ErrorCode);
-    }
-
-    // F.I.R.S.T: kiểm tra quyền tác giả.
-    // 3A — Arrange: comment của user A, caller là B. Act: update. Assert: 403 NotResourceAuthor.
-    [Fact]
-    public async Task CM11_UpdateAsAuthorAsync_ShouldThrow403_WhenNotAuthor()
-    {
-        var author = Guid.NewGuid();
-        var other = Guid.NewGuid();
-        var id = Guid.NewGuid();
-        var entity = new Comment
-        {
-            Id = id,
-            Content = "old",
-            PostId = Guid.NewGuid(),
-            UserId = author,
-            ParentId = null
-        };
-
-        var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.GetByIdAsync(id)).ReturnsAsync(entity);
-
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
-        var ex = await Assert.ThrowsAsync<ApiException>(() =>
-            sut.UpdateAsAuthorAsync(id, new UpdateCommentDto { Content = "new" }, other));
+        var ex = await Assert.ThrowsAsync<ApiException>(() => sut.UpdateAsAuthorAsync(id, new UpdateCommentDto { Content = "new" }, Guid.NewGuid()));
 
         Assert.Equal(StatusCodes.Status403Forbidden, ex.StatusCode);
         Assert.Equal(ApiErrorCodes.NotResourceAuthor, ex.ErrorCode);
     }
 
-    // F.I.R.S.T: đường vui (happy path) cập nhật.
-    // 3A — Arrange: đúng tác giả, post còn. Act: UpdateAsAuthorAsync. Assert: nội dung đổi, cache remove.
+    // F.I.R.S.T: đường thành công update tác giả.
+    // 3A — Arrange: đúng tác giả + post còn tồn tại. Act: UpdateAsAuthorAsync. Assert: content đổi, SaveChanges và Remove cache được gọi.
     [Fact]
-    public async Task CM12_UpdateAsAuthorAsync_ShouldUpdate_WhenAuthorAndPostExists()
+    public async Task CM10_UpdateAsAuthorAsync_ShouldUpdateAndInvalidateCache_WhenValid()
     {
-        var author = Guid.NewGuid();
         var id = Guid.NewGuid();
-        var entity = new Comment
-        {
-            Id = id,
-            Content = "old",
-            PostId = Guid.NewGuid(),
-            UserId = author,
-            ParentId = null
-        };
-
+        var authorId = Guid.NewGuid();
+        var entity = new Comment { Id = id, Content = "old", PostId = Guid.NewGuid(), UserId = authorId, CreatedAt = DateTime.UtcNow };
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.GetByIdAsync(id)).ReturnsAsync(entity);
-        repo.Setup(r => r.PostExistsAsync(entity.PostId)).ReturnsAsync(true);
-        repo.Setup(r => r.SaveChangesAsync()).Returns(Task.CompletedTask);
-
+        repo.Setup(x => x.GetByIdAsync(id)).ReturnsAsync(entity);
+        repo.Setup(x => x.PostExistsAsync(entity.PostId)).ReturnsAsync(true);
+        repo.Setup(x => x.SaveChangesAsync()).Returns(Task.CompletedTask);
         var cache = new Mock<IEntityResponseCache>();
-        cache.Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        cache.Setup(x => x.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var sut = CreateSut(repo, cache);
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), cache.Object);
-        await sut.UpdateAsAuthorAsync(id, new UpdateCommentDto { Content = "new" }, author);
+        await sut.UpdateAsAuthorAsync(id, new UpdateCommentDto { Content = "new-value" }, authorId);
 
-        Assert.Equal("new", entity.Content);
-        cache.Verify(c => c.RemoveAsync(It.Is<string>(k => k.Contains(id.ToString("N"), StringComparison.OrdinalIgnoreCase)), It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal("new-value", entity.Content);
+        repo.Verify(x => x.SaveChangesAsync(), Times.Once);
+        cache.Verify(x => x.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // F.I.R.S.T: xóa an toàn khi không có bản ghi.
-    // 3A — Arrange: GetById null. Act: DeleteAsync. Assert: 404.
+    // F.I.R.S.T: phủ đường xóa không tồn tại.
+    // 3A — Arrange: GetByIdAsync trả null. Act/Assert: DeleteAsync ném 404.
     [Fact]
-    public async Task CM13_DeleteAsync_ShouldThrow404_WhenCommentMissing()
+    public async Task CM11_DeleteAsync_ShouldThrow404_WhenCommentMissing()
     {
         var id = Guid.NewGuid();
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.GetByIdAsync(id)).ReturnsAsync((Comment?)null);
+        repo.Setup(x => x.GetByIdAsync(id)).ReturnsAsync((Comment?)null);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.DeleteAsync(id));
 
+        Assert.Equal(StatusCodes.Status404NotFound, ex.StatusCode);
         Assert.Equal(ApiErrorCodes.CommentNotFound, ex.ErrorCode);
     }
 
-    // F.I.R.S.T: BFS subtree + RemoveMany cache.
-    // 3A — Arrange: gốc + 1 con. Act: DeleteAsync. Assert: Remove hai entity, RemoveManyAsync chứa 2 khóa.
+    // F.I.R.S.T: kiểm chứng xóa theo cây con.
+    // 3A — Arrange: root + child. Act: DeleteAsync(root). Assert: Remove được gọi cho cả root và child.
     [Fact]
-    public async Task CM14_DeleteAsync_ShouldRemoveDescendants_AndInvalidateCacheKeys()
+    public async Task CM12_DeleteAsync_ShouldDeleteSubtree_WhenRootHasChildren()
     {
         var postId = Guid.NewGuid();
         var rootId = Guid.NewGuid();
         var childId = Guid.NewGuid();
-
-        var root = new Comment { Id = rootId, Content = "r", PostId = postId, UserId = Guid.NewGuid(), ParentId = null };
-        var child = new Comment { Id = childId, Content = "c", PostId = postId, UserId = Guid.NewGuid(), ParentId = rootId };
+        var root = new Comment { Id = rootId, Content = "r", PostId = postId, UserId = Guid.NewGuid(), CreatedAt = DateTime.UtcNow };
+        var child = new Comment { Id = childId, Content = "c", PostId = postId, ParentId = rootId, UserId = Guid.NewGuid(), CreatedAt = DateTime.UtcNow };
 
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.GetByIdAsync(rootId)).ReturnsAsync(root);
-        repo.Setup(r => r.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(r => r.GetByPostIdAsync(postId)).ReturnsAsync(new List<Comment> { root, child });
-        repo.Setup(r => r.SaveChangesAsync()).Returns(Task.CompletedTask);
-
+        repo.Setup(x => x.GetByIdAsync(rootId)).ReturnsAsync(root);
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.GetCommentsRouteAllAsync(postId, null, null)).ReturnsAsync(new List<Comment> { root, child });
+        repo.Setup(x => x.SaveChangesAsync()).Returns(Task.CompletedTask);
         var cache = new Mock<IEntityResponseCache>();
-        List<string>? removedKeys = null;
-        cache.Setup(c => c.RemoveManyAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .Callback<IEnumerable<string>, CancellationToken>((keys, _) => removedKeys = keys.ToList())
-            .Returns(Task.CompletedTask);
+        cache.Setup(x => x.RemoveManyAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var sut = CreateSut(repo, cache);
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), cache.Object);
         await sut.DeleteAsync(rootId);
 
-        repo.Verify(r => r.Remove(It.Is<Comment>(c => c.Id == rootId)), Times.Once);
-        repo.Verify(r => r.Remove(It.Is<Comment>(c => c.Id == childId)), Times.Once);
-        Assert.NotNull(removedKeys);
-        Assert.Equal(2, removedKeys!.Count);
-        Assert.Contains(removedKeys, k => k.Contains(rootId.ToString("N"), StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(removedKeys, k => k.Contains(childId.ToString("N"), StringComparison.OrdinalIgnoreCase));
-        cache.Verify(c => c.RemoveManyAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()), Times.Once);
+        repo.Verify(x => x.Remove(It.Is<Comment>(c => c.Id == rootId)), Times.Once);
+        repo.Verify(x => x.Remove(It.Is<Comment>(c => c.Id == childId)), Times.Once);
+        repo.Verify(x => x.SaveChangesAsync(), Times.Once);
+        cache.Verify(x => x.RemoveManyAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // F.I.R.S.T: ghép post + comment.
-    // 3A — Arrange: post tồn tại, repo trả null cho cặp id. Act: GetByIdInPostAsync. Assert: CommentNotFound (không phải PostNotFound nếu EnsurePost trước).
+    // F.I.R.S.T: bao phủ route [08] dữ liệu phẳng EF.
+    // 3A — Arrange: repo trả entity có thứ tự ổn định. Act: GetFlatRoutePagedAsync. Assert: map DTO và metadata trang đúng.
     [Fact]
-    public async Task CM15_GetByIdInPostAsync_ShouldThrow404_WhenCommentNotInPost()
+    public async Task CM13_GetFlatRoutePagedAsync_ShouldMapFromLoadRawFlat()
     {
         var postId = Guid.NewGuid();
-        var commentId = Guid.NewGuid();
-
+        var entities = new List<Comment>
+        {
+            new() { Id = Guid.NewGuid(), Content = "a", CreatedAt = DateTime.UtcNow, PostId = postId, UserId = Guid.NewGuid() }
+        };
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(r => r.GetByIdForReadInPostAsync(postId, commentId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((CommentDto?)null);
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.LoadRawFlatAsync(postId, 1, 10, false, false, It.IsAny<CancellationToken>(), null, null))
+            .ReturnsAsync((entities, 1L, new List<Comment>()));
+        var cache = new Mock<IEntityResponseCache>();
+        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PagedResult<CommentDto>?)null);
+        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentDto>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        cache.Setup(x => x.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var sut = CreateSut(repo, cache);
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
-        var ex = await Assert.ThrowsAsync<ApiException>(() => sut.GetByIdInPostAsync(postId, commentId));
+        var result = await sut.GetFlatRoutePagedAsync(postId, 1, 10);
 
-        Assert.Equal(ApiErrorCodes.CommentNotFound, ex.ErrorCode);
+        Assert.Single(result.Items);
+        Assert.Equal("a", result.Items[0].Content);
+        Assert.Equal(1L, result.TotalCount);
     }
 
-    // F.I.R.S.T: phân trang toàn cục với cache hit.
-    // 3A — Arrange: cache có PagedResult. Act: GetAllPagedAsync. Assert: không gọi repository.
+    // F.I.R.S.T: bao phủ route [11] build tree CTE ở service.
+    // 3A — Arrange: raw rows root + child. Act: GetTreeCteRoutePagedAsync. Assert: child được gắn vào root và giữ Level.
     [Fact]
-    public async Task CM16_GetAllPagedAsync_ShouldReturnCache_WithoutRepository_WhenHit()
+    public async Task CM14_GetTreeCteRoutePagedAsync_ShouldBuildTree_FromRawCteRows()
     {
-        var cached = new PagedResult<CommentDto>
+        var postId = Guid.NewGuid();
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var rows = new List<CommentFlatDto>
         {
-            Items = new List<CommentDto>(),
-            Page = 1,
-            PageSize = 20,
-            TotalCount = 0
+            new() { Id = rootId, PostId = postId, UserId = Guid.NewGuid(), ParentId = null, Content = "root", Level = 0, CreatedAt = now },
+            new() { Id = childId, PostId = postId, UserId = Guid.NewGuid(), ParentId = rootId, Content = "child", Level = 1, CreatedAt = now.AddSeconds(1) }
         };
 
-        var repo = new Mock<ICommentRepository>(MockBehavior.Strict);
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.LoadRawCteAsync(postId, It.IsAny<CancellationToken>(), null, null)).ReturnsAsync(rows);
         var cache = new Mock<IEntityResponseCache>();
-        cache.Setup(c => c.GetJsonAsync<PagedResult<CommentDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(cached);
+        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentTreeDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PagedResult<CommentTreeDto>?)null);
+        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentTreeDto>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var sut = CreateSut(repo, cache);
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), cache.Object);
-        var result = await sut.GetAllPagedAsync(1, 20);
+        var result = await sut.GetTreeCteRoutePagedAsync(postId, 1, 10);
 
-        Assert.Same(cached, result);
+        Assert.Single(result.Items);
+        Assert.Single(result.Items[0].Children);
+        Assert.Equal(0, result.Items[0].Level);
+        Assert.Equal(1, result.Items[0].Children[0].Level);
     }
 
-    // F.I.R.S.T: Search trong post — post không tồn tại.
-    // 3A — Arrange: PostExists false. Act: SearchByContentInPostPagedAsync với term hợp lệ. Assert: PostNotFound trước khi search.
+    // F.I.R.S.T: bao phủ route [12] flatten tree flat ở service.
+    // 3A — Arrange: roots + rawComments đủ cây 2 tầng. Act: GetTreeFlatFlattenRoutePagedAsync. Assert: preorder phẳng đúng thứ tự root->child.
     [Fact]
-    public async Task CM17_SearchByContentInPostPagedAsync_ShouldThrow404_WhenPostMissing()
+    public async Task CM15_GetTreeFlatFlattenRoutePagedAsync_ShouldFlattenPreorder_FromRawFlatData()
     {
         var postId = Guid.NewGuid();
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        var t0 = DateTime.UtcNow;
+        var roots = new List<Comment>
+        {
+            new() { Id = rootId, PostId = postId, ParentId = null, Content = "root", UserId = Guid.NewGuid(), CreatedAt = t0 }
+        };
+        var rawComments = new List<Comment>
+        {
+            roots[0],
+            new() { Id = childId, PostId = postId, ParentId = rootId, Content = "child", UserId = Guid.NewGuid(), CreatedAt = t0.AddSeconds(1) }
+        };
+
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(r => r.PostExistsAsync(postId)).ReturnsAsync(false);
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.LoadRawFlatAsync(postId, 1, 10, true, true, It.IsAny<CancellationToken>(), null, null))
+            .ReturnsAsync((roots, 1L, rawComments));
+        var cache = new Mock<IEntityResponseCache>();
+        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentFlatNoLevelDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PagedResult<CommentFlatNoLevelDto>?)null);
+        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentFlatNoLevelDto>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var sut = CreateSut(repo, cache);
 
-        var sut = new CommentService(repo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
-        var ex = await Assert.ThrowsAsync<ApiException>(() =>
-            sut.SearchByContentInPostPagedAsync(postId, "ok", 1, 10));
+        var result = await sut.GetTreeFlatFlattenRoutePagedAsync(postId, 1, 10);
 
-        Assert.Equal(ApiErrorCodes.PostNotFound, ex.ErrorCode);
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal(rootId, result.Items[0].Id);
+        Assert.Equal(childId, result.Items[1].Id);
+    }
+
+    // F.I.R.S.T: bao phủ route [13] flatten tree cte ở service.
+    // 3A — Arrange: raw CTE root+child. Act: GetTreeCteFlattenRoutePagedAsync. Assert: danh sách phẳng giữ Level 0/1.
+    [Fact]
+    public async Task CM16_GetTreeCteFlattenRoutePagedAsync_ShouldFlattenTree_WithLevels()
+    {
+        var postId = Guid.NewGuid();
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var rows = new List<CommentFlatDto>
+        {
+            new() { Id = rootId, Content = "root", PostId = postId, UserId = Guid.NewGuid(), ParentId = null, Level = 0, CreatedAt = now },
+            new() { Id = childId, Content = "child", PostId = postId, UserId = Guid.NewGuid(), ParentId = rootId, Level = 1, CreatedAt = now.AddSeconds(1) }
+        };
+
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.LoadRawCteAsync(postId, It.IsAny<CancellationToken>(), null, null)).ReturnsAsync(rows);
+        var cache = new Mock<IEntityResponseCache>();
+        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentFlatDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PagedResult<CommentFlatDto>?)null);
+        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentFlatDto>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var sut = CreateSut(repo, cache);
+
+        var result = await sut.GetTreeCteFlattenRoutePagedAsync(postId, 1, 10);
+
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal(0, result.Items[0].Level);
+        Assert.Equal(1, result.Items[1].Level);
     }
 }

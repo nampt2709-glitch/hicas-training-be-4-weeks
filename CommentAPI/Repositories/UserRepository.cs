@@ -4,37 +4,24 @@ using CommentAPI.Data;
 using CommentAPI.DTOs;
 using Microsoft.EntityFrameworkCore;
 
-namespace CommentAPI.Repositories; 
+namespace CommentAPI.Repositories;
 
-public class UserRepository : IUserRepository // Truy vấn bảng Users và role join.
+public class UserRepository : RepositoryBase<User>, IUserRepository // Truy vấn bảng Users và role join.
 {
     #region Trường & hàm tạo
 
-    private readonly AppDbContext _context; // DbContext scoped per request.
-
     public UserRepository(AppDbContext context) // Inject context.
+        : base(context)
     {
-        _context = context; // Store.
     }
 
     #endregion
 
-    #region Private — lọc query
+    #region Route Functions
 
-    // Lọc CreatedAt inclusive trên User.
-    private static IQueryable<User> WhereCreatedAtRange(IQueryable<User> query, DateTime? createdAtFrom, DateTime? createdAtTo)
-    {
-        if (createdAtFrom is { } f)
-            query = query.Where(u => u.CreatedAt >= f);
-        if (createdAtTo is { } t)
-            query = query.Where(u => u.CreatedAt <= t);
-        return query;
-    }
-
-    #endregion
-
-    #region GET — UsersController (GetAll, GetById) & batch role
-
+    /// <summary>
+    /// [1] Route: GET /api/users
+    /// </summary>
     public async Task<(List<UserPageRow> Items, long TotalCount)> GetPagedAsync( // Phân trang + projection nhẹ.
         int page, // Page 1-based.
         int pageSize, // Size.
@@ -47,7 +34,7 @@ public class UserRepository : IUserRepository // Truy vấn bảng Users và rol
     {
         // Chuẩn hóa Skip/Take; Select chỉ cột cần cho DTO (không đọc PasswordHash, token…).
         var (p, s) = PaginationQuery.Normalize(page, pageSize); // Clamp page/size.
-        var q = WhereCreatedAtRange(_context.Users.AsNoTracking(), createdAtFrom, createdAtTo); // Base + khoảng thời gian.
+        var q = WhereCreatedAtRange(Context.Users.AsNoTracking(), createdAtFrom, createdAtTo); // Base + khoảng thời gian.
         var n = nameContains?.Trim();
         if (!string.IsNullOrEmpty(n))
             q = q.Where(u => u.Name.Contains(n)); // Name LIKE.
@@ -73,7 +60,9 @@ public class UserRepository : IUserRepository // Truy vấn bảng Users và rol
         return (items, total); // Tuple result.
     }
 
-    // Kế thừa hợp đồng: batch-load tên role theo danh sách user id (một truy vấn).
+    /// <summary>
+    /// [1] Route: GET /api/users (batch roles)
+    /// </summary>
     public async Task<Dictionary<Guid, List<string>>> GetRoleNamesByUserIdsAsync( // Map userId → roles.
         IReadOnlyList<Guid> userIds, // Input ids.
         CancellationToken cancellationToken = default) // CT.
@@ -85,8 +74,8 @@ public class UserRepository : IUserRepository // Truy vấn bảng Users và rol
 
         // Một lần join AspNetUserRoles + AspNetRoles thay cho N lần UserManager.GetRolesAsync.
         var rows = await ( // LINQ join.
-            from ur in _context.UserRoles.AsNoTracking() // User-role link.
-            join r in _context.Roles.AsNoTracking() on ur.RoleId equals r.Id // Role master.
+            from ur in Context.UserRoles.AsNoTracking() // User-role link.
+            join r in Context.Roles.AsNoTracking() on ur.RoleId equals r.Id // Role master.
             where userIds.Contains(ur.UserId) // Filter relevant users.
             select new { ur.UserId, RoleName = r.Name } // Pair.
         ).ToListAsync(cancellationToken); // Materialize.
@@ -98,47 +87,23 @@ public class UserRepository : IUserRepository // Truy vấn bảng Users và rol
                 g => g.Select(x => x.RoleName).Where(n => n != null).Cast<string>().OrderBy(n => n).ToList()); // Sorted role names.
     }
 
-    public async Task<User?> GetByIdAsync(Guid id) // Single user by PK (tracked default FirstOrDefault).
-    {
-        return await _context.Users.FirstOrDefaultAsync(x => x.Id == id); // May return null.
-    }
-
     #endregion
 
-    #region Ghi — hỗ trợ UserService (Create / Update / Delete)
+    #region Helpers
 
-    public async Task AddAsync(User user) // Insert user entity.
+    // Lọc CreatedAt inclusive trên User.
+    private static IQueryable<User> WhereCreatedAtRange(IQueryable<User> query, DateTime? createdAtFrom, DateTime? createdAtTo)
     {
-        await _context.Users.AddAsync(user); // Stage.
+        if (createdAtFrom is { } f)
+            query = query.Where(u => u.CreatedAt >= f);
+        if (createdAtTo is { } t)
+            query = query.Where(u => u.CreatedAt <= t);
+        return query;
     }
-
-    public void Update(User user) // Attach update.
-    {
-        _context.Users.Update(user); // Whole entity marked modified.
-    }
-
-    public void Remove(User user) // Delete user row.
-    {
-        _context.Users.Remove(user); // Stage delete.
-    }
-
-    public async Task<bool> ExistsAsync(Guid id) // Existence check cheap.
-    {
-        return await _context.Users.AsNoTracking().AnyAsync(x => x.Id == id); // Any.
-    }
-
-    public async Task SaveChangesAsync() // Flush unit of work.
-    {
-        await _context.SaveChangesAsync(); // EF save.
-    }
-
-    #endregion
-
-    #region Bổ trợ — không map route trực tiếp
 
     public async Task<List<User>> GetAllAsync() // Toàn bộ users (ít dùng trong API hiện tại).
     {
-        return await _context.Users // DbSet User.
+        return await Context.Users // DbSet User.
             .AsNoTracking() // Read-only.
             .OrderBy(x => x.CreatedAt) // Sort stable by creation.
             .ToListAsync(); // Materialize.
