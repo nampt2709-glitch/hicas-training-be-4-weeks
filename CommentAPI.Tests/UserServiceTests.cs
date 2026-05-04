@@ -13,13 +13,30 @@ namespace CommentAPI.Tests;
 // Unit test UserService: IUserRepository, UserManager (mock), cache, mapper.
 public class UserServiceTests
 {
+    private static Mock<ICacheListEpochStore> EpochMock()
+    {
+        var e = new Mock<ICacheListEpochStore>();
+        e.Setup(x => x.GetCommentsListEpochAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
+        e.Setup(x => x.GetPostsListEpochAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
+        e.Setup(x => x.GetUsersListEpochAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
+        e.Setup(x => x.InvalidateCommentsListsAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        e.Setup(x => x.InvalidatePostsListAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        e.Setup(x => x.InvalidateUsersListAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        return e;
+    }
+
     private static UserService CreateSut(
         IUserRepository repository,
         UserManager<User> userManager,
         RoleManager<IdentityRole<Guid>> roleManager,
         IMapper mapper,
-        IEntityResponseCache cache)
-        => new(repository, userManager, roleManager, mapper, cache, TestDbContextFactory.Create());
+        Mock<IEntityResponseCache>? cache = null,
+        Mock<ICacheListEpochStore>? epochs = null)
+    { // Ghép cache + epoch (usr:/cmt:/pst:list) vào ctor UserService như Production.
+        var c = cache ?? new Mock<IEntityResponseCache>();
+        var e = epochs ?? EpochMock();
+        return new UserService(repository, userManager, roleManager, mapper, c.Object, TestDbContextFactory.Create(), e.Object);
+    } // Kết thúc CreateSut.
 
     // F.I.R.S.T: danh sách user phân trang qua cache.
     // 3A — Arrange: cache hit. Act: GetPagedAsync. Assert: không gọi repository.
@@ -40,7 +57,7 @@ public class UserServiceTests
         cache.Setup(c => c.GetJsonAsync<PagedResult<UserDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(cached);
 
-        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache);
         var r = await sut.GetPagedAsync(1, 20);
 
         Assert.Same(cached, r);
@@ -66,7 +83,7 @@ public class UserServiceTests
         cache.Setup(c => c.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<UserDto>>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache);
         var r = await sut.GetPagedAsync(1, 10);
 
         Assert.Single(r.Items);
@@ -91,7 +108,7 @@ public class UserServiceTests
 
         var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);
 
-        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache);
         var r = await sut.GetPagedAsync(1, 5, CancellationToken.None, null, null, "Nguyên", null, null);
 
         Assert.Single(r.Items);
@@ -112,7 +129,7 @@ public class UserServiceTests
 
         var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);
 
-        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache);
         var r = await sut.GetPagedAsync(2, 10, CancellationToken.None, null, null, null, "adm", null);
 
         Assert.Empty(r.Items);
@@ -140,7 +157,7 @@ public class UserServiceTests
         cache.Setup(c => c.GetJsonAsync<UserDto>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(cached);
 
-        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache);
         var r = await sut.GetByIdAsync(id);
 
         Assert.Same(cached, r);
@@ -159,7 +176,7 @@ public class UserServiceTests
         cache.Setup(c => c.GetJsonAsync<UserDto>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((UserDto?)null);
 
-        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache);
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.GetByIdAsync(id));
 
         Assert.Equal(ApiErrorCodes.UserNotFound, ex.ErrorCode);
@@ -192,7 +209,7 @@ public class UserServiceTests
         var um = UserManagerMockFactory.Create();
         um.Setup(m => m.GetRolesAsync(entity)).ReturnsAsync(new List<string> { "User" });
 
-        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache);
         var dto = await sut.GetByIdAsync(id);
 
         Assert.Single(dto.Roles);
@@ -209,7 +226,7 @@ public class UserServiceTests
         um.Setup(m => m.FindByNameAsync("taken"))
             .ReturnsAsync(new User { Id = Guid.NewGuid(), UserName = "taken" });
 
-        var sut = CreateSut(Mock.Of<IUserRepository>(), um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = CreateSut(Mock.Of<IUserRepository>(), um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper());
         var ex = await Assert.ThrowsAsync<ApiException>(() =>
             sut.CreateAsync(new CreateUserDto { Name = "N", UserName = "taken", Password = "P@ssw0rd!", Email = "e@e.e" }));
 
@@ -232,7 +249,9 @@ public class UserServiceTests
         um.Setup(m => m.GetRolesAsync(It.IsAny<User>()))
             .ReturnsAsync(new List<string> { "User" });
 
-        var sut = CreateSut(Mock.Of<IUserRepository>(), um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var cache = new Mock<IEntityResponseCache>();
+        var epochs = EpochMock();
+        var sut = CreateSut(Mock.Of<IUserRepository>(), um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache, epochs);
         var dto = await sut.CreateAsync(new CreateUserDto
         {
             Name = "Người mới",
@@ -243,6 +262,7 @@ public class UserServiceTests
 
         Assert.Equal("newuser", dto.UserName);
         Assert.Contains("User", dto.Roles);
+        epochs.Verify(e => e.InvalidateUsersListAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // F.I.R.S.T: Identity trả lỗi tạo.
@@ -256,7 +276,7 @@ public class UserServiceTests
         um.Setup(m => m.CreateAsync(It.IsAny<User>(), It.IsAny<string>()))
             .ReturnsAsync(IdentityResult.Failed(new IdentityError { Description = "mật khẩu yếu" }));
 
-        var sut = CreateSut(Mock.Of<IUserRepository>(), um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = CreateSut(Mock.Of<IUserRepository>(), um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper());
         var ex = await Assert.ThrowsAsync<ApiException>(() =>
             sut.CreateAsync(new CreateUserDto { Name = "a", UserName = "b", Password = "x", Email = null }));
 
@@ -273,7 +293,7 @@ public class UserServiceTests
         var repo = new Mock<IUserRepository>();
         repo.Setup(r => r.GetByIdAsync(id)).ReturnsAsync((User?)null);
 
-        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper());
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.UpdateAsSelfAsync(id, new UpdateUserDto { Name = "x" }, id));
 
         Assert.Equal(ApiErrorCodes.UserNotFound, ex.ErrorCode);
@@ -289,8 +309,7 @@ public class UserServiceTests
             Mock.Of<IUserRepository>(MockBehavior.Strict),
             UserManagerMockFactory.Create().Object,
             RoleManagerMockFactory.Create().Object,
-            TestMapperFactory.CreateMapper(),
-            Mock.Of<IEntityResponseCache>(MockBehavior.Strict));
+            TestMapperFactory.CreateMapper());
 
         var ex = await Assert.ThrowsAsync<ApiException>(() =>
             sut.UpdateAsSelfAsync(id, new UpdateUserDto { Name = "x" }, Guid.NewGuid()));
@@ -314,11 +333,13 @@ public class UserServiceTests
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
 
-        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var epochs = EpochMock();
+        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache, epochs);
         await sut.UpdateAsSelfAsync(id, new UpdateUserDto { Name = "mới" }, id);
 
         Assert.Equal("mới", entity.Name);
         cache.Verify(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        epochs.Verify(e => e.InvalidateUsersListAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // F.I.R.S.T: xóa user.
@@ -330,7 +351,7 @@ public class UserServiceTests
         var repo = new Mock<IUserRepository>();
         repo.Setup(r => r.GetByIdAsync(id)).ReturnsAsync((User?)null);
 
-        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = CreateSut(repo.Object, UserManagerMockFactory.Create().Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper());
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.DeleteAsync(id));
 
         Assert.Equal(ApiErrorCodes.UserNotFound, ex.ErrorCode);
@@ -354,7 +375,7 @@ public class UserServiceTests
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
 
-        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache);
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.DeleteAsync(id));
 
         Assert.Equal(ApiErrorCodes.UserDeleteFailed, ex.ErrorCode);
@@ -377,10 +398,13 @@ public class UserServiceTests
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
 
-        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var epochs = EpochMock();
+        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache, epochs);
         await sut.DeleteAsync(id);
 
         um.Verify(m => m.DeleteAsync(entity), Times.Once);
+        epochs.Verify(e => e.InvalidateUsersListAsync(It.IsAny<CancellationToken>()), Times.Once);
+        epochs.Verify(e => e.InvalidateCommentsListsAsync(It.IsAny<CancellationToken>()), Times.Never); // DB test không có comment orphan trên post người khác.
     }
 
     // F.I.R.S.T: admin đổi username — trùng user khác.
@@ -399,7 +423,7 @@ public class UserServiceTests
         um.Setup(m => m.FindByNameAsync("taken"))
             .ReturnsAsync(new User { Id = otherId, UserName = "taken" });
 
-        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper());
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.UpdateAsAdminAsync(id, new AdminUpdateUserDto
         {
             Name = "n",
@@ -428,7 +452,7 @@ public class UserServiceTests
         um.Setup(m => m.FindByEmailAsync("dup@x.com"))
             .ReturnsAsync(new User { Id = otherId, Email = "dup@x.com" });
 
-        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper());
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.UpdateAsAdminAsync(id, new AdminUpdateUserDto
         {
             Name = "n",
@@ -457,7 +481,7 @@ public class UserServiceTests
         um.Setup(m => m.GetRolesAsync(entity)).ReturnsAsync(new List<string> { "Admin" });
         um.Setup(m => m.GetUsersInRoleAsync("Admin")).ReturnsAsync(new List<User> { entity });
 
-        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper());
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.UpdateAsAdminAsync(id, new AdminUpdateUserDto
         {
             Name = "a",
@@ -492,7 +516,8 @@ public class UserServiceTests
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
 
-        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var epochs = EpochMock();
+        var sut = CreateSut(repo.Object, um.Object, RoleManagerMockFactory.Create().Object, TestMapperFactory.CreateMapper(), cache, epochs);
         await sut.UpdateAsAdminAsync(id, new AdminUpdateUserDto
         {
             Name = "new",
@@ -503,5 +528,6 @@ public class UserServiceTests
 
         Assert.Equal("new", entity.Name);
         cache.Verify(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        epochs.Verify(e => e.InvalidateUsersListAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }

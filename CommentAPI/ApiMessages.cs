@@ -105,6 +105,9 @@ public static class ApiErrorCodes
 
     // Parent thuộc post khác.
     public const string CommentParentWrongPost = "COMMENT_PARENT_WRONG_POST";
+
+    // Query `sort` không khớp enum CommentRouteListSort (tên hoặc số 0..4).
+    public const string CommentInvalidSort = "COMMENT_INVALID_SORT";
 }
 
 #endregion
@@ -154,19 +157,17 @@ public static partial class ApiMessages
     // Cây CTE (theo post) rồi duyệt thành list phẳng preorder/DFS tùy service.
     public const string CommentFlattenCteTreeByPostSuccess =
         "Comment tree (CTE) for the post unrolled to a flat list (preorder DFS).";
-    public const string CommentAllFlatSuccess = "All comments (flat, EF) retrieved successfully.";
-    public const string CommentAllTreeSuccess = "All comments (tree, EF) retrieved successfully.";
+    public const string CommentAllFlatSuccess = "All comments (flat list) retrieved successfully.";
+    public const string CommentAllTreeSuccess = "All comments (tree/flat route) retrieved successfully.";
     public const string CommentAllCteFlatSuccess = "All comments (flat, CTE) retrieved successfully.";
     public const string CommentAllCteTreeSuccess = "All comments (tree from CTE) retrieved successfully.";
-    public const string CommentFlattenEfSuccess = "All comments flattened (EF tree + DFS) retrieved successfully.";
-
-    // Rừng cây toàn hệ, làm phẳng EF + preorder.
+    // Rừng cây toàn hệ (tree/flat) — làm phẳng preorder.
     public const string CommentFlattenForestSuccess =
-        "Comment forest unrolled to a flat list (EF tree + preorder DFS).";
+        "Comment forest unrolled to a flat list (tree/flat route, preorder DFS).";
 
-    // Một post: cây EF làm phẳng.
+    // Một post: cây từ tree/flat làm phẳng.
     public const string CommentFlattenTreeByPostSuccess =
-        "Comment tree for the post unrolled to a flat list (EF + preorder DFS).";
+        "Comment tree for the post unrolled to a flat list (tree/flat route, preorder DFS).";
     public const string CommentFlattenCteSuccess = "All comments flattened (CTE) retrieved successfully.";
 
     // Demo — một bản ghi: lazy (proxy bật khi truy cập nav).
@@ -360,6 +361,10 @@ public static partial class ApiMessages
     // Parent không cùng post đích.
     public const string CommentParentWrongPost =
         "The parent comment is missing or not in the same target post as this comment.";
+
+    // Tham số sort query không hợp lệ (dùng tên enum CommentRouteListSort hoặc số nguyên 0..4).
+    public const string CommentInvalidSort =
+        "Invalid sort parameter. Use a CommentRouteListSort name (e.g. ByPostCreatedAtId) or integer 0..4.";
 }
 
 #endregion

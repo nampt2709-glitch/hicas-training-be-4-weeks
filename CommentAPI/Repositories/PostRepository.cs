@@ -1,16 +1,18 @@
-using CommentAPI.Entities; 
-using CommentAPI.Data; 
-using CommentAPI.DTOs; 
+using CommentAPI.Entities;
+using CommentAPI.Data;
+using CommentAPI.DTOs;
 using CommentAPI.Interfaces;
-using Microsoft.EntityFrameworkCore; 
+using Microsoft.EntityFrameworkCore;
 
 namespace CommentAPI.Repositories;
 
-public class PostRepository : RepositoryBase<Post>, IPostRepository // CRUD + read projections.
+// Truy vấn bảng Post: danh sách phân trang projection PostDto + đọc một bài theo Id.
+public class PostRepository : RepositoryBase<Post>, IPostRepository
 {
     #region Trường & hàm tạo
 
-    public PostRepository(AppDbContext context) // DI.
+    // BƯỚC 1: Gọi base(context) để gán Context; không cần trường riêng vì đã có Context protected.
+    public PostRepository(AppDbContext context)
         : base(context)
     {
     }
@@ -19,79 +21,76 @@ public class PostRepository : RepositoryBase<Post>, IPostRepository // CRUD + re
 
     #region Route Functions
 
-    /// <summary>
-    /// [1] Route: GET /api/posts
-    /// </summary>
-    public async Task<(List<PostDto> Items, long TotalCount)> GetPagedAsync( // Paged list as DTO projection.
-        int page, // Page (caller normalized in some paths).
-        int pageSize, // Size.
-        CancellationToken cancellationToken = default, // CT.
-        DateTime? createdAtFrom = null, // Lọc CreatedAt.
-        DateTime? createdAtTo = null, // Lọc CreatedAt.
-        string? titleContains = null, // Filter Title Contains.
-        string? contentContains = null) // Filter Content Contains.
+    // [1] GET /api/posts — COUNT + một trang PostDto, có lọc CreatedAt / Title / Content.
+    public async Task<(List<PostDto> Items, long TotalCount)> GetPagedAsync(
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default,
+        DateTime? createdAtFrom = null,
+        DateTime? createdAtTo = null,
+        string? titleContains = null,
+        string? contentContains = null)
     {
-        var q = WhereCreatedAtRange(Context.Posts.AsNoTracking(), createdAtFrom, createdAtTo); // Base + khoảng thời gian.
-        var t = titleContains?.Trim(); // Chuẩn hóa.
-        if (!string.IsNullOrEmpty(t))
-            q = q.Where(p => p.Title.Contains(t)); // WHERE Title LIKE %t%.
-        var c = contentContains?.Trim(); // Chuẩn hóa nội dung.
-        if (!string.IsNullOrEmpty(c))
+        // BƯỚC 1: Áp khoảng CreatedAt inclusive qua helper base — dùng EF.Property<DateTime>(..., "CreatedAt").
+        var q = ApplyCreatedAtRange(Context.Posts.AsNoTracking(), createdAtFrom, createdAtTo);
+
+        // BƯỚC 2: Lọc tiêu đề Contains nếu chuỗi sau trim không rỗng.
+        var t = titleContains?.Trim(); // null-safe trim.
+        if (!string.IsNullOrEmpty(t)) // TRƯỜNG HỢP: có từ khóa tiêu đề.
+            q = q.Where(p => p.Title.Contains(t)); // SQL WHERE Title LIKE %t% (dịch Contains).
+
+        // BƯỚC 3: Lọc nội dung Contains tương tự.
+        var c = contentContains?.Trim();
+        if (!string.IsNullOrEmpty(c)) // TRƯỜNG HỢP: có từ khóa nội dung.
             q = q.Where(p => p.Content.Contains(c)); // WHERE Content LIKE %c%.
-        var total = await q.LongCountAsync(cancellationToken); // Count khớp lọc.
-        var items = await q // Execute page.
-            .OrderByDescending(p => p.CreatedAt) // Newest first.
-            .ThenBy(p => p.Id) // Stable order.
-            .Skip((page - 1) * pageSize) // Offset — assumes normalized page/size upstream for this repo.
-            .Take(pageSize) // Limit.
-            .Select(p => new PostDto // Project to DTO.
+
+        // BƯỚC 4: Đếm tổng bản ghi khớp mọi điều kiện — dùng làm TotalCount cho phân trang.
+        var total = await q.LongCountAsync(cancellationToken); // COUNT(*) kiểu long.
+
+        // BƯỚC 5: SELECT một trang — mới nhất trước, Id ổn định thứ tự khi CreatedAt trùng.
+        var items = await q
+            .OrderByDescending(p => p.CreatedAt) // Sắp giảm dần theo thời gian tạo.
+            .ThenBy(p => p.Id) // Tie-break PK.
+            .Skip((page - 1) * pageSize) // Bỏ các dòng trang trước (page 1-based).
+            .Take(pageSize) // Giới hạn số dòng một trang.
+            .Select(p => new PostDto // Chiếu ngay trong SQL — chỉ cột cần cho API.
             {
-                Id = p.Id, // PK.
-                Title = p.Title, // Title.
-                Content = p.Content, // Body.
-                CreatedAt = p.CreatedAt, // Timestamp.
-                UserId = p.UserId // Author FK.
+                Id = p.Id,
+                Title = p.Title,
+                Content = p.Content,
+                CreatedAt = p.CreatedAt,
+                UserId = p.UserId,
             })
-            .ToListAsync(cancellationToken); // List.
-        return (items, total); // Tuple.
+            .ToListAsync(cancellationToken); // Thực thi một round-trip (hoặc vài query tùy provider).
+
+        return (items, total); // Tuple trả lên PostService để gói PagedResult.
     }
 
-    /// <summary>
-    /// [2] Route: GET /api/posts/{id}
-    /// </summary>
-    public Task<PostDto?> GetByIdForReadAsync(Guid id, CancellationToken cancellationToken = default) => // Single DTO read.
-        Context.Posts.AsNoTracking() // No tracking.
-            .Where(p => p.Id == id) // Filter PK.
-            .Select(p => new PostDto // Project.
+    // [2] GET /api/posts/{id} — đọc một bài projection; null nếu không có Id.
+    public Task<PostDto?> GetByIdForReadAsync(Guid id, CancellationToken cancellationToken = default) =>
+        Context.Posts.AsNoTracking() // Không track — chỉ đọc.
+            .Where(p => p.Id == id) // Lọc khóa chính.
+            .Select(p => new PostDto // Cùng shape với list để client đồng nhất.
             {
-                Id = p.Id, // Id.
-                Title = p.Title, // Title.
-                Content = p.Content, // Content.
-                CreatedAt = p.CreatedAt, // Created.
-                UserId = p.UserId // UserId.
+                Id = p.Id,
+                Title = p.Title,
+                Content = p.Content,
+                CreatedAt = p.CreatedAt,
+                UserId = p.UserId,
             })
-            .FirstOrDefaultAsync(cancellationToken); // Null if missing.
+            .FirstOrDefaultAsync(cancellationToken); // 0 hoặc 1 dòng → null hoặc PostDto.
 
     #endregion
 
     #region Helpers
 
-    // Lọc khoảng CreatedAt (inclusive) trên IQueryable Post — dịch sang SQL.
-    private static IQueryable<Post> WhereCreatedAtRange(IQueryable<Post> query, DateTime? createdAtFrom, DateTime? createdAtTo)
+    // Helper legacy: toàn bộ entity Post không track — ít dùng trong API hiện tại nhưng giữ cho script/tool.
+    public async Task<List<Post>> GetAllAsync()
     {
-        if (createdAtFrom is { } f)
-            query = query.Where(p => p.CreatedAt >= f);
-        if (createdAtTo is { } t)
-            query = query.Where(p => p.CreatedAt <= t);
-        return query;
-    }
-
-    public async Task<List<Post>> GetAllAsync() // Full list entities (legacy/helper).
-    {
-        return await Context.Posts // DbSet.
+        return await Context.Posts // DbSet Post.
             .AsNoTracking() // Read-only.
-            .OrderByDescending(x => x.CreatedAt) // Newest first.
-            .ToListAsync(); // Materialize.
+            .OrderByDescending(x => x.CreatedAt) // Mới trước.
+            .ToListAsync(); // Materialize toàn bộ — cẩn thận khối lượng lớn trên production.
     }
 
     #endregion

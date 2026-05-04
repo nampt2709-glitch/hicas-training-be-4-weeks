@@ -29,13 +29,18 @@ public class PostsController : ControllerBase // Không view.
 
     private readonly IPostService _service; // Nghiệp vụ post + cache.
 
+    // CommentService: [2a]/[2b] — ICommentRepository.GetAllCommentsForPost thực thi CTE SQL riêng (không LoadRawCteAsync); query includeReplies (mặc định true nếu bỏ qua).
+    private readonly ICommentService _commentService;
 
 
-    public PostsController(IPostService service) // DI.
+
+    public PostsController(IPostService service, ICommentService commentService) // DI: post + comment cho sub-resource comments dưới một bài.
 
     {
 
-        _service = service; // Gán field.
+        _service = service; // Gán field post.
+
+        _commentService = commentService; // Tree/flat theo postId route; không tham số filter trên URL.
 
     }
 
@@ -91,6 +96,46 @@ public class PostsController : ControllerBase // Không view.
         return Ok(new { message = ApiMessages.PostGetSuccess, data = result }); // 200.
 
     }
+
+
+
+    // [2a] GET /api/posts/{id}/comments/tree
+    // Sub-resource: postId trên route; includeReplies query (null = true). Repo: CTE riêng GetAllCommentsForPost + service BuildTreeCte.
+    [HttpGet("{id:guid}/comments/tree")] // Sub-resource: cây comment theo một post.
+
+    [Authorize(Roles = "Admin,User")] // Đọc comment.
+
+    public async Task<IActionResult> GetCommentsTreeByPostId(Guid id, [FromQuery] bool? includeReplies, [FromQuery] string? sort, CancellationToken cancellationToken) // id = PostId; includeReplies + sort (dropdown) tuỳ chọn.
+
+    { // Mở khối GetCommentsTreeByPostId.
+        // BƯỚC 1 — Parse sort an toàn rồi gọi service: EnsurePost + GetAllCommentsForPost (CTE repo) + BuildTreeCte.
+        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort không hợp lệ.
+        var data = await _commentService.GetCommentsTreeForPostAsync(id, includeReplies ?? true, sortEnum, cancellationToken); // Cache riêng l:posts:…:comments:tree:cte:…; null includeReplies → gốc + reply.
+
+        // BƯỚC 2 — 200 + message mô tả đúng nguồn CTE (khác message route tree/flat RAM trên /api/comments).
+        return Ok(new { message = ApiMessages.CommentCteTreeByPostSuccess, data }); // data = cây từ CTE.
+
+    } // Kết thúc GetCommentsTreeByPostId.
+
+
+
+    // [2b] GET /api/posts/{id}/comments/flat
+    // Sub-resource: postId; includeReplies (null = true). Repo CTE GetAllCommentsForPost — phẳng có Level, không nested.
+    [HttpGet("{id:guid}/comments/flat")] // Sub-resource: list phẳng theo một post.
+
+    [Authorize(Roles = "Admin,User")] // Đọc comment.
+
+    public async Task<IActionResult> GetCommentsFlatByPostId(Guid id, [FromQuery] bool? includeReplies, [FromQuery] string? sort, CancellationToken cancellationToken) // id = PostId.
+
+    { // Mở khối GetCommentsFlatByPostId.
+        // BƯỚC 1 — Parse sort rồi gọi CTE phẳng theo bài (không BuildTreeCte).
+        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var data = await _commentService.GetCommentsFlatForPostAsync(id, includeReplies ?? true, sortEnum, cancellationToken); // Không phân trang; cache khóa l:posts:…:comments:flat:cte:….
+
+        // BƯỚC 2 — 200 + message CTE phẳng theo bài (có Level trên mỗi dòng).
+        return Ok(new { message = ApiMessages.CommentCteFlatByPostSuccess, data }); // data = List<CommentCteDto> từ SqlQueryRaw (CTE).
+
+    } // Kết thúc GetCommentsFlatByPostId.
 
 
 

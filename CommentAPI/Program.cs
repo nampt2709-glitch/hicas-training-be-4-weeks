@@ -56,6 +56,7 @@ if (string.IsNullOrWhiteSpace(sqlConnectionString))
 
 // Cấu hình IDistributedCache: ưu tiên Redis, bộ nhớ dự phòng; xem DistributedCaching.cs.
 builder.AddDistributedCaching();
+builder.Services.AddSingleton<ICacheListEpochStore, CacheListEpochStore>(); // Epoch danh sách cmt/pst/usr — làm miss cache list sau CRUD.
 builder.Services.AddScoped<CacheResponseTracker>();
 builder.Services.AddScoped<IEntityResponseCache, EntityResponseCache>();
 

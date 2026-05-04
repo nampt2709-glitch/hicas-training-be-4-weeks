@@ -35,7 +35,7 @@ public class CommentDto
     public Guid? ParentId { get; set; } // null = gốc, có giá trị = id cha trong cây cùng bài.
 }
 
-// Một dòng phẳng thuộc cây: có cấp Level sau khi tính độ sâu, có UserId để phân tích tác giả từng dòng.
+// Một dòng phẳng từ EF (GET /api/comments/flat): không qua CTE; Level = 0 khi map từ bảng Comments (không có cột Level trong DB).
 public class CommentFlatDto
 {
     public Guid Id { get; set; } // Id dòng, duy nhất toàn bảng.
@@ -44,10 +44,22 @@ public class CommentFlatDto
     public Guid PostId { get; set; } // Bài, nhóm cây; filter theo bài ở query.
     public Guid UserId { get; set; } // Tác giả bản ghi, biết ai viết khi so khớp với tài khoản hiện tại.
     public Guid? ParentId { get; set; } // Liên kết tới id cha, null = gốc cây trong post này.
-    public int Level { get; set; } // Độ sâu: 0 gốc, tăng theo từng tầng cha; dùng hiển thị thụt lề/ phân tầng.
+    public int Level { get; set; } // Quy ước route phẳng EF: 0 (không dùng CTE đệ quy).
 }
 
-// Cấu trúc cây lồng: mỗi nút có danh sách con kiểu đệ quy cùng DTO, có UserId mỗi nút.
+// Một dòng từ SqlQueryRaw CTE (LoadRawCteAsync / GetAllCommentsForPost): GET /api/comments/cte (preorder), GET /api/posts/{id}/comments/flat — một route family một DTO, tách khỏi CommentFlatDto (EF).
+public class CommentCteDto
+{
+    public Guid Id { get; set; } // Id dòng từ CTE.
+    public string Content { get; set; } = string.Empty; // Nội dung.
+    public DateTime CreatedAt { get; set; } // Thời tạo.
+    public Guid PostId { get; set; } // Bài.
+    public Guid UserId { get; set; } // Tác giả.
+    public Guid? ParentId { get; set; } // Cha trong CTE.
+    public int Level { get; set; } // Độ sâu do CTE đệ quy gán trong SQL.
+}
+
+// Cấu trúc cây RAM nội bộ (BuildTreeFlat từ entity): map sang CommentTreeFlatDto cho GET …/tree/flat — không dùng làm payload route GET …/tree/cte.
 public class CommentTreeDto
 {
     public Guid Id { get; set; } // Id nút, duy nhất toàn bảng.
@@ -56,11 +68,48 @@ public class CommentTreeDto
     public Guid PostId { get; set; } // Bài, dù cây; giữ tính toàn vẹn cùng bài ở nghiệp vụ.
     public Guid UserId { get; set; } // Tác giả tại nút, hiển thị ai gửi ở mọi tầng cây.
     public Guid? ParentId { get; set; } // Gắn cha khi cần phẳng hóa; cây lồng còn dùng Children.
-    public int Level { get; set; } // Độ sâu nút trong cây: 0 là gốc; dùng cho tree/cte trả trực tiếp cấp độ.
+    public int Level { get; set; } // Độ sâu sau BFS (pipeline tree/flat RAM).
     public List<CommentTreeDto> Children { get; set; } = new(); // Con trực tiếp, cấu trúc đệ quy; mặc đã khởi tạo rỗng.
 }
 
-// Cấu trúc cây lồng cho nhánh flat (EF)
+// Cây từ CTE + BuildTreeCte: payload GET /api/comments/tree/cte và GET /api/posts/{id}/comments/tree — một route family một DTO.
+public class CommentTreeCteDto
+{
+    public Guid Id { get; set; } // Id nút.
+    public string Content { get; set; } = string.Empty; // Nội dung.
+    public DateTime CreatedAt { get; set; } // Thời tạo.
+    public Guid PostId { get; set; } // Bài.
+    public Guid UserId { get; set; } // Tác giả.
+    public Guid? ParentId { get; set; } // Cha.
+    public int Level { get; set; } // Độ sâu từ hàng CTE.
+    public List<CommentTreeCteDto> Children { get; set; } = new(); // Con trực tiếp (đệ quy cùng kiểu).
+}
+
+// Một dòng preorder sau flatten tree/flat: GET /api/comments/tree/flat/flatten — tách khỏi flatten CTE.
+public class CommentFlattenFlatDto
+{
+    public Guid Id { get; set; } // Id nút.
+    public string Content { get; set; } = string.Empty; // Nội dung.
+    public DateTime CreatedAt { get; set; } // Thời tạo.
+    public Guid PostId { get; set; } // Bài.
+    public Guid UserId { get; set; } // Tác giả.
+    public Guid? ParentId { get; set; } // Cha.
+    public int Level { get; set; } // Độ sâu sau BFS pipeline flat.
+}
+
+// Một dòng preorder sau flatten tree/cte: GET /api/comments/tree/cte/flatten — tách khỏi flatten tree/flat.
+public class CommentFlattenCteDto
+{
+    public Guid Id { get; set; } // Id nút.
+    public string Content { get; set; } = string.Empty; // Nội dung.
+    public DateTime CreatedAt { get; set; } // Thời tạo.
+    public Guid PostId { get; set; } // Bài.
+    public Guid UserId { get; set; } // Tác giả.
+    public Guid? ParentId { get; set; } // Cha.
+    public int Level { get; set; } // Độ sâu từ cây CTE.
+}
+
+// Cấu trúc cây lồng cho route GET …/tree/flat (mỗi phần tử trang = một thread gốc + con); Level đồng bộ với CommentTreeDto / pipeline CTE (0 = gốc).
 public class CommentTreeFlatDto
 {
     public Guid Id { get; set; } // Id nút, duy nhất toàn bảng.
@@ -69,18 +118,8 @@ public class CommentTreeFlatDto
     public Guid PostId { get; set; } // Bài viết chứa comment.
     public Guid UserId { get; set; } // Tác giả comment.
     public Guid? ParentId { get; set; } // Cha của nút, null nếu là gốc.
+    public int Level { get; set; } // Độ sâu trong cây (0 = gốc), giống CommentTreeDto / CTE sau khi BuildTreeFlat gán BFS.
     public List<CommentTreeFlatDto> Children { get; set; } = new(); // Danh sách con trực tiếp.
-}
-
-// Dòng phẳng cho nhánh flat (EF): không có cột Level trong response.
-public class CommentFlatNoLevelDto
-{
-    public Guid Id { get; set; } // Id dòng.
-    public string Content { get; set; } = string.Empty; // Nội dung.
-    public DateTime CreatedAt { get; set; } // Thời gian tạo.
-    public Guid PostId { get; set; } // Bài viết.
-    public Guid UserId { get; set; } // Tác giả.
-    public Guid? ParentId { get; set; } // Cha.
 }
 
 // DTO demo chiến lược nạp dữ liệu, không dùng cho CRUD sản xuất chính.

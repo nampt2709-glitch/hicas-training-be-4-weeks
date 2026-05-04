@@ -11,7 +11,19 @@ namespace CommentAPI.Tests;
 public class CommentServiceTests
 {
     private static CommentService CreateSut(Mock<ICommentRepository> repo, Mock<IEntityResponseCache> cache)
-        => new(repo.Object, TestMapperFactory.CreateMapper(), cache.Object);
+        => new(repo.Object, TestMapperFactory.CreateMapper(), cache.Object, EpochMock().Object);
+
+    private static Mock<ICacheListEpochStore> EpochMock()
+    {
+        var e = new Mock<ICacheListEpochStore>();
+        e.Setup(x => x.GetCommentsListEpochAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
+        e.Setup(x => x.GetPostsListEpochAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
+        e.Setup(x => x.GetUsersListEpochAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
+        e.Setup(x => x.InvalidateCommentsListsAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        e.Setup(x => x.InvalidatePostsListAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        e.Setup(x => x.InvalidateUsersListAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        return e;
+    }
 
     // F.I.R.S.T: nhanh, độc lập, lặp lại ổn định, tự kiểm chứng, kịp thời.
     // 3A — Arrange: cache có sẵn DTO. Act: gọi GetByIdAsync. Assert: không truy vấn repository.
@@ -77,7 +89,7 @@ public class CommentServiceTests
     public async Task CM04_GetCommentListAsync_ShouldReturnUnpagedGlobal_WhenNoContentAndNoPost()
     {
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(x => x.GetCommentsRouteAllAsync(null, null, null))
+        repo.Setup(x => x.LoadFlatUnpagedAsync(null, null, null, null, null, It.IsAny<CommentRouteListSort>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<Comment>
             {
                 new() { Id = Guid.NewGuid(), Content = "a", CreatedAt = DateTime.UtcNow, PostId = Guid.NewGuid(), UserId = Guid.NewGuid() },
@@ -90,6 +102,8 @@ public class CommentServiceTests
 
         Assert.Equal(2, result.Items.Count);
         Assert.Equal(2, result.TotalCount);
+        Assert.Null(result.TotalComments);
+        Assert.Null(result.TotalNodes);
     }
 
     // F.I.R.S.T: kiểm tra biên search term.
@@ -242,7 +256,7 @@ public class CommentServiceTests
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.GetByIdAsync(rootId)).ReturnsAsync(root);
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.GetCommentsRouteAllAsync(postId, null, null)).ReturnsAsync(new List<Comment> { root, child });
+        repo.Setup(x => x.LoadFlatUnpagedAsync(postId, null, null, null, null, CommentRouteListSort.ByCreatedAt, It.IsAny<CancellationToken>())).ReturnsAsync(new List<Comment> { root, child });
         repo.Setup(x => x.SaveChangesAsync()).Returns(Task.CompletedTask);
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(x => x.RemoveManyAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
@@ -259,7 +273,7 @@ public class CommentServiceTests
     // F.I.R.S.T: bao phủ route [08] dữ liệu phẳng EF.
     // 3A — Arrange: repo trả entity có thứ tự ổn định. Act: GetFlatRoutePagedAsync. Assert: map DTO và metadata trang đúng.
     [Fact]
-    public async Task CM13_GetFlatRoutePagedAsync_ShouldMapFromLoadRawFlat()
+    public async Task CM13_GetFlatRoutePagedAsync_ShouldMapFromLoadFlat()
     {
         var postId = Guid.NewGuid();
         var entities = new List<Comment>
@@ -268,8 +282,9 @@ public class CommentServiceTests
         };
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.LoadRawFlatAsync(postId, 1, 10, false, false, It.IsAny<CancellationToken>(), null, null))
-            .ReturnsAsync((entities, 1L, new List<Comment>()));
+        // [08] GetFlatByPostIdPagedAsync: LoadFlatAsync [1][8][10][12] (danh sách phẳng).
+        repo.Setup(x => x.LoadFlatAsync(postId, 1, 10, It.IsAny<CancellationToken>(), null, null, null, null, It.IsAny<CommentRouteListSort>()))
+            .ReturnsAsync((entities, 1L));
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(x => x.GetJsonAsync<PagedResult<CommentDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((PagedResult<CommentDto>?)null);
@@ -283,6 +298,8 @@ public class CommentServiceTests
         Assert.Single(result.Items);
         Assert.Equal("a", result.Items[0].Content);
         Assert.Equal(1L, result.TotalCount);
+        Assert.Null(result.TotalComments);
+        Assert.Null(result.TotalNodes);
     }
 
     // F.I.R.S.T: bao phủ route [11] build tree CTE ở service.
@@ -294,7 +311,7 @@ public class CommentServiceTests
         var rootId = Guid.NewGuid();
         var childId = Guid.NewGuid();
         var now = DateTime.UtcNow;
-        var rows = new List<CommentFlatDto>
+        var rows = new List<CommentCteDto>
         {
             new() { Id = rootId, PostId = postId, UserId = Guid.NewGuid(), ParentId = null, Content = "root", Level = 0, CreatedAt = now },
             new() { Id = childId, PostId = postId, UserId = Guid.NewGuid(), ParentId = rootId, Content = "child", Level = 1, CreatedAt = now.AddSeconds(1) }
@@ -302,11 +319,13 @@ public class CommentServiceTests
 
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.LoadRawCteAsync(postId, It.IsAny<CancellationToken>(), null, null)).ReturnsAsync(rows);
+        repo.Setup(x => x.CountCommentsMatchingRouteAsync(postId, null, It.IsAny<CancellationToken>(), null, null, null))
+            .ReturnsAsync(2L);
+        repo.Setup(x => x.LoadRawCteAsync(postId, It.IsAny<CancellationToken>(), null, null, null, null, It.IsAny<CommentRouteListSort>())).ReturnsAsync(rows);
         var cache = new Mock<IEntityResponseCache>();
-        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentTreeDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((PagedResult<CommentTreeDto>?)null);
-        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentTreeDto>>(), It.IsAny<CancellationToken>()))
+        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentTreeCteDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PagedResult<CommentTreeCteDto>?)null);
+        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentTreeCteDto>>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         var sut = CreateSut(repo, cache);
 
@@ -316,10 +335,13 @@ public class CommentServiceTests
         Assert.Single(result.Items[0].Children);
         Assert.Equal(0, result.Items[0].Level);
         Assert.Equal(1, result.Items[0].Children[0].Level);
+        Assert.Equal(1L, result.TotalCount);
+        Assert.Equal(2L, result.TotalComments);
+        Assert.Equal(1L, result.TotalNodes);
     }
 
     // F.I.R.S.T: bao phủ route [12] flatten tree flat ở service.
-    // 3A — Arrange: roots + rawComments đủ cây 2 tầng. Act: GetTreeFlatFlattenRoutePagedAsync. Assert: preorder phẳng đúng thứ tự root->child.
+    // 3A — Arrange: roots + rawComments đủ cây 2 tầng. Act: GetTreeFlatFlattenRoutePagedAsync. Assert: preorder root→child và Level 0/1 giống pipeline CTE flatten.
     [Fact]
     public async Task CM15_GetTreeFlatFlattenRoutePagedAsync_ShouldFlattenPreorder_FromRawFlatData()
     {
@@ -339,12 +361,19 @@ public class CommentServiceTests
 
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.LoadRawFlatAsync(postId, 1, 10, true, true, It.IsAny<CancellationToken>(), null, null))
-            .ReturnsAsync((roots, 1L, rawComments));
+        repo.Setup(x => x.CountCommentsMatchingRouteAsync(postId, null, It.IsAny<CancellationToken>(), null, null, null))
+            .ReturnsAsync(2L);
+        repo.Setup(x => x.CountCommentRootsMatchingRouteAsync(postId, null, It.IsAny<CancellationToken>(), null, null, null))
+            .ReturnsAsync(1L);
+        // BuildFlatTreesPagedCoreAsync: một trang gốc → LoadCommentsForSubtreesAsync → cây đầy đủ → flatten preorder.
+        repo.Setup(x => x.GetCommentRootsRoutePagedAsync(postId, null, 1, 10, It.IsAny<CancellationToken>(), null, null, null, It.IsAny<CommentRouteListSort>()))
+            .ReturnsAsync((new List<Comment> { roots[0] }, 1L));
+        repo.Setup(x => x.LoadCommentsForSubtreesAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()))
+            .ReturnsAsync(rawComments);
         var cache = new Mock<IEntityResponseCache>();
-        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentFlatNoLevelDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((PagedResult<CommentFlatNoLevelDto>?)null);
-        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentFlatNoLevelDto>>(), It.IsAny<CancellationToken>()))
+        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentFlattenFlatDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PagedResult<CommentFlattenFlatDto>?)null);
+        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentFlattenFlatDto>>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         var sut = CreateSut(repo, cache);
 
@@ -353,6 +382,11 @@ public class CommentServiceTests
         Assert.Equal(2, result.Items.Count);
         Assert.Equal(rootId, result.Items[0].Id);
         Assert.Equal(childId, result.Items[1].Id);
+        Assert.Equal(0, result.Items[0].Level);
+        Assert.Equal(1, result.Items[1].Level);
+        Assert.Equal(1L, result.TotalCount);
+        Assert.Equal(2L, result.TotalComments);
+        Assert.Equal(1L, result.TotalNodes);
     }
 
     // F.I.R.S.T: bao phủ route [13] flatten tree cte ở service.
@@ -364,7 +398,7 @@ public class CommentServiceTests
         var rootId = Guid.NewGuid();
         var childId = Guid.NewGuid();
         var now = DateTime.UtcNow;
-        var rows = new List<CommentFlatDto>
+        var rows = new List<CommentCteDto>
         {
             new() { Id = rootId, Content = "root", PostId = postId, UserId = Guid.NewGuid(), ParentId = null, Level = 0, CreatedAt = now },
             new() { Id = childId, Content = "child", PostId = postId, UserId = Guid.NewGuid(), ParentId = rootId, Level = 1, CreatedAt = now.AddSeconds(1) }
@@ -372,11 +406,13 @@ public class CommentServiceTests
 
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.LoadRawCteAsync(postId, It.IsAny<CancellationToken>(), null, null)).ReturnsAsync(rows);
+        repo.Setup(x => x.CountCommentsMatchingRouteAsync(postId, null, It.IsAny<CancellationToken>(), null, null, null))
+            .ReturnsAsync(2L);
+        repo.Setup(x => x.LoadRawCteAsync(postId, It.IsAny<CancellationToken>(), null, null, null, null, It.IsAny<CommentRouteListSort>())).ReturnsAsync(rows);
         var cache = new Mock<IEntityResponseCache>();
-        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentFlatDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((PagedResult<CommentFlatDto>?)null);
-        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentFlatDto>>(), It.IsAny<CancellationToken>()))
+        cache.Setup(x => x.GetJsonAsync<PagedResult<CommentFlattenCteDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((PagedResult<CommentFlattenCteDto>?)null);
+        cache.Setup(x => x.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<CommentFlattenCteDto>>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         var sut = CreateSut(repo, cache);
 
@@ -385,5 +421,198 @@ public class CommentServiceTests
         Assert.Equal(2, result.Items.Count);
         Assert.Equal(0, result.Items[0].Level);
         Assert.Equal(1, result.Items[1].Level);
+        Assert.Equal(1L, result.TotalCount);
+        Assert.Equal(2L, result.TotalComments);
+        Assert.Equal(1L, result.TotalNodes);
+    }
+
+    // F.I.R.S.T: bao phủ GET /api/posts/{id}/comments/tree qua service (GetAllCommentsForPost + BuildTreeCte).
+    // 3A — Arrange: post tồn tại, repo trả 2 dòng CommentCteDto (gốc+con). Act: GetCommentsTreeForPostAsync. Assert: một gốc, một con, Level 0/1.
+    [Fact]
+    public async Task CM17_GetCommentsTreeForPostAsync_ShouldBuildCteTree_WhenCommentsExist()
+    {
+        var postId = Guid.NewGuid();
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var userId = Guid.NewGuid();
+        var cteRows = new List<CommentCteDto>
+        {
+            new() { Id = rootId, Content = "r", PostId = postId, UserId = userId, ParentId = null, Level = 0, CreatedAt = now },
+            new() { Id = childId, Content = "c", PostId = postId, UserId = userId, ParentId = rootId, Level = 1, CreatedAt = now.AddSeconds(1) }
+        };
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(cteRows);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
+
+        var result = await sut.GetCommentsTreeForPostAsync(postId);
+
+        Assert.Single(result);
+        Assert.Equal(rootId, result[0].Id);
+        Assert.Equal(0, result[0].Level);
+        Assert.Single(result[0].Children);
+        Assert.Equal(childId, result[0].Children[0].Id);
+        Assert.Equal(1, result[0].Children[0].Level);
+    }
+
+    // F.I.R.S.T: bao phủ GET /api/posts/{id}/comments/flat (danh sách phẳng từ GetAllCommentsForPost).
+    // 3A — Arrange: giống CM17. Act: GetCommentsFlatForPostAsync. Assert: trả đúng 2 dòng Level 0 rồi 1.
+    [Fact]
+    public async Task CM18_GetCommentsFlatForPostAsync_ShouldReturnRawCteRows_WhenCommentsExist()
+    {
+        var postId = Guid.NewGuid();
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var userId = Guid.NewGuid();
+        var cteRows = new List<CommentCteDto>
+        {
+            new() { Id = rootId, Content = "r", PostId = postId, UserId = userId, ParentId = null, Level = 0, CreatedAt = now },
+            new() { Id = childId, Content = "c", PostId = postId, UserId = userId, ParentId = rootId, Level = 1, CreatedAt = now.AddSeconds(1) }
+        };
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(cteRows);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
+
+        var result = await sut.GetCommentsFlatForPostAsync(postId);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal(0, result[0].Level);
+        Assert.Equal(1, result[1].Level);
+    }
+
+    // F.I.R.S.T: bài không có comment — GetAllCommentsForPost trả rỗng, BuildTreeCte → rừng rỗng.
+    // 3A — Arrange: post tồn tại, GetAllCommentsForPost rỗng. Act: GetCommentsTreeForPostAsync. Assert: rỗng; chỉ một lần gọi GetAllCommentsForPost.
+    [Fact]
+    public async Task CM19_GetCommentsTreeForPostAsync_ShouldReturnEmpty_WhenNoComments()
+    {
+        var postId = Guid.NewGuid();
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(new List<CommentCteDto>());
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
+
+        var result = await sut.GetCommentsTreeForPostAsync(postId);
+
+        Assert.Empty(result);
+        repo.Verify(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Once);
+    }
+
+    // F.I.R.S.T: includeReplies=false được truyền xuống repository.
+    // 3A — Arrange: post tồn tại. Act: GetCommentsFlatForPostAsync(..., false). Assert: repo nhận includeReplies false.
+    [Fact]
+    public async Task CM21_GetCommentsFlatForPostAsync_ShouldPassIncludeRepliesFalse_ToRepository()
+    {
+        var postId = Guid.NewGuid();
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(new List<CommentCteDto>());
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
+
+        await sut.GetCommentsFlatForPostAsync(postId, includeReplies: false);
+
+        repo.Verify(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Once);
+    }
+
+    // F.I.R.S.T: post không tồn tại — 404 trước khi đọc comment.
+    // 3A — Arrange: PostExists false. Act: GetCommentsFlatForPostAsync. Assert: ApiException + không gọi GetAllCommentsForPost.
+    [Fact]
+    public async Task CM20_GetCommentsFlatForPostAsync_ShouldThrow_WhenPostMissing()
+    {
+        var postId = Guid.NewGuid();
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(false);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
+
+        await Assert.ThrowsAsync<ApiException>(() => sut.GetCommentsFlatForPostAsync(postId));
+
+        repo.Verify(x => x.GetAllCommentsForPost(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Never);
+    }
+
+    // F.I.R.S.T: negative — post không tồn tại trên route tree.
+    // 3A — Arrange: PostExists false. Act: GetCommentsTreeForPostAsync. Assert: ApiException; không gọi GetAllCommentsForPost.
+    [Fact]
+    public async Task CM22_GetCommentsTreeForPostAsync_ShouldThrow_WhenPostMissing()
+    {
+        var postId = Guid.NewGuid();
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(false);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
+
+        await Assert.ThrowsAsync<ApiException>(() => sut.GetCommentsTreeForPostAsync(postId));
+
+        repo.Verify(x => x.GetAllCommentsForPost(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Never);
+    }
+
+    // F.I.R.S.T: happy path biên — bài tồn tại nhưng không có comment; flat trả rỗng.
+    // 3A — Arrange: post ok, GetAllCommentsForPost rỗng. Act: GetCommentsFlatForPostAsync. Assert: Count 0; repo gọi đúng một lần.
+    [Fact]
+    public async Task CM23_GetCommentsFlatForPostAsync_ShouldReturnEmpty_WhenPostHasNoComments()
+    {
+        var postId = Guid.NewGuid();
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(new List<CommentCteDto>());
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
+
+        var result = await sut.GetCommentsFlatForPostAsync(postId);
+
+        Assert.Empty(result);
+        repo.Verify(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Once);
+    }
+
+    // F.I.R.S.T: includeReplies=false trên tree — truyền xuống repository.
+    // 3A — Arrange: post tồn tại. Act: GetCommentsTreeForPostAsync(..., false). Assert: GetAllCommentsForPost(postId, false, ...).
+    [Fact]
+    public async Task CM24_GetCommentsTreeForPostAsync_ShouldPassIncludeRepliesFalse_ToRepository()
+    {
+        var postId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var userId = Guid.NewGuid();
+        var rootId = Guid.NewGuid();
+        var flatRows = new List<CommentCteDto>
+        {
+            new() { Id = rootId, Content = "only-root", PostId = postId, UserId = userId, ParentId = null, Level = 0, CreatedAt = now }
+        };
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(flatRows);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
+
+        var result = await sut.GetCommentsTreeForPostAsync(postId, includeReplies: false);
+
+        Assert.Single(result);
+        Assert.Equal(rootId, result[0].Id);
+        repo.Verify(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Once);
+    }
+
+    // F.I.R.S.T: happy path — hai gốc cùng bài (CTE phẳng hai dòng Level 0); BuildTreeCte trả hai nút gốc.
+    // 3A — Arrange: hai CommentCteDto ParentId null cùng PostId. Act: GetCommentsTreeForPostAsync. Assert: hai phần tử cấp một, không con.
+    [Fact]
+    public async Task CM25_GetCommentsTreeForPostAsync_ShouldReturnTwoRoots_WhenFlatHasTwoAnchors()
+    {
+        var postId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var userId = Guid.NewGuid();
+        var r1 = Guid.NewGuid();
+        var r2 = Guid.NewGuid();
+        var flatRows = new List<CommentCteDto>
+        {
+            new() { Id = r1, Content = "t1", PostId = postId, UserId = userId, ParentId = null, Level = 0, CreatedAt = now },
+            new() { Id = r2, Content = "t2", PostId = postId, UserId = userId, ParentId = null, Level = 0, CreatedAt = now.AddSeconds(1) }
+        };
+        var repo = new Mock<ICommentRepository>();
+        repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(flatRows);
+        var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
+
+        var result = (await sut.GetCommentsTreeForPostAsync(postId)).OrderBy(x => x.Id).ToList();
+
+        Assert.Equal(2, result.Count);
+        Assert.All(result, n => Assert.Empty(n.Children));
+        Assert.Contains(result, n => n.Id == r1);
+        Assert.Contains(result, n => n.Id == r2);
     }
 }

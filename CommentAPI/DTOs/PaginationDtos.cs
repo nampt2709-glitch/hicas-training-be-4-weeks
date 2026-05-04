@@ -1,5 +1,6 @@
 // Phân trang: response có metadata (trang, tổng, tổng số trang) và helper chuẩn hóa page/pageSize từ query.
 using System.Globalization;
+using System.Text.Json.Serialization;
 using CommentAPI;
 using Microsoft.AspNetCore.Http;
 
@@ -17,11 +18,65 @@ public class PagedResult<T>
     // Số bản ghi tối đa mỗi trang, đã cắt ở MaxPageSize ở tầng gọi.
     public int PageSize { get; init; }
 
-    // Tổng số bản ghi khớp truy vấn (trước khi phân trang cắt).
+    // Mẫu số cho totalPages: route phẳng (1 item = 1 comment) = tổng comment; route CTE theo gốc = tổng gốc; route cây phẳng (phân trang theo từng dòng comment) = tổng comment.
     public long TotalCount { get; init; }
+
+    // Tổng comment trong DB khớp lọc — chỉ gán khi route cần đối chiếu với phân trang theo gốc/subtree (vd. CTE, cây lồng); route phẳng thuần: null (dùng totalCount).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? TotalComments { get; init; }
+
+    // Tổng gốc cây (ParentId null) hoặc số gốc CTE — chỉ gán khi route có cây/lồng; route phẳng 1 dòng = 1 comment: null.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? TotalNodes { get; init; }
 
     // Tổng số trang = ceil(TotalCount / PageSize); PageSize=0 thì 0 (tránh chia cho 0 ở client).
     public int TotalPages => PageSize <= 0 ? 0 : (int)Math.Ceiling(TotalCount / (double)PageSize);
+}
+
+// Helper gán metadata comment: TotalCount luôn là mẫu số đúng cho TotalPages theo từng kiểu route.
+public static class CommentPagedResult
+{
+    // Route trả danh sách phẳng: mỗi phần tử items = một comment → totalCount = tổng comment (mẫu số totalPages); không gán totalComments/totalNodes (tránh trùng ý nghĩa “node”).
+    public static PagedResult<T> ForFlatCommentList<T>(List<T> items, int page, int pageSize, long totalCommentsMatchingFilter) // Một comment một dòng.
+    {
+        return new PagedResult<T> // Gói thống nhất.
+        {
+            Items = items, // Trang hiện tại.
+            Page = page, // Trang.
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = totalCommentsMatchingFilter, // totalPages = ceil(TotalCount / PageSize); cùng số phần tử logic với từng dòng response.
+            TotalComments = null, // Không dùng trên route phẳng — trùng totalCount, gây hiểu nhầm “node”.
+            TotalNodes = null // Không có khái niệm gốc cây trên danh sách phẳng thuần.
+        };
+    }
+
+    // Route CTE phân trang theo gốc (cây lồng trong từng item hoặc flatten sau subtree): TotalPages theo TotalNodes; TotalComments = tổng bản ghi bảng khớp lọc.
+    public static PagedResult<T> ForCtePagedByRootNodes<T>(List<T> items, int page, int pageSize, long totalCommentsInTable, long totalRootNodesInCte) // Gốc từ rừng CTE.
+    {
+        return new PagedResult<T> // Gói phân trang theo gốc.
+        {
+            Items = items, // Trang (đã flatten hoặc cây theo gốc trang).
+            Page = page, // Trang.
+            PageSize = pageSize, // Số gốc mỗi trang (ý nghĩa nghiệp vụ CTE).
+            TotalCount = totalRootNodesInCte, // TotalPages theo số gốc.
+            TotalComments = totalCommentsInTable, // Đối chiếu với COUNT bảng.
+            TotalNodes = totalRootNodesInCte // Số gốc trong kết quả CTE.
+        };
+    }
+
+    // Danh sách phẳng (mỗi dòng một comment) nhưng metadata kèm tổng gốc cây: TotalPages theo tổng comment; TotalNodes = tổng gốc (ParentId null) khớp lọc.
+    public static PagedResult<T> ForFlatCommentPageWithRootTotals<T>(List<T> items, int page, int pageSize, long totalComments, long totalRootNodesInTable) // Phân trang theo comment, kèm đếm gốc.
+    {
+        return new PagedResult<T> // Gói metadata đầy đủ.
+        {
+            Items = items, // Trang.
+            Page = page, // Trang.
+            PageSize = pageSize, // Cỡ trang phẳng.
+            TotalCount = totalComments, // TotalPages theo comment.
+            TotalComments = totalComments, // Tổng comment khớp lọc.
+            TotalNodes = totalRootNodesInTable // Gốc trong bảng (ParentId null).
+        };
+    }
 }
 
 // Chuẩn hóa page/pageSize (tối thiểu 1, tối đa MaxPageSize); ParseFromQuery: pageSize là số hợp lệ và > Max → ApiException 400; còn lại fallback + Normalize.

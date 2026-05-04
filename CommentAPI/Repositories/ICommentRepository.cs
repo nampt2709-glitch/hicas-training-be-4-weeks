@@ -1,154 +1,171 @@
+using CommentAPI;
 using CommentAPI.DTOs;
-
 using CommentAPI.Entities;
-
-
-
-// Không gian tên tập hợp hợp đồng (interface) tầng dữ liệu.
 
 namespace CommentAPI.Interfaces;
 
-
-
-// Hợp đồng truy cập dữ liệu Comment: CRUD, phân trang, CTE, demo loading, phục vụ service.
-
+// Hợp đồng truy cập dữ liệu Comment: CRUD, phân trang, CTE, demo loading — mỗi tham số dòng kèm chú thích vai trò.
 public interface ICommentRepository
-
 {
-    // Route group — /api/comments (list, flat, search)
-    Task<(List<Comment> Items, long TotalCount)> GetCommentsRoutePagedAsync(
-        Guid? postId,
-        string? contentContains,
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default,
-        DateTime? createdAtFrom = null,
-        DateTime? createdAtTo = null);
+    // Đếm mọi comment khớp lọc (dùng làm TotalComments / so khớp với LoadFlatAsync).
+    Task<long> CountCommentsMatchingRouteAsync(
+        Guid? postId, // null = mọi bài; có giá trị = chỉ trong một bài.
+        string? contentContains, // null/blank = không lọc nội dung; có = Contains trên Content.
+        CancellationToken cancellationToken = default, // Hủy truy vấn bất đồng bộ.
+        DateTime? createdAtFrom = null, // Cận dưới CreatedAt (inclusive) hoặc bỏ.
+        DateTime? createdAtTo = null, // Cận trên CreatedAt (inclusive) hoặc bỏ.
+        Guid? userId = null); // Lọc tác giả hoặc null = mọi user.
 
-    Task<(List<Comment> Items, long TotalCount)> GetCommentsByUserRoutePagedAsync(
-        Guid userId,
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default,
-        DateTime? createdAtFrom = null,
-        DateTime? createdAtTo = null);
+    // Đếm comment gốc (ParentId == null) khớp lọc — mẫu số phân trang theo “số thread”.
+    Task<long> CountCommentRootsMatchingRouteAsync(
+        Guid? postId, // Phạm vi bài hoặc toàn hệ.
+        string? contentContains, // Lọc nội dung tùy chọn.
+        CancellationToken cancellationToken = default, // Token hủy.
+        DateTime? createdAtFrom = null, // Lọc ngày từ.
+        DateTime? createdAtTo = null, // Lọc ngày đến.
+        Guid? userId = null); // Lọc tác giả.
 
-    // Dữ liệu thô EF flat/tree: [08] GET /api/comments/flat, [10] GET /api/comments/tree/flat, [12] GET /api/comments/tree/flat/flatten (rootsOnly + loadCommentsForRootPosts).
-    Task<(List<Comment> Items, long TotalCount, List<Comment> RelatedComments)> LoadRawFlatAsync(
-        Guid? postId,
-        int page,
-        int pageSize,
-        bool rootsOnly,
-        bool loadCommentsForRootPosts,
-        CancellationToken cancellationToken = default,
-        DateTime? createdAtFrom = null,
-        DateTime? createdAtTo = null);
+    // Một trang các gốc (ParentId null) đã sắp; tổng số gốc khớp lọc kèm trong tuple.
+    Task<(List<Comment> Items, long TotalRootCount)> GetCommentRootsRoutePagedAsync(
+        Guid? postId, // Lọc theo bài hoặc null.
+        string? contentContains, // Tìm trong Content hoặc bỏ.
+        int page, // Trang 1-based trên tập gốc.
+        int pageSize, // Số gốc mỗi trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc CreatedAt.
+        DateTime? createdAtTo = null, // Lọc CreatedAt.
+        Guid? userId = null, // Lọc UserId.
+        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId); // Thứ tự gốc (dropdown sort).
 
-    Task<List<Comment>> SearchCommentsRouteAllAsync(
-        Guid? postId,
-        string contentContains,
-        CancellationToken cancellationToken = default,
-        DateTime? createdAtFrom = null,
-        DateTime? createdAtTo = null);
+    // Nạp mọi comment thuộc subtree của từng rootId (BFS theo tầng, cùng PostId trong DB).
+    Task<List<Comment>> LoadCommentsForSubtreesAsync(
+        IReadOnlyList<Guid> rootIds, // Danh sách Id gốc cần mở rộng con cháu.
+        CancellationToken cancellationToken = default, // Hủy.
+        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId); // Thứ tự kết quả phẳng sau BFS.
 
-    Task<List<Comment>> GetCommentsRouteAllAsync(
-        Guid? postId = null,
-        DateTime? createdAtFrom = null,
-        DateTime? createdAtTo = null);
+    // Danh sách phẳng không phân trang, cùng bộ lọc với LoadFlatAsync; sort do tham số sort quy định.
+    Task<List<Comment>> LoadFlatUnpagedAsync(
+        Guid? postId = null, // Phạm vi một bài hoặc toàn hệ.
+        DateTime? createdAtFrom = null, // Khoảng ngày.
+        DateTime? createdAtTo = null, // Khoảng ngày.
+        Guid? userId = null, // Tác giả.
+        string? contentContains = null, // Chuỗi Contains.
+        CommentRouteListSort sort = CommentRouteListSort.ByCreatedAt, // Kiểu sắp xếp kết quả.
+        CancellationToken cancellationToken = default); // Hủy.
 
-    // Dữ liệu thô CTE (hàng phẳng có Level): [09] GET /api/comments/cte, [11] GET /api/comments/tree/cte, [13] GET /api/comments/tree/cte/flatten.
-    Task<List<CommentFlatDto>> LoadRawCteAsync(
-        Guid? postId,
-        CancellationToken cancellationToken = default,
-        DateTime? createdAtFrom = null,
-        DateTime? createdAtTo = null);
+    // Phân trang phẳng: COUNT + một trang entity Comment khớp lọc.
+    Task<(List<Comment> Items, long TotalCount)> LoadFlatAsync(
+        Guid? postId, // null = toàn hệ; Guid = một bài.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Lọc ngày.
+        DateTime? createdAtTo = null, // Lọc ngày.
+        Guid? userId = null, // Lọc user.
+        string? contentContains = null, // Lọc nội dung.
+        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId); // Thứ tự dòng (dropdown sort).
 
-    // Route group — /api/comments/{id}
-    Task<CommentDto?> GetCommentByIdRouteReadAsync(Guid id, Guid? postId = null, CancellationToken cancellationToken = default);
+    // Một câu SqlQueryRaw CTE: mọi dòng phẳng có Level (service phân trang gốc trong RAM); kiểu CommentCteDto (route GET …/cte / post …/flat).
+    Task<List<CommentCteDto>> LoadRawCteAsync(
+        Guid? postId, // null = mọi bài trong CTE anchor.
+        CancellationToken cancellationToken = default, // Hủy.
+        DateTime? createdAtFrom = null, // Truyền vào WHERE sau CTE.
+        DateTime? createdAtTo = null, // Truyền vào WHERE sau CTE.
+        Guid? userId = null, // Lọc UserId trong SQL.
+        string? contentContains = null, // LIKE %term% trong SQL.
+        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId); // ORDER BY sau CTE (whitelist).
 
-    // Tracked query phục vụ route admin update khi chuyển post cho cả subtree.
+    // Đọc một comment chiếu thẳng CommentDto; postId tùy chọn để siết phạm vi một bài.
+    Task<CommentDto?> GetCommentByIdRouteReadAsync(
+        Guid id, // Khóa comment.
+        Guid? postId = null, // Nếu có: thêm điều kiện PostId khớp.
+        CancellationToken cancellationToken = default); // Hủy.
+
+    // Nạp tracked toàn comment của một post — phục vụ admin đổi PostId hàng loạt subtree.
     Task<List<Comment>> GetCommentsByPostTrackedForAdminRouteAsync(
+        Guid postId, // Id bài viết.
+        CancellationToken cancellationToken = default); // Hủy.
 
-        Guid postId,
+    // Một bài: SqlQueryRaw với CTE riêng (không dùng LoadRawCteAsync). true = CTE đệ quy gốc→con trong PostId + Level; false = CTE chỉ lớp gốc (Level 0).
+    Task<List<CommentCteDto>> GetAllCommentsForPost(
+        Guid postId, // Bài cần nạp comment (bắt buộc; không hỗ trợ null toàn hệ).
+        bool includeReplies = true, // true = toàn thread; false = chỉ comment ParentId null của bài đó.
+        CancellationToken cancellationToken = default, // Hủy truy vấn bất đồng bộ.
+        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId); // Thứ tự dòng CTE (dropdown sort).
 
-        CancellationToken cancellationToken = default);
+    // Lấy entity theo Id (tracked path qua RepositoryBase); null nếu không có.
+    Task<Comment?> GetByIdAsync(Guid id); // Khóa Guid.
 
+    // Đánh dấu thêm entity vào DbContext (chưa flush cho đến SaveChanges).
+    Task AddAsync(Comment comment); // Entity mới.
 
+    // Đánh dấu entity đã track là Modified.
+    void Update(Comment comment); // Entity cần cập nhật.
 
-    // Lấy entity theo id — có thể trả null nếu không tồn tại; thường dùng khi cần cập nhật/xoá.
+    // Đánh dấu xóa entity khỏi context (hoặc soft-delete tùy mapping).
+    void Remove(Comment comment); // Entity cần xóa.
 
-    Task<Comment?> GetByIdAsync(Guid id);
+    // Kiểm tra tồn tại bài viết theo Id.
+    Task<bool> PostExistsAsync(Guid postId); // Khóa post.
 
-    // Thêm comment mới (chưa ghi DB nếu chưa gọi SaveChanges).
+    // Kiểm tra tồn tại user theo Id.
+    Task<bool> UserExistsAsync(Guid userId); // Khóa user.
 
-    Task AddAsync(Comment comment);
+    // Cha phải tồn tại và cùng PostId với comment con dự kiến.
+    Task<bool> ParentExistsAsync(Guid parentId, Guid postId); // Id cha và Id bài.
 
-    // Đánh dấu thay đổi trên entity đã theo dõi.
-
-    void Update(Comment comment);
-
-    // Đánh dấu xoá (hoặc xoá mềm tùy cấu hình) trên context.
-
-    void Remove(Comment comment);
-
-    // Kiểm tra post tồn tại (khóa ngoại khi tạo comment).
-
-    Task<bool> PostExistsAsync(Guid postId);
-
-    // Kiểm tra user tồn tại (gán Author).
-
-    Task<bool> UserExistsAsync(Guid userId);
-
-    // Kiểm tra bình luận cha thuộc cùng post (tránh liên kết chéo post).
-
-    Task<bool> ParentExistsAsync(Guid parentId, Guid postId);
-
-    // Route demo lazy: một hàm xử lý cả paginationEnabled=true/false.
+    // Demo lazy: tracked query + truy cập navigation có thể phát sinh SQL thêm.
     Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsLazyLoadingDemoRouteAsync(
-        bool paginationEnabled,
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default,
-        Guid? postId = null,
-        DateTime? createdAtFrom = null,
-        DateTime? createdAtTo = null);
+        bool paginationEnabled, // true = Skip/Take; false = ToList toàn bộ khớp lọc.
+        int page, // Trang khi paginationEnabled.
+        int pageSize, // Cỡ trang khi paginationEnabled.
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Lọc bài.
+        DateTime? createdAtFrom = null, // Lọc ngày.
+        DateTime? createdAtTo = null, // Lọc ngày.
+        Guid? userId = null, // Lọc tác giả.
+        string? contentContains = null, // Lọc Content.
+        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId); // Sort dropdown.
 
-    // Route demo eager: một hàm xử lý cả paginationEnabled=true/false.
+    // Demo eager: Include Post/User/Children + AsSplitQuery.
     Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsEagerLoadingDemoRouteAsync(
-        bool paginationEnabled,
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default,
-        Guid? postId = null,
-        DateTime? createdAtFrom = null,
-        DateTime? createdAtTo = null);
+        bool paginationEnabled, // Bật/tắt phân trang.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Lọc post.
+        DateTime? createdAtFrom = null, // Ngày.
+        DateTime? createdAtTo = null, // Ngày.
+        Guid? userId = null, // User.
+        string? contentContains = null, // Content.
+        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId); // Sort dropdown.
 
-    // Route demo explicit: một hàm xử lý cả paginationEnabled=true/false.
+    // Demo explicit: sau khi materialize comment, gọi LoadAsync từng navigation.
     Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsExplicitLoadingDemoRouteAsync(
-        bool paginationEnabled,
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default,
-        Guid? postId = null,
-        DateTime? createdAtFrom = null,
-        DateTime? createdAtTo = null);
+        bool paginationEnabled, // Phân trang hay không.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Post.
+        DateTime? createdAtFrom = null, // Từ.
+        DateTime? createdAtTo = null, // Đến.
+        Guid? userId = null, // User.
+        string? contentContains = null, // Content.
+        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId); // Sort dropdown.
 
-    // Route demo projection: một hàm xử lý cả paginationEnabled=true/false.
+    // Demo projection: Select CommentLoadingDemoDto trên server, không Include đồ thị đầy đủ.
     Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsProjectionDemoRouteAsync(
-        bool paginationEnabled,
-        int page,
-        int pageSize,
-        CancellationToken cancellationToken = default,
-        Guid? postId = null,
-        DateTime? createdAtFrom = null,
-        DateTime? createdAtTo = null);
+        bool paginationEnabled, // Phân trang.
+        int page, // Trang.
+        int pageSize, // Cỡ trang.
+        CancellationToken cancellationToken = default, // Hủy.
+        Guid? postId = null, // Post.
+        DateTime? createdAtFrom = null, // Ngày.
+        DateTime? createdAtTo = null, // Ngày.
+        Guid? userId = null, // User.
+        string? contentContains = null, // Content.
+        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId); // Sort dropdown.
 
-
-
-    // Lưu mọi thay đổi đang treo (insert/update/delete) xuống cơ sở dữ liệu.
-
+    // Flush mọi thay đổi đang treo xuống SQL.
     Task SaveChangesAsync();
-
 }
-
-

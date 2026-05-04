@@ -11,6 +11,19 @@ namespace CommentAPI.Tests;
 // Unit test PostService: IPostRepository, IUserRepository, cache, mapper.
 public class PostServiceTests
 {
+    // Epoch danh sách (ICacheListEpochStore) — mỗi test dùng .Object hoặc giữ Mock để Verify Invalidate*.
+    private static Mock<ICacheListEpochStore> EpochMock()
+    {
+        var e = new Mock<ICacheListEpochStore>();
+        e.Setup(x => x.GetCommentsListEpochAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
+        e.Setup(x => x.GetPostsListEpochAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
+        e.Setup(x => x.GetUsersListEpochAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0L);
+        e.Setup(x => x.InvalidateCommentsListsAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        e.Setup(x => x.InvalidatePostsListAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        e.Setup(x => x.InvalidateUsersListAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        return e;
+    }
+
     // F.I.R.S.T: độc lập, không DB.
     // 3A — Arrange: cache hit. Act: GetPagedAsync. Assert: không gọi repository.
     [Fact]
@@ -30,7 +43,7 @@ public class PostServiceTests
         cache.Setup(c => c.GetJsonAsync<PagedResult<PostDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(cached);
 
-        var sut = new PostService(repo.Object, userRepo.Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = new PostService(repo.Object, userRepo.Object, TestMapperFactory.CreateMapper(), cache.Object, EpochMock().Object);
         var r = await sut.GetPagedAsync(1, 10);
 
         Assert.Same(cached, r);
@@ -51,7 +64,7 @@ public class PostServiceTests
         cache.Setup(c => c.SetJsonAsync(It.IsAny<string>(), It.IsAny<PagedResult<PostDto>>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object, EpochMock().Object);
         var r = await sut.GetPagedAsync(2, 5);
 
         Assert.Single(r.Items);
@@ -71,7 +84,7 @@ public class PostServiceTests
 
         var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object, EpochMock().Object);
         var r = await sut.GetPagedAsync(1, 10, CancellationToken.None, null, null, "x", null);
 
         Assert.Single(r.Items);
@@ -90,7 +103,7 @@ public class PostServiceTests
 
         var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object, EpochMock().Object);
         var r = await sut.GetPagedAsync(1, 20, CancellationToken.None, null, null, "x", null);
 
         Assert.Empty(r.Items);
@@ -110,7 +123,7 @@ public class PostServiceTests
         cache.Setup(c => c.GetJsonAsync<PostDto>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(cached);
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object, EpochMock().Object);
         var r = await sut.GetByIdAsync(id);
 
         Assert.Same(cached, r);
@@ -129,7 +142,7 @@ public class PostServiceTests
         cache.Setup(c => c.GetJsonAsync<PostDto>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((PostDto?)null);
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object, EpochMock().Object);
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.GetByIdAsync(id));
 
         Assert.Equal(ApiErrorCodes.PostNotFound, ex.ErrorCode);
@@ -148,7 +161,7 @@ public class PostServiceTests
 
         var postRepo = new Mock<IPostRepository>(MockBehavior.Strict);
 
-        var sut = new PostService(postRepo.Object, userRepo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = new PostService(postRepo.Object, userRepo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>(), EpochMock().Object);
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.CreateAsync(dto));
 
         Assert.Equal(ApiErrorCodes.UserNotFound, ex.ErrorCode);
@@ -169,13 +182,16 @@ public class PostServiceTests
         postRepo.Setup(p => p.AddAsync(It.IsAny<Post>())).Returns(Task.CompletedTask);
         postRepo.Setup(p => p.SaveChangesAsync()).Returns(Task.CompletedTask);
 
-        var sut = new PostService(postRepo.Object, userRepo.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var cache = new Mock<IEntityResponseCache>();
+        var listEpoch = EpochMock();
+        var sut = new PostService(postRepo.Object, userRepo.Object, TestMapperFactory.CreateMapper(), cache.Object, listEpoch.Object);
         var result = await sut.CreateAsync(dto);
 
         Assert.NotEqual(Guid.Empty, result.Id);
         Assert.Equal("tiêu đề", result.Title);
         Assert.NotEqual("sai cố ý", result.Title);
         postRepo.Verify(p => p.SaveChangesAsync(), Times.Once);
+        listEpoch.Verify(e => e.InvalidatePostsListAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // F.I.R.S.T: quyền tác giả.
@@ -187,7 +203,7 @@ public class PostServiceTests
         var repo = new Mock<IPostRepository>();
         repo.Setup(r => r.GetByIdAsync(id)).ReturnsAsync((Post?)null);
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>(), EpochMock().Object);
         var ex = await Assert.ThrowsAsync<ApiException>(() =>
             sut.UpdateAsAuthorAsync(id, new UpdatePostDto { Title = "a", Content = "b" }, Guid.NewGuid()));
 
@@ -207,7 +223,7 @@ public class PostServiceTests
         var repo = new Mock<IPostRepository>();
         repo.Setup(r => r.GetByIdAsync(id)).ReturnsAsync(entity);
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>(), EpochMock().Object);
         var ex = await Assert.ThrowsAsync<ApiException>(() =>
             sut.UpdateAsAuthorAsync(id, new UpdatePostDto { Title = "n", Content = "n" }, other));
 
@@ -230,12 +246,14 @@ public class PostServiceTests
 
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var listEpoch = EpochMock();
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object, listEpoch.Object);
         await sut.UpdateAsAuthorAsync(id, new UpdatePostDto { Title = "new", Content = "new" }, owner);
 
         Assert.Equal("new", entity.Title);
         cache.Verify(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        listEpoch.Verify(e => e.InvalidatePostsListAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // F.I.R.S.T: admin cập nhật.
@@ -247,7 +265,7 @@ public class PostServiceTests
         var repo = new Mock<IPostRepository>();
         repo.Setup(r => r.GetByIdAsync(id)).ReturnsAsync((Post?)null);
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>(), EpochMock().Object);
         var ex = await Assert.ThrowsAsync<ApiException>(() =>
             sut.UpdateAsAdminAsync(id, new AdminUpdatePostDto { Title = "a", Content = "b", UserId = null }));
 
@@ -269,7 +287,7 @@ public class PostServiceTests
         var users = new Mock<IUserRepository>();
         users.Setup(u => u.ExistsAsync(newOwner)).ReturnsAsync(false);
 
-        var sut = new PostService(repo.Object, users.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = new PostService(repo.Object, users.Object, TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>(), EpochMock().Object);
         var ex = await Assert.ThrowsAsync<ApiException>(() =>
             sut.UpdateAsAdminAsync(id, new AdminUpdatePostDto { Title = "t", Content = "c", UserId = newOwner }));
 
@@ -293,12 +311,14 @@ public class PostServiceTests
 
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var listEpoch = EpochMock();
 
-        var sut = new PostService(repo.Object, users.Object, TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = new PostService(repo.Object, users.Object, TestMapperFactory.CreateMapper(), cache.Object, listEpoch.Object);
         await sut.UpdateAsAdminAsync(id, new AdminUpdatePostDto { Title = "nt", Content = "nc", UserId = null });
 
         Assert.Equal(originalOwner, entity.UserId);
         Assert.Equal("nt", entity.Title);
+        listEpoch.Verify(e => e.InvalidatePostsListAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // F.I.R.S.T: xóa.
@@ -310,7 +330,7 @@ public class PostServiceTests
         var repo = new Mock<IPostRepository>();
         repo.Setup(r => r.GetByIdAsync(id)).ReturnsAsync((Post?)null);
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>());
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), Mock.Of<IEntityResponseCache>(), EpochMock().Object);
         var ex = await Assert.ThrowsAsync<ApiException>(() => sut.DeleteAsync(id));
 
         Assert.Equal(ApiErrorCodes.PostNotFound, ex.ErrorCode);
@@ -330,11 +350,16 @@ public class PostServiceTests
 
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        cache.Setup(c => c.RemoveManyAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var listEpoch = EpochMock();
 
-        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object);
+        var sut = new PostService(repo.Object, Mock.Of<IUserRepository>(), TestMapperFactory.CreateMapper(), cache.Object, listEpoch.Object);
         await sut.DeleteAsync(id);
 
         repo.Verify(r => r.Remove(entity), Times.Once);
-        cache.Verify(c => c.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        cache.Verify(c => c.RemoveAsync(EntityCacheKeys.Post(id), It.IsAny<CancellationToken>()), Times.Once);
+        cache.Verify(c => c.RemoveManyAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()), Times.Once);
+        listEpoch.Verify(e => e.InvalidatePostsListAsync(It.IsAny<CancellationToken>()), Times.Once);
+        listEpoch.Verify(e => e.InvalidateCommentsListsAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }

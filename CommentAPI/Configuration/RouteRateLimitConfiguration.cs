@@ -39,6 +39,8 @@ public static class RouteRateLimitConfiguration
         // PostsController
         [BuildRouteKey("GET", "api/posts")] = new("GET api/posts", 90, 60, 0),
         [BuildRouteKey("GET", "api/posts/{id:guid}")] = new("GET api/posts/{id:guid}", 120, 60, 0),
+        [BuildRouteKey("GET", "api/posts/{id:guid}/comments/tree")] = new("GET api/posts/{id:guid}/comments/tree", 90, 60, 0),
+        [BuildRouteKey("GET", "api/posts/{id:guid}/comments/flat")] = new("GET api/posts/{id:guid}/comments/flat", 90, 60, 0),
         [BuildRouteKey("POST", "api/posts")] = new("POST api/posts", 20, 60, 0),
         [BuildRouteKey("PUT", "api/posts/{id:guid}")] = new("PUT api/posts/{id:guid}", 30, 60, 0),
         [BuildRouteKey("PUT", "api/admin/posts/{id:guid}")] = new("PUT api/admin/posts/{id:guid}", 30, 60, 0),
