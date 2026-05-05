@@ -56,7 +56,7 @@ public class PostServiceTests
     {
         var dto = new PostDto { Id = Guid.NewGuid(), Title = "t", Content = "c", CreatedAt = DateTime.UtcNow, UserId = Guid.NewGuid() };
         var repo = new Mock<IPostRepository>();
-        repo.Setup(r => r.GetPagedAsync(2, 5, It.IsAny<CancellationToken>(), null, null, null, null)).ReturnsAsync((new List<PostDto> { dto }, 1L));
+        repo.Setup(r => r.GetPagedAsync(2, 5, It.IsAny<CancellationToken>(), null, null, null, null, null)).ReturnsAsync((new List<PostDto> { dto }, 1L));
 
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(c => c.GetJsonAsync<PagedResult<PostDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -79,7 +79,7 @@ public class PostServiceTests
     {
         var dto = new PostDto { Id = Guid.NewGuid(), Title = "x", Content = "c", CreatedAt = DateTime.UtcNow, UserId = Guid.NewGuid() };
         var repo = new Mock<IPostRepository>();
-        repo.Setup(r => r.GetPagedAsync(1, 10, It.IsAny<CancellationToken>(), null, null, "x", null))
+        repo.Setup(r => r.GetPagedAsync(1, 10, It.IsAny<CancellationToken>(), null, null, "x", null, null))
             .ReturnsAsync((new List<PostDto> { dto }, 1L));
 
         var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);
@@ -98,7 +98,7 @@ public class PostServiceTests
     public async Task PS04_GetPagedAsync_ShouldReturnEmpty_WhenTitleFilterMatchesNothing()
     {
         var repo = new Mock<IPostRepository>();
-        repo.Setup(r => r.GetPagedAsync(1, 20, It.IsAny<CancellationToken>(), null, null, "x", null))
+        repo.Setup(r => r.GetPagedAsync(1, 20, It.IsAny<CancellationToken>(), null, null, "x", null, null))
             .ReturnsAsync((new List<PostDto>(), 0L));
 
         var cache = new Mock<IEntityResponseCache>(MockBehavior.Strict);

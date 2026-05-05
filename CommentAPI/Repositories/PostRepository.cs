@@ -1,3 +1,4 @@
+using CommentAPI;
 using CommentAPI.Entities;
 using CommentAPI.Data;
 using CommentAPI.DTOs;
@@ -7,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 namespace CommentAPI.Repositories;
 
 // Truy vấn bảng Post: danh sách phân trang projection PostDto + đọc một bài theo Id.
-public class PostRepository : RepositoryBase<Post>, IPostRepository
+public partial class PostRepository : RepositoryBase<Post>, IPostRepository
 {
     #region Trường & hàm tạo
 
@@ -29,7 +30,8 @@ public class PostRepository : RepositoryBase<Post>, IPostRepository
         DateTime? createdAtFrom = null,
         DateTime? createdAtTo = null,
         string? titleContains = null,
-        string? contentContains = null)
+        string? contentContains = null,
+        SortByColumn? sort = null)
     {
         // BƯỚC 1: Áp khoảng CreatedAt inclusive qua helper base — dùng EF.Property<DateTime>(..., "CreatedAt").
         var q = ApplyCreatedAtRange(Context.Posts.AsNoTracking(), createdAtFrom, createdAtTo);
@@ -47,20 +49,20 @@ public class PostRepository : RepositoryBase<Post>, IPostRepository
         // BƯỚC 4: Đếm tổng bản ghi khớp mọi điều kiện — dùng làm TotalCount cho phân trang.
         var total = await q.LongCountAsync(cancellationToken); // COUNT(*) kiểu long.
 
-        // BƯỚC 5: SELECT một trang — mới nhất trước, Id ổn định thứ tự khi CreatedAt trùng.
-        var items = await q
-            .OrderByDescending(p => p.CreatedAt) // Sắp giảm dần theo thời gian tạo.
-            .ThenBy(p => p.Id) // Tie-break PK.
+        // BƯỚC 5: Select PostDto rồi ApplyUniversalSorting(sort) nối OrderBy — sau đó Skip/Take một trang.
+        var spec = sort ?? PostListSortDefault;
+        var projected = q.Select(p => new PostDto // Chiếu ngay trong SQL — chỉ cột cần cho API.
+        {
+            Id = p.Id,
+            Title = p.Title,
+            Content = p.Content,
+            CreatedAt = p.CreatedAt,
+            UserId = p.UserId,
+        });
+        var ordered = ApplyUniversalSorting(projected, spec);
+        var items = await ordered
             .Skip((page - 1) * pageSize) // Bỏ các dòng trang trước (page 1-based).
             .Take(pageSize) // Giới hạn số dòng một trang.
-            .Select(p => new PostDto // Chiếu ngay trong SQL — chỉ cột cần cho API.
-            {
-                Id = p.Id,
-                Title = p.Title,
-                Content = p.Content,
-                CreatedAt = p.CreatedAt,
-                UserId = p.UserId,
-            })
             .ToListAsync(cancellationToken); // Thực thi một round-trip (hoặc vài query tùy provider).
 
         return (items, total); // Tuple trả lên PostService để gói PagedResult.

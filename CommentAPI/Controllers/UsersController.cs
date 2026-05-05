@@ -29,13 +29,15 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
     private readonly IUserService _service; // Dịch vụ tầng ứng dụng cho user.
 
+    private readonly IUserRepository _userRepository; // Parse sort list.
 
-
-    public UsersController(IUserService service) // DI container inject IUserService.
+    public UsersController(IUserService service, IUserRepository userRepository) // DI container inject IUserService + IUserRepository.
 
     {
 
         _service = service; // Lưu tham chiếu phục vụ các action.
+
+        _userRepository = userRepository;
 
     }
 
@@ -64,6 +66,10 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
 
+        [FromQuery] string? sort = null, // Cột UserDto.
+
+        [FromQuery] string? sortDir = null,
+
         CancellationToken cancellationToken = default) // Hủy khi client đóng kết nối.
 
     {
@@ -72,7 +78,9 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Chuẩn hóa page/pageSize an toàn.
 
-        var result = await _service.GetPagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo, name, userName, email); // DB/cache qua service.
+        var sortSpec = _userRepository.ParseUserListSortOrThrow(sort, sortDir);
+
+        var result = await _service.GetPagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo, name, userName, email, sortSpec); // DB/cache qua service.
 
         return Ok(new { message = ApiMessages.UserListSuccess, data = result }); // 200 kèm message và dữ liệu phân trang.
 

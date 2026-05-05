@@ -1,3 +1,4 @@
+using CommentAPI;
 using CommentAPI.Entities;
 using CommentAPI.Interfaces;
 using CommentAPI.Data;
@@ -7,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 namespace CommentAPI.Repositories;
 
 // Truy vấn Users + batch role names — dùng cho GET /api/users và service gắn Roles vào UserDto.
-public class UserRepository : RepositoryBase<User>, IUserRepository
+public partial class UserRepository : RepositoryBase<User>, IUserRepository
 {
     #region Trường & hàm tạo
 
@@ -29,7 +30,8 @@ public class UserRepository : RepositoryBase<User>, IUserRepository
         DateTime? createdAtTo = null,
         string? nameContains = null,
         string? userNameContains = null,
-        string? emailContains = null)
+        string? emailContains = null,
+        SortByColumn? sort = null)
     {
         // BƯỚC 1: Chuẩn hóa page/size (clamp tối thiểu 1) — tránh Skip âm hoặc Take 0.
         var (p, s) = PaginationQuery.Normalize(page, pageSize);
@@ -55,10 +57,10 @@ public class UserRepository : RepositoryBase<User>, IUserRepository
         // BƯỚC 6: COUNT(*) khớp lọc — metadata phân trang.
         var total = await q.LongCountAsync(cancellationToken);
 
-        // BƯỚC 7: Một trang projection nhẹ UserPageRow — không Select PasswordHash.
-        var items = await q
-            .OrderBy(u => u.CreatedAt) // Cũ đến mới (khác PostRepository — theo convention user list).
-            .ThenBy(u => u.Id)
+        // BƯỚC 7: ApplyUniversalSorting rồi một trang projection UserPageRow.
+        var spec = sort ?? UserListSortDefault;
+        var ordered = ApplyUniversalSorting(q, spec);
+        var items = await ordered
             .Skip((p - 1) * s)
             .Take(s)
             .Select(u => new UserPageRow(

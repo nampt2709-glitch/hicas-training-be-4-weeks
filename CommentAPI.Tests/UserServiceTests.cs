@@ -72,7 +72,7 @@ public class UserServiceTests
         var row = new UserPageRow(id, "Tên", "login1", "a@b.c", DateTime.UtcNow);
 
         var repo = new Mock<IUserRepository>();
-        repo.Setup(r => r.GetPagedAsync(1, 10, It.IsAny<CancellationToken>(), null, null, null, null, null))
+        repo.Setup(r => r.GetPagedAsync(1, 10, It.IsAny<CancellationToken>(), null, null, null, null, null, null))
             .ReturnsAsync((new List<UserPageRow> { row }, 1L));
         repo.Setup(r => r.GetRoleNamesByUserIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<Guid, List<string>> { [id] = new List<string> { "Admin", "User" } });
@@ -101,7 +101,7 @@ public class UserServiceTests
         var row = new UserPageRow(id, "Nguyên", "login1", "a@b.c", DateTime.UtcNow);
 
         var repo = new Mock<IUserRepository>();
-        repo.Setup(r => r.GetPagedAsync(1, 5, It.IsAny<CancellationToken>(), null, null, "Nguyên", null, null))
+        repo.Setup(r => r.GetPagedAsync(1, 5, It.IsAny<CancellationToken>(), null, null, "Nguyên", null, null, null))
             .ReturnsAsync((new List<UserPageRow> { row }, 1L));
         repo.Setup(r => r.GetRoleNamesByUserIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<Guid, List<string>> { [id] = new List<string> { "User" } });
@@ -122,7 +122,7 @@ public class UserServiceTests
     public async Task US04_GetPagedAsync_ShouldQueryRepo_AndNotCacheList_WhenUserNameFilter()
     {
         var repo = new Mock<IUserRepository>();
-        repo.Setup(r => r.GetPagedAsync(2, 10, It.IsAny<CancellationToken>(), null, null, null, "adm", null))
+        repo.Setup(r => r.GetPagedAsync(2, 10, It.IsAny<CancellationToken>(), null, null, null, "adm", null, null))
             .ReturnsAsync((new List<UserPageRow>(), 0L));
         repo.Setup(r => r.GetRoleNamesByUserIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<Guid, List<string>>());

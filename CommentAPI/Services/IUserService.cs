@@ -1,3 +1,4 @@
+using CommentAPI;
 using CommentAPI.DTOs;
 
 // Hợp đồng dịch vụ người dùng: tách khỏi controller và lớp UserRepository.
@@ -15,7 +16,8 @@ public interface IUserService
         DateTime? createdAtTo = null, // Lọc CreatedAt inclusive.
         string? nameContains = null, // Filter Contains trên Name (tuỳ chọn).
         string? userNameContains = null, // Filter Contains trên UserName (tuỳ chọn).
-        string? emailContains = null); // Filter Contains trên Email (tuỳ chọn).
+        string? emailContains = null, // Filter Contains trên Email (tuỳ chọn).
+        SortByColumn? sort = null); // Sort list theo cột UserDto.
 
     // Một user theo id; không có thì ném ngoại lệ 404 thống nhất API (tùy triển khai).
     Task<UserDto> GetByIdAsync(Guid id);

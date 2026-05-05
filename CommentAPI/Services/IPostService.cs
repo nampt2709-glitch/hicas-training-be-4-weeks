@@ -1,3 +1,4 @@
+using CommentAPI;
 using CommentAPI.DTOs;
 
 // Hợp đồng tầng dịch vụ: triển khai lớp PostService, dùng từ controller, DI, test.
@@ -14,7 +15,8 @@ public interface IPostService
         DateTime? createdAtFrom = null, // Lọc CreatedAt inclusive.
         DateTime? createdAtTo = null, // Lọc CreatedAt inclusive.
         string? titleContains = null, // Filter Contains trên Title (tuỳ chọn).
-        string? contentContains = null); // Filter Contains trên Content (tuỳ chọn).
+        string? contentContains = null, // Filter Contains trên Content (tuỳ chọn).
+        SortByColumn? sort = null); // Thứ tự cột PostDto + hướng.
 
     // Một bài theo id; ném hoặc trả 404 tùy triển khai, — cache đọc theo khóa post id.
     Task<PostDto> GetByIdAsync(Guid id);

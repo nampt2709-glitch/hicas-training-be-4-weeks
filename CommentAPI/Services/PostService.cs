@@ -3,6 +3,7 @@ using CommentAPI;
 using CommentAPI.DTOs;
 using CommentAPI.Entities;
 using CommentAPI.Interfaces;
+using CommentAPI.Repositories;
 using Microsoft.AspNetCore.Http;
 
 namespace CommentAPI.Services;
@@ -43,13 +44,15 @@ public class PostService : ServiceBase, IPostService
         DateTime? createdAtFrom = null,
         DateTime? createdAtTo = null,
         string? titleContains = null,
-        string? contentContains = null)
+        string? contentContains = null,
+        SortByColumn? sort = null)
     {
+        var sortKey = sort ?? PostRepository.PostListSortDefault;
         // BƯỚC 1: Nếu không có filter list — thử đọc cache theo (page, pageSize) và epoch pst hiện tại.
         if (!HasPostListFilter(createdAtFrom, createdAtTo, titleContains, contentContains))
         {
             var pst = await _listEpoch.GetPostsListEpochAsync(cancellationToken);
-            var cacheKey = EntityCacheKeys.PostsPaged(pst, page, pageSize);
+            var cacheKey = EntityCacheKeys.PostsPaged(pst, page, pageSize, sortKey);
             var cached = await Cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken);
             if (cached is not null)
                 return cached;
@@ -63,7 +66,8 @@ public class PostService : ServiceBase, IPostService
             createdAtFrom,
             createdAtTo,
             titleContains,
-            contentContains);
+            contentContains,
+            sort);
 
         // BƯỚC 3: Gói PagedResult thủ công (không dùng helper static của comment).
         var result = new PagedResult<PostDto>
@@ -78,7 +82,7 @@ public class PostService : ServiceBase, IPostService
         if (!HasPostListFilter(createdAtFrom, createdAtTo, titleContains, contentContains))
         {
             var pst = await _listEpoch.GetPostsListEpochAsync(cancellationToken);
-            await Cache.SetJsonAsync(EntityCacheKeys.PostsPaged(pst, page, pageSize), result, cancellationToken);
+            await Cache.SetJsonAsync(EntityCacheKeys.PostsPaged(pst, page, pageSize, sortKey), result, cancellationToken);
         }
 
         return result;

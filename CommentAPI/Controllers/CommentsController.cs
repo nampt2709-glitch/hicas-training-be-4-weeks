@@ -13,10 +13,12 @@ namespace CommentAPI.Controllers;
 public class CommentsController : ControllerBase // JSON only.
 {
     private readonly ICommentService _service; // Service comment phức tạp (cây, CTE, demo loading).
+    private readonly ICommentRepository _commentRepository; // Parse sort/sortDir whitelist theo repository.
 
-    public CommentsController(ICommentService service) // Constructor: ASP.NET Core inject ICommentService từ container.
+    public CommentsController(ICommentService service, ICommentRepository commentRepository) // Constructor: inject service + repository parse.
     { // Mở khối gán phụ thuộc cho controller.
         _service = service; // Lưu service để mọi action gọi nghiệp vụ comment (CRUD, cây, demo).
+        _commentRepository = commentRepository; // Parse tham số sort an toàn (cột + hướng).
     } // Kết thúc constructor.
 
     // [1] GET /api/comments — luôn phân trang (page/pageSize); một comment theo id dùng GET /api/comments/{id}.
@@ -30,13 +32,14 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Biên dưới CreatedAt (inclusive).
         [FromQuery] DateTime? createdAtTo = null, // Biên trên CreatedAt (inclusive).
-        [FromQuery] string? sort = null, // Sort dropdown (tên enum hoặc số); bỏ trống = mặc định PostId→CreatedAt→Id.
+        [FromQuery] string? sort = null, // Cột sort (tên cột JSON/legacy By* / 0..4).
+        [FromQuery] string? sortDir = null, // asc (mặc định) hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu from > to.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort không hợp lệ.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir);
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Luôn bật phân trang.
-        var result = await _service.GetCommentListAsync(postId, content, false, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, sortEnum); // Không unpaged từ route này.
+        var result = await _service.GetCommentListAsync(postId, content, false, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, sortSpec); // Không unpaged từ route này.
         return Ok(new { message = ApiMessages.CommentListSuccess, data = result }); // 200 + PagedResult<CommentDto>.
     } // Kết thúc GetAll.
 
@@ -60,13 +63,14 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Chuẩn hóa phân trang.
-        var result = await _service.GetCommentsByUserIdPagedAsync(userId, p, s, cancellationToken, createdAtFrom, createdAtTo, content, sortEnum); // 404 nếu user không tồn tại.
+        var result = await _service.GetCommentsByUserIdPagedAsync(userId, p, s, cancellationToken, createdAtFrom, createdAtTo, content, sortSpec); // 404 nếu user không tồn tại.
         return Ok(new { message = ApiMessages.CommentListByUserSuccess, data = result }); // 200.
     } // Kết thúc GetByUserId.
 
@@ -132,13 +136,14 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Luôn phân trang.
-        var data = await _service.GetFlatRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortEnum); // Một hàm service cho toàn route.
+        var data = await _service.GetFlatRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortSpec); // Một hàm service cho toàn route.
         var message = postId is { } ? ApiMessages.CommentFlatByPostSuccess : ApiMessages.CommentAllFlatSuccess;
         return Ok(new { message, data }); // 200.
     } // Kết thúc GetAllFlat.
@@ -155,13 +160,14 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Luôn phân trang.
-        var data = await _service.GetCteFlatRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortEnum); // Một hàm service cho toàn route.
+        var data = await _service.GetCteFlatRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortSpec); // Một hàm service cho toàn route.
         var message = postId is { } ? ApiMessages.CommentCteFlatByPostSuccess : ApiMessages.CommentAllCteFlatSuccess;
         return Ok(new { message, data }); // 200.
     } // Kết thúc GetAllCteFlat.
@@ -178,13 +184,14 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Luôn phân trang (theo gốc).
-        var data = await _service.GetTreeFlatRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortEnum); // Một hàm service cho toàn route.
+        var data = await _service.GetTreeFlatRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortSpec); // Một hàm service cho toàn route.
         var message = postId is { } ? ApiMessages.CommentTreeByPostSuccess : ApiMessages.CommentAllTreeSuccess;
         return Ok(new { message, data }); // 200.
     } // Kết thúc GetAllTreeFlat.
@@ -201,13 +208,14 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Phân trang bắt buộc.
-        var data = await _service.GetTreeCteRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortEnum); // Một hàm service cho toàn route.
+        var data = await _service.GetTreeCteRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortSpec); // Một hàm service cho toàn route.
         var message = postId is { } ? ApiMessages.CommentCteTreeByPostSuccess : ApiMessages.CommentAllCteTreeSuccess;
         return Ok(new { message, data }); // 200.
     } // Kết thúc GetAllCteTree.
@@ -224,13 +232,14 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var data = await _service.GetTreeFlatFlattenRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortEnum); // Một hàm service cho toàn route.
+        var data = await _service.GetTreeFlatFlattenRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortSpec); // Một hàm service cho toàn route.
         var message = postId is { } ? ApiMessages.CommentFlattenTreeByPostSuccess : ApiMessages.CommentFlattenForestSuccess;
         return Ok(new { message, data }); // 200.
     } // Kết thúc GetAllTreeFlatFlattened.
@@ -247,13 +256,14 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var data = await _service.GetTreeCteFlattenRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortEnum); // Một hàm service cho toàn route.
+        var data = await _service.GetTreeCteFlattenRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortSpec); // Một hàm service cho toàn route.
         var message = postId is { } ? ApiMessages.CommentFlattenCteTreeByPostSuccess : ApiMessages.CommentFlattenCteSuccess;
         return Ok(new { message, data }); // 200.
     } // Kết thúc GetAllCteTreeFlattened.
@@ -270,13 +280,14 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Parse.
-        var data = await _service.GetTreeCteFlattenRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortEnum); // Một hàm service cho toàn route.
+        var data = await _service.GetTreeCteFlattenRoutePagedAsync(postId, p, s, cancellationToken, createdAtFrom, createdAtTo, userId, content, sortSpec); // Một hàm service cho toàn route.
         var message = postId is { } ? ApiMessages.CommentFlattenCteTreeByPostSuccess : ApiMessages.CommentFlattenCteSuccess;
         return Ok(new { message, data }); // 200.
     } // Kết thúc GetAllCteTreeFlattened.
@@ -294,19 +305,20 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang khi paginationEnabled=true.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (unpaged, p, s) = PaginationQuery.ParsePaginationFromQuery(page, pageSize, paginationEnabled); // Chỉ demo dùng cờ này.
         if (unpaged) // Không Skip/Take.
         { // Mở khối.
-            var result = await _service.GetAllCommentsLazyLoadingDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortEnum); // SELECT đủ + lazy nav.
+            var result = await _service.GetAllCommentsLazyLoadingDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortSpec); // SELECT đủ + lazy nav.
             return Ok(new { message = ApiMessages.CommentDemoLazyLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
         } // Kết thúc unpaged.
 
-        var paged = await _service.GetCommentsLazyLoadingDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortEnum); // Trang + lazy.
+        var paged = await _service.GetCommentsLazyLoadingDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortSpec); // Trang + lazy.
         return Ok(new { message = ApiMessages.CommentDemoLazyLoadingListSuccess, data = paged }); // 200.
     } // Kết thúc GetDemoLazyLoadingList.
 
@@ -323,19 +335,20 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (unpaged, p, s) = PaginationQuery.ParsePaginationFromQuery(page, pageSize, paginationEnabled); // Parse.
         if (unpaged) // Include toàn tập khớp.
         { // Mở khối.
-            var result = await _service.GetAllCommentsEagerLoadingDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortEnum); // Split query + Include.
+            var result = await _service.GetAllCommentsEagerLoadingDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortSpec); // Split query + Include.
             return Ok(new { message = ApiMessages.CommentDemoEagerLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
         } // Kết thúc unpaged.
 
-        var paged = await _service.GetCommentsEagerLoadingDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortEnum); // Trang eager.
+        var paged = await _service.GetCommentsEagerLoadingDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortSpec); // Trang eager.
         return Ok(new { message = ApiMessages.CommentDemoEagerLoadingListSuccess, data = paged }); // 200.
     } // Kết thúc GetDemoEagerLoadingList.
 
@@ -352,19 +365,20 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (unpaged, p, s) = PaginationQuery.ParsePaginationFromQuery(page, pageSize, paginationEnabled); // Parse.
         if (unpaged) // Mọi dòng khớp + LoadAsync.
         { // Mở khối.
-            var result = await _service.GetAllCommentsExplicitLoadingDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortEnum); // Nhiều câu SQL nhỏ.
+            var result = await _service.GetAllCommentsExplicitLoadingDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortSpec); // Nhiều câu SQL nhỏ.
             return Ok(new { message = ApiMessages.CommentDemoExplicitLoadingAllSuccess, data = result, totalCount = result.Count }); // 200.
         } // Kết thúc unpaged.
 
-        var paged = await _service.GetCommentsExplicitLoadingDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortEnum); // Trang explicit.
+        var paged = await _service.GetCommentsExplicitLoadingDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortSpec); // Trang explicit.
         return Ok(new { message = ApiMessages.CommentDemoExplicitLoadingListSuccess, data = paged }); // 200.
     } // Kết thúc GetDemoExplicitLoadingList.
 
@@ -381,19 +395,20 @@ public class CommentsController : ControllerBase // JSON only.
         [FromQuery] string? pageSize = null, // Cỡ trang.
         [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-        [FromQuery] string? sort = null, // Sort dropdown.
+        [FromQuery] string? sort = null, // Cột sort.
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
         CancellationToken cancellationToken = default) // Hủy.
     { // Mở action.
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu khoảng sai.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort/sortDir sai.
         var (unpaged, p, s) = PaginationQuery.ParsePaginationFromQuery(page, pageSize, paginationEnabled); // Parse.
         if (unpaged) // ToList projection một pipeline.
         { // Mở khối.
-            var result = await _service.GetAllCommentsProjectionDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortEnum); // Không Include graph.
+            var result = await _service.GetAllCommentsProjectionDemoAsync(cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortSpec); // Không Include graph.
             return Ok(new { message = ApiMessages.CommentDemoProjectionAllSuccess, data = result, totalCount = result.Count }); // 200.
         } // Kết thúc unpaged.
 
-        var paged = await _service.GetCommentsProjectionDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortEnum); // Trang projection.
+        var paged = await _service.GetCommentsProjectionDemoPagedAsync(p, s, cancellationToken, filterByPostId, createdAtFrom, createdAtTo, userId, content, sortSpec); // Trang projection.
         return Ok(new { message = ApiMessages.CommentDemoProjectionListSuccess, data = paged }); // 200.
     } // Kết thúc GetDemoProjectionList.
 

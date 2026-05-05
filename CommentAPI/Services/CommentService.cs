@@ -3,6 +3,7 @@ using CommentAPI; // ApiException, mã lỗi, thông điệp dùng chung API.
 using CommentAPI.DTOs; // Các kiểu dữ liệu truyền qua controller/service.
 using CommentAPI.Entities; // Entity Comment và các thực thể liên quan.
 using CommentAPI.Interfaces; // ICommentService, ICommentRepository, cache interface.
+using CommentAPI.Repositories; // CommentRepository.CommentListSortDefault, SortCommentTreeCteRootsForPaging.
 using Microsoft.AspNetCore.Http; // StatusCodes cho mã HTTP trong ApiException.
 
 namespace CommentAPI.Services;
@@ -33,6 +34,10 @@ public class CommentService : ServiceBase, ICommentService
         _listEpoch = listEpoch; // Singleton-scoped theo DI Program: cùng IDistributedCache với EntityResponseCache.
     }
 
+    // Sort cho chuỗi khóa cache list (null → cùng default như repository list phân trang).
+    private static SortByColumn CommentSortCacheKey(SortByColumn? sort) =>
+        sort ?? CommentRepository.CommentListSortDefault;
+
     // Thứ tự public bám CommentsController; bổ trợ ICommentService (không có action tương ứng) nằm region riêng trước private.
     #region CommentsController — GET /api/comments, user/{userId}, CRUD
 
@@ -48,7 +53,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtFrom = null, // Lọc CreatedAt.
         DateTime? createdAtTo = null, // Lọc CreatedAt.
         Guid? userId = null, // Lọc tác giả (tuỳ chọn).
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId) // Sort dropdown (cache key + SQL).
+        SortByColumn? sort = null) // Sort dropdown (cache key + SQL).
     { // Mở khối GetCommentListAsync.
         // BƯỚC 0 — Đọc epoch danh sách comment từ cache phân tán (một lần / request; mọi khóa cmt:{epoch}:… trong hàm này dùng cùng biến này).
         var cmtEpoch = await _listEpoch.GetCommentsListEpochAsync(cancellationToken); // long: số thế hệ hiện tại; sau InvalidateCommentsListsAsync sẽ lớn hơn ⇒ khóa JSON list đổi ⇒ miss.
@@ -87,7 +92,7 @@ public class CommentService : ServiceBase, ICommentService
             if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, null)) // Chỉ đọc cache khi không lọc ngày/user/content.
             { // Mở khối thử cache theo post.
                 // Truyền cmtEpoch vào factory — chuỗi khóa chứa "cmt:{epoch}:" nên sau CRUD (epoch tăng) không còn trùng key với JSON cũ.
-                var keyList = EntityCacheKeys.CommentsFlatByPost(cmtEpoch, onlyPost, page, pageSize, sort); // Khóa danh sách phẳng theo post + trang + sort + epoch list.
+                var keyList = EntityCacheKeys.CommentsFlatByPost(cmtEpoch, onlyPost, page, pageSize, CommentSortCacheKey(sort)); // Khóa danh sách phẳng theo post + trang + sort + epoch list.
                 var cachedList = await Cache.GetJsonAsync<PagedResult<CommentDto>>(keyList, cancellationToken); // Deserialize JSON cache hoặc null nếu miss.
                 if (cachedList is not null) // Hit cache.
                     return cachedList; // Trả ngay, bỏ qua DB.
@@ -97,7 +102,7 @@ public class CommentService : ServiceBase, ICommentService
             var listResult = CommentPagedResult.ForFlatCommentList(listEntities.Select(_mapper.Map<CommentDto>).ToList(), page, pageSize, listTotal); // Map sang DTO và gói metadata phân trang.
             if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, null)) // Chỉ ghi cache khi điều kiện cho phép.
                 // SetJsonAsync cùng epoch đã đọc ở BƯỚC 0 — đảm bảo đọc/ghi cùng một “thế hệ”; sau bump chỉ các request sau mới nhìn thấy key mới.
-                await Cache.SetJsonAsync(EntityCacheKeys.CommentsFlatByPost(cmtEpoch, onlyPost, page, pageSize, sort), listResult, cancellationToken); // Lưu kết quả với TTL mặc định EntityResponseCache.
+                await Cache.SetJsonAsync(EntityCacheKeys.CommentsFlatByPost(cmtEpoch, onlyPost, page, pageSize, CommentSortCacheKey(sort)), listResult, cancellationToken); // Lưu kết quả với TTL mặc định EntityResponseCache.
             return listResult; // Trả về cho controller.
         } // Kết thúc chỉ postId.
 
@@ -151,7 +156,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtFrom = null, // Lọc CreatedAt.
         DateTime? createdAtTo = null, // Lọc CreatedAt.
         string? contentContains = null, // Tìm trong nội dung (tuỳ chọn).
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId) // Sort dropdown.
+        SortByColumn? sort = null) // Sort dropdown.
     { // Mở khối GetCommentsByUserIdPagedAsync.
         // BƯỚC 0 — Đọc epoch danh sách comment: mọi khóa CommentsByUser(cmtEpoch, …) trong hàm này cùng một “thế hệ”; sau CRUD gọi InvalidateCommentsListsAsync thì số tăng ⇒ miss cache cũ.
         var cmtEpoch = await _listEpoch.GetCommentsListEpochAsync(cancellationToken); // long — giá trị hiện tại trong IDistributedCache (__epoch:list:comments); không đổi giữa các lệnh Get/Set trong cùng request.
@@ -162,7 +167,7 @@ public class CommentService : ServiceBase, ICommentService
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, null, contentContains)) // Cache khi không lọc ngày và không lọc content.
         { // Mở khối cache.
             // Nhúng cmtEpoch vào chuỗi khóa — prefix "cmt:{epoch}:" khiến JSON list cũ (epoch thấp hơn) không bao giờ được hit sau khi đã bump.
-            var cacheKey = EntityCacheKeys.CommentsByUser(cmtEpoch, userId, page, pageSize, sort); // Khóa theo epoch + user + trang + sort.
+            var cacheKey = EntityCacheKeys.CommentsByUser(cmtEpoch, userId, page, pageSize, CommentSortCacheKey(sort)); // Khóa theo epoch + user + trang + sort.
             var cached = await Cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Đọc cache.
             if (cached is not null) // Hit.
             { // Mở khối.
@@ -192,7 +197,7 @@ public class CommentService : ServiceBase, ICommentService
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, null, contentContains)) // Chỉ set cache khi không lọc ngày/content.
         { // Mở khối.
             // SetJsonAsync với CommentsByUser(cmtEpoch, …) — trùng logic khóa với BƯỚC 2; sau InvalidateCommentsListsAsync epoch mới không trùng key với bản ghi này.
-            await Cache.SetJsonAsync(EntityCacheKeys.CommentsByUser(cmtEpoch, userId, page, pageSize, sort), result, cancellationToken); // Serialize PagedResult → JSON trong cache phân tán.
+            await Cache.SetJsonAsync(EntityCacheKeys.CommentsByUser(cmtEpoch, userId, page, pageSize, CommentSortCacheKey(sort)), result, cancellationToken); // Serialize PagedResult → JSON trong cache phân tán.
         } // Kết thúc set.
 
         return result; // Trả controller.
@@ -498,7 +503,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetFlatRoutePagedAsync — danh sách phẳng CommentFlatDto (EF, Level=0) có cache khi không lọc “nặng”.
         // BƯỚC 0 — Đọc epoch hiện tại cho mọi khóa cmt:{epoch}:… trong GET /flat (post hoặc toàn cục); đồng bộ invalidation với Create/Update/Delete.
         var cmtEpoch = await _listEpoch.GetCommentsListEpochAsync(cancellationToken); // Số trong cache Redis/SQL chứa trong __epoch:list:comments — dùng chung một biến cho Get + Set của request này.
@@ -507,7 +512,7 @@ public class CommentService : ServiceBase, ICommentService
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Cho phép dùng cache phân trang mặc định.
         { // Mở khối đọc cache.
             // Chọn nhánh khóa: theo post (CommentsFlatByPost) hay toàn hệ (CommentsFlatAll); cả hai nhúng cmtEpoch vào đầu chuỗi khóa.
-            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsFlatByPost(cmtEpoch, p, page, pageSize, sort) : EntityCacheKeys.CommentsFlatAll(cmtEpoch, page, pageSize, sort); // Nếu epoch vừa bump, key mới ≠ key đã cache ⇒ miss.
+            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsFlatByPost(cmtEpoch, p, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsFlatAll(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Nếu epoch vừa bump, key mới ≠ key đã cache ⇒ miss.
             var cached = await Cache.GetJsonAsync<PagedResult<CommentFlatDto>>(cacheKey, cancellationToken); // Deserialize JSON trong distributed cache.
             if (cached is not null) // Hit (cùng epoch và cùng tham số trang/sort).
                 return cached; // Không hit DB trong nhánh này.
@@ -522,7 +527,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 5 — Ghi cache JSON khi không suppress: khóa trùng BƯỚC 1 (cùng cmtEpoch) để lần sau GET cùng tham số hit.
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Được phép ghi cache.
         { // Mở khối set cache.
-            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsFlatByPost(cmtEpoch, p2, page, pageSize, sort) : EntityCacheKeys.CommentsFlatAll(cmtEpoch, page, pageSize, sort); // Phải trùng đúng nhánh và epoch với bước đọc.
+            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsFlatByPost(cmtEpoch, p2, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsFlatAll(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Phải trùng đúng nhánh và epoch với bước đọc.
             await Cache.SetJsonAsync(cacheKey, result, cancellationToken); // Lưu PagedResult<CommentFlatDto> dưới key có prefix cmt:{epoch}: .
         } // Kết thúc set cache.
         return result; // Trả dữ liệu cho HTTP 200.
@@ -538,7 +543,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetCteFlatRoutePagedAsync — một pipeline: LoadRawCteAsync → Skip/Take trên dòng phẳng (cùng tinh thần GET …/flat).
         // BƯỚC 0 — Epoch list cho nhánh CommentsCteFlat* / CommentsAllCteFlat* (cùng ý với GET /flat; bump khi có thay đổi aggregate comment).
         var cmtEpoch = await _listEpoch.GetCommentsListEpochAsync(cancellationToken); // Một đọc / request — truyền vào mọi factory khóa CTE-flat bên dưới.
@@ -546,7 +551,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 1 — Thử đọc cache CTE-flat khi không suppress.
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Cache khi không có lọc làm phình không gian khóa.
         { // Mở đọc cache.
-            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsCteFlatByPost(cmtEpoch, p, page, pageSize, sort) : EntityCacheKeys.CommentsAllCteFlat(cmtEpoch, page, pageSize, sort); // Namespace khóa tách biệt route /cte khỏi /flat nhưng cùng epoch.
+            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsCteFlatByPost(cmtEpoch, p, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsAllCteFlat(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Namespace khóa tách biệt route /cte khỏi /flat nhưng cùng epoch.
             var cached = await Cache.GetJsonAsync<PagedResult<CommentCteDto>>(cacheKey, cancellationToken); // Lấy bản đã cache.
             if (cached is not null) // Hit.
                 return cached; // Trả luôn.
@@ -567,7 +572,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 6 — Ghi cache khi không suppress (cmtEpoch nhất quán với BƯỚC 1).
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Được cache.
         { // Mở set cache.
-            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsCteFlatByPost(cmtEpoch, p2, page, pageSize, sort) : EntityCacheKeys.CommentsAllCteFlat(cmtEpoch, page, pageSize, sort); // Cùng quy tắc nhúng epoch như CommentsFlat*.
+            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsCteFlatByPost(cmtEpoch, p2, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsAllCteFlat(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Cùng quy tắc nhúng epoch như CommentsFlat*.
             await Cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi cache phân trang CTE-flat.
         } // Hết set cache.
         return result; // Trả response.
@@ -583,7 +588,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetTreeFlatRoutePagedAsync — cây lồng có Level (BFS sau BuildTreeFlat, đồng bộ với pipeline CTE).
         // BƯỚC 0 — Đọc epoch cho họ khóa CommentsTreeFlat* / CommentsAllTreeFlat* (invalidate chung khi CRUD comment).
         var cmtEpoch = await _listEpoch.GetCommentsListEpochAsync(cancellationToken); // long — nhúng vào chuỗi khóa JSON phân trang tree-flat.
@@ -591,7 +596,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 1 — Thử đọc cache tree-flat khi không suppress (hit chỉ khi epoch trùng bản đã Set).
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Cho phép cache mặc định.
         { // Mở đọc cache.
-            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsTreeFlatByPost(cmtEpoch, p, page, pageSize, sort) : EntityCacheKeys.CommentsAllTreeFlat(cmtEpoch, page, pageSize, sort); // Hai namespace post/global, cùng prefix cmt:{epoch}: .
+            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsTreeFlatByPost(cmtEpoch, p, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsAllTreeFlat(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Hai namespace post/global, cùng prefix cmt:{epoch}: .
             var cached = await Cache.GetJsonAsync<PagedResult<CommentTreeFlatDto>>(cacheKey, cancellationToken); // Đọc bản cache.
             if (cached is not null) // Hit.
                 return cached; // Trả sớm.
@@ -603,7 +608,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 4 — Ghi cache tree-flat khi không suppress; Set dùng cùng cmtEpoch như BƯỚC 1.
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Được cache.
         { // Mở set.
-            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsTreeFlatByPost(cmtEpoch, p2, page, pageSize, sort) : EntityCacheKeys.CommentsAllTreeFlat(cmtEpoch, page, pageSize, sort); // Trùng quy tắc nhánh đọc.
+            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsTreeFlatByPost(cmtEpoch, p2, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsAllTreeFlat(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Trùng quy tắc nhánh đọc.
             await Cache.SetJsonAsync(cacheKey, result, cancellationToken); // Lưu JSON.
         } // Hết set.
         return result; // HTTP payload.
@@ -619,7 +624,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetTreeCteRoutePagedAsync — CommentTreeCteDto có Level từ CTE, phân trang theo gốc.
         // BƯỚC 0 — Epoch list dùng chung invalidate với các route khác trong prefix cmt:{n}:….
         var cmtEpoch = await _listEpoch.GetCommentsListEpochAsync(cancellationToken); // Truyền vào CommentsTreeCte* / CommentsAllTreeCte*.
@@ -627,7 +632,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 1 — Thử đọc cache tree-CTE khi không suppress.
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Cache khi hợp lệ.
         { // Mở đọc.
-            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsTreeCteByPost(cmtEpoch, p, page, pageSize, sort) : EntityCacheKeys.CommentsAllTreeCte(cmtEpoch, page, pageSize, sort); // Khóa tree-CTE có epoch.
+            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsTreeCteByPost(cmtEpoch, p, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsAllTreeCte(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Khóa tree-CTE có epoch.
             var cached = await Cache.GetJsonAsync<PagedResult<CommentTreeCteDto>>(cacheKey, cancellationToken); // Deserialize.
             if (cached is not null) // Hit.
                 return cached; // Thoát sớm.
@@ -639,7 +644,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 4 — Ghi cache khi không suppress (cmtEpoch như BƯỚC 0–1).
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Ghi cache.
         { // Mở set.
-            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsTreeCteByPost(cmtEpoch, p2, page, pageSize, sort) : EntityCacheKeys.CommentsAllTreeCte(cmtEpoch, page, pageSize, sort); // Khóa nhất quán.
+            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsTreeCteByPost(cmtEpoch, p2, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsAllTreeCte(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Khóa nhất quán.
             await Cache.SetJsonAsync(cacheKey, result, cancellationToken); // Lưu.
         } // Hết set.
         return result; // Trả về.
@@ -655,7 +660,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetTreeFlatFlattenRoutePagedAsync — CommentFlattenFlatDto từ pipeline tree/flat RAM.
         // BƯỚC 0 — Epoch cho họ khóa CommentsTreeFlatFlatten* (cùng cơ chế bump InvalidateCommentsListsAsync).
         var cmtEpoch = await _listEpoch.GetCommentsListEpochAsync(cancellationToken); // Đồng bộ với mọi list JSON có prefix thế hệ.
@@ -663,7 +668,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 1 — Thử đọc cache flatten khi không suppress.
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Điều kiện cache.
         { // Mở đọc cache.
-            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsTreeFlatFlattenByPost(cmtEpoch, p, page, pageSize, sort) : EntityCacheKeys.CommentsAllTreeFlatFlatten(cmtEpoch, page, pageSize, sort); // Nhánh post vs global có cùng vị trí nhúng epoch.
+            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsTreeFlatFlattenByPost(cmtEpoch, p, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsAllTreeFlatFlatten(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Nhánh post vs global có cùng vị trí nhúng epoch.
             var cached = await Cache.GetJsonAsync<PagedResult<CommentFlattenFlatDto>>(cacheKey, cancellationToken); // Đọc.
             if (cached is not null) // Hit.
                 return cached; // Trả cache.
@@ -679,7 +684,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 5 — Ghi cache flatten khi không suppress (khóa gắn cmtEpoch từ BƯỚC 0).
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Set cache.
         { // Mở set.
-            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsTreeFlatFlattenByPost(cmtEpoch, p2, page, pageSize, sort) : EntityCacheKeys.CommentsAllTreeFlatFlatten(cmtEpoch, page, pageSize, sort); // Khóa đồng bộ đọc.
+            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsTreeFlatFlattenByPost(cmtEpoch, p2, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsAllTreeFlatFlatten(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Khóa đồng bộ đọc.
             await Cache.SetJsonAsync(cacheKey, result, cancellationToken); // Ghi.
         } // Hết set.
         return result; // Response.
@@ -695,7 +700,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetTreeCteFlattenRoutePagedAsync — CommentFlattenCteDto sau cây CommentTreeCteDto.
         // BƯỚC 0 — Epoch list chung — sau mỗi CRUD InvalidateCommentsListsAsync làm các key CommentsFlattenedCteTree* “lệch thế hệ”.
         var cmtEpoch = await _listEpoch.GetCommentsListEpochAsync(cancellationToken); // Một snapshot số đếm trong cache phân tán.
@@ -703,7 +708,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 1 — Thử đọc cache flatten-CTE khi không suppress.
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Cache hợp lệ.
         { // Mở đọc.
-            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsFlattenedCteTree(cmtEpoch, p, page, pageSize, sort) : EntityCacheKeys.CommentsAllFlattenCteTree(cmtEpoch, page, pageSize, sort); // Khóa flatten-CTE có epoch.
+            var cacheKey = postId is { } p ? EntityCacheKeys.CommentsFlattenedCteTree(cmtEpoch, p, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsAllFlattenCteTree(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Khóa flatten-CTE có epoch.
             var cached = await Cache.GetJsonAsync<PagedResult<CommentFlattenCteDto>>(cacheKey, cancellationToken); // Đọc cache.
             if (cached is not null) // Hit.
                 return cached; // Trả sớm.
@@ -719,7 +724,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 5 — Ghi cache khi không suppress; epoch trùng luồng đọc ở BƯỚC 1.
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Ghi cache.
         { // Mở set.
-            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsFlattenedCteTree(cmtEpoch, p2, page, pageSize, sort) : EntityCacheKeys.CommentsAllFlattenCteTree(cmtEpoch, page, pageSize, sort); // Khóa đồng bộ đọc.
+            var cacheKey = postId is { } p2 ? EntityCacheKeys.CommentsFlattenedCteTree(cmtEpoch, p2, page, pageSize, CommentSortCacheKey(sort)) : EntityCacheKeys.CommentsAllFlattenCteTree(cmtEpoch, page, pageSize, CommentSortCacheKey(sort)); // Khóa đồng bộ đọc.
             await Cache.SetJsonAsync(cacheKey, result, cancellationToken); // Lưu.
         } // Hết set.
         return result; // Trả về client.
@@ -729,13 +734,13 @@ public class CommentService : ServiceBase, ICommentService
     public async Task<IReadOnlyList<CommentTreeCteDto>> GetCommentsTreeForPostAsync(
         Guid postId,
         bool includeReplies = true,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId,
+        SortByColumn? sort = null,
         CancellationToken cancellationToken = default)
     { // Mở khối GetCommentsTreeForPostAsync.
         // BƯỚC 1 — Xác nhận bài tồn tại (404 PostNotFound nếu không có trong bảng Posts).
         await EnsurePostExistsAsync(postId); // Luôn kiểm tra trước cache để không trả dữ liệu khi post đã xóa.
         // BƯỚC 2 — Cache-aside: khóa chỉ dành cho resource post /comments/tree.
-        var cacheKey = EntityCacheKeys.PostsResourceCommentsTreeCte(postId, includeReplies, sort); // l:posts:{id}:comments:tree:cte:…
+        var cacheKey = EntityCacheKeys.PostsResourceCommentsTreeCte(postId, includeReplies, CommentSortCacheKey(sort)); // l:posts:{id}:comments:tree:cte:…
         var cached = await Cache.GetJsonAsync<List<CommentTreeCteDto>>(cacheKey, cancellationToken); // Deserialize hoặc miss.
         if (cached is not null) // Hit cache.
             return cached; // Trả rừng đã lưu, không gọi DB.
@@ -751,13 +756,13 @@ public class CommentService : ServiceBase, ICommentService
     public async Task<IReadOnlyList<CommentCteDto>> GetCommentsFlatForPostAsync(
         Guid postId,
         bool includeReplies = true,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId,
+        SortByColumn? sort = null,
         CancellationToken cancellationToken = default)
     { // Mở khối GetCommentsFlatForPostAsync.
         // BƯỚC 1 — Xác nhận bài tồn tại.
         await EnsurePostExistsAsync(postId); // 404 khi post không có.
         // BƯỚC 2 — Cache-aside: khóa chỉ dành cho resource post /comments/flat (CTE phẳng).
-        var cacheKey = EntityCacheKeys.PostsResourceCommentsFlatCte(postId, includeReplies, sort); // l:posts:{id}:comments:flat:cte:…
+        var cacheKey = EntityCacheKeys.PostsResourceCommentsFlatCte(postId, includeReplies, CommentSortCacheKey(sort)); // l:posts:{id}:comments:flat:cte:…
         var cached = await Cache.GetJsonAsync<List<CommentCteDto>>(cacheKey, cancellationToken); // Miss → null.
         if (cached is not null) // Hit.
             return cached; // Trả danh sách phẳng đã cache.
@@ -783,7 +788,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo,
         Guid? userId,
         string? contentContains,
-        CommentRouteListSort sort)
+        SortByColumn? sort)
     { // Mở khối DemoQueryAsync — điểm chung gọi repository demo theo loại nạp.
         // BƯỚC 1 — Nếu có postId: EnsurePostExistsAsync (404 khi post không tồn tại).
         if (postId is { } pid) // Có lọc theo bài.
@@ -813,7 +818,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetCommentsLazyLoadingDemoPagedAsync.
         // BƯỚC 1 — Gọi DemoQueryAsync(Lazy, paged: true, …).
         var (items, total, p, s) = await DemoQueryAsync(CommentDemoLoadKind.Lazy, true, page, pageSize, cancellationToken, postId, createdAtFrom, createdAtTo, userId, contentContains, sort); // Gọi demo lazy với phân trang bật.
@@ -829,7 +834,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetAllCommentsLazyLoadingDemoAsync.
         // BƯỚC 1 — Gọi DemoQueryAsync(Lazy, paged: false, …).
         var (items, _, _, _) = await DemoQueryAsync(CommentDemoLoadKind.Lazy, false, 0, 0, cancellationToken, postId, createdAtFrom, createdAtTo, userId, contentContains, sort); // unpaged: bỏ qua page/size thực tế trong repository.
@@ -847,7 +852,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetCommentsEagerLoadingDemoPagedAsync.
         // BƯỚC 1 — Gọi DemoQueryAsync(Eager, paged: true, …).
         var (items, total, p, s) = await DemoQueryAsync(CommentDemoLoadKind.Eager, true, page, pageSize, cancellationToken, postId, createdAtFrom, createdAtTo, userId, contentContains, sort); // Demo eager có phân trang.
@@ -863,7 +868,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetAllCommentsEagerLoadingDemoAsync.
         // BƯỚC 1 — Gọi DemoQueryAsync(Eager, paged: false, …).
         var (items, _, _, _) = await DemoQueryAsync(CommentDemoLoadKind.Eager, false, 0, 0, cancellationToken, postId, createdAtFrom, createdAtTo, userId, contentContains, sort); // Lấy toàn bộ khớp lọc với eager.
@@ -881,7 +886,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetCommentsExplicitLoadingDemoPagedAsync.
         // BƯỚC 1 — Gọi DemoQueryAsync(Explicit, paged: true, …).
         var (items, total, p, s) = await DemoQueryAsync(CommentDemoLoadKind.Explicit, true, page, pageSize, cancellationToken, postId, createdAtFrom, createdAtTo, userId, contentContains, sort); // Explicit có phân trang.
@@ -897,7 +902,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetAllCommentsExplicitLoadingDemoAsync.
         // BƯỚC 1 — Gọi DemoQueryAsync(Explicit, paged: false, …).
         var (items, _, _, _) = await DemoQueryAsync(CommentDemoLoadKind.Explicit, false, 0, 0, cancellationToken, postId, createdAtFrom, createdAtTo, userId, contentContains, sort); // Toàn bộ + LoadAsync từng phần.
@@ -915,7 +920,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetCommentsProjectionDemoPagedAsync.
         // BƯỚC 1 — Gọi DemoQueryAsync(Projection, paged: true, …).
         var (items, total, p, s) = await DemoQueryAsync(CommentDemoLoadKind.Projection, true, page, pageSize, cancellationToken, postId, createdAtFrom, createdAtTo, userId, contentContains, sort); // Projection phân trang.
@@ -931,7 +936,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId)
+        SortByColumn? sort = null)
     { // Mở khối GetAllCommentsProjectionDemoAsync.
         // BƯỚC 1 — Gọi DemoQueryAsync(Projection, paged: false, …).
         var (items, _, _, _) = await DemoQueryAsync(CommentDemoLoadKind.Projection, false, 0, 0, cancellationToken, postId, createdAtFrom, createdAtTo, userId, contentContains, sort); // Toàn bộ qua Select SQL.
@@ -954,13 +959,13 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null, // Lọc CreatedAt inclusive.
         Guid? userId = null, // Lọc tác giả.
         string? contentContains = null, // Lọc Contains nội dung.
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId) // Sort dropdown.
+        SortByColumn? sort = null) // Sort dropdown.
     { // Mở khối PagedGlobalListAsync.
         // BƯỚC 1 — Cache-aside đọc: CommentsFlatAll(commentsListEpoch, …); tham số epoch không đọc lại trong hàm này để tránh lệch với epoch đã dùng ở caller cùng request.
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Không lọc → được cache.
         { // Mở khối cache.
             // commentsListEpoch = giá trị GetCommentsListEpochAsync tại thời điểm bắt đầu xử lý GET — nếu trùng với lúc Set thì hit; bump sau CRUD ⇒ caller truyền epoch mới ⇒ miss JSON cũ.
-            var cacheKey = EntityCacheKeys.CommentsFlatAll(commentsListEpoch, page, pageSize, sort); // Chuỗi khóa cmt:{commentsListEpoch}:…:flat:all:…
+            var cacheKey = EntityCacheKeys.CommentsFlatAll(commentsListEpoch, page, pageSize, CommentSortCacheKey(sort)); // Chuỗi khóa cmt:{commentsListEpoch}:…:flat:all:…
             var cached = await Cache.GetJsonAsync<PagedResult<CommentDto>>(cacheKey, cancellationToken); // Đọc JSON từ cache; không SQL.
             if (cached is not null) // Có bản trong cache.
             { // Mở khối.
@@ -979,7 +984,7 @@ public class CommentService : ServiceBase, ICommentService
         // BƯỚC 4 — Ghi cache CommentsFlatAll khi không suppress; dùng đúng commentsListEpoch của caller để không ghi vào nhánh khóa mà GET /flat không bao giờ đọc.
         if (!SuppressCommentRouteCache(createdAtFrom, createdAtTo, userId, contentContains)) // Chỉ cache khi không lọc.
         { // Mở khối.
-            await Cache.SetJsonAsync(EntityCacheKeys.CommentsFlatAll(commentsListEpoch, page, pageSize, sort), result, cancellationToken); // Lưu dưới cùng khóa với GET /comments/flat (post null) và với nhánh reuse PagedGlobalListAsync.
+            await Cache.SetJsonAsync(EntityCacheKeys.CommentsFlatAll(commentsListEpoch, page, pageSize, CommentSortCacheKey(sort)), result, cancellationToken); // Lưu dưới cùng khóa với GET /comments/flat (post null) và với nhánh reuse PagedGlobalListAsync.
         } // Kết thúc set cache.
 
         return result; // Trả về cho caller.
@@ -1022,17 +1027,6 @@ public class CommentService : ServiceBase, ICommentService
         return CommentPagedResult.ForFlatCommentList(items, 1, ps, n);
     }
 
-    // Sắp danh sách gốc CommentTreeCteDto trước phân trang RAM — map cùng quy tắc với OrderCommentsForRoute (EF) / SQL whitelist.
-    private static List<CommentTreeCteDto> OrderCommentTreeCteRootsForPaging(IEnumerable<CommentTreeCteDto> roots, CommentRouteListSort sort) => sort switch
-    {
-        CommentRouteListSort.ByCreatedAt => roots.OrderBy(r => r.CreatedAt).ThenBy(r => r.Id).ToList(),
-        CommentRouteListSort.ByPostCreatedAtId => roots.OrderBy(r => r.PostId).ThenBy(r => r.CreatedAt).ThenBy(r => r.Id).ToList(),
-        CommentRouteListSort.ByCreatedAtDesc => roots.OrderByDescending(r => r.CreatedAt).ThenBy(r => r.Id).ToList(),
-        CommentRouteListSort.ByUserIdCreatedAtId => roots.OrderBy(r => r.UserId).ThenBy(r => r.CreatedAt).ThenBy(r => r.Id).ToList(),
-        CommentRouteListSort.ByIdAsc => roots.OrderBy(r => r.Id).ToList(),
-        _ => roots.OrderBy(r => r.PostId).ThenBy(r => r.CreatedAt).ThenBy(r => r.Id).ToList(),
-    };
-
     // Pipeline [10][12]: phân trang theo gốc (route tree/flat) → nạp đủ subtree → dựng rừng (mỗi item = một thread đầy đủ).
     private async Task<(List<CommentTreeDto> Roots, long TotalComments, long TotalRootNodesInTable)> BuildFlatTreesPagedCoreAsync( // Tuple: rừng trang + tổng comment + tổng gốc.
         Guid? postId, // null = toàn hệ; có giá trị = một bài.
@@ -1043,7 +1037,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null, // Lọc CreatedAt.
         Guid? userId = null, // Lọc tác giả.
         string? contentContains = null, // Lọc nội dung.
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId) // Thứ tự gốc + subtree (dropdown).
+        SortByColumn? sort = null) // Thứ tự gốc + subtree (dropdown).
     { // Mở khối BuildFlatTreesPagedCoreAsync.
         // BƯỚC 1 — Nếu có postId: EnsurePostExistsAsync (404 khi không tồn tại).
         if (postId is { } pid) // Nếu client truyền postId.
@@ -1118,7 +1112,7 @@ public class CommentService : ServiceBase, ICommentService
         DateTime? createdAtTo = null, // Tham số lọc chuyển xuống SQL CTE.
         Guid? userId = null, // Tham số lọc chuyển xuống SQL CTE.
         string? contentContains = null, // Tham số LIKE chuyển xuống SQL CTE.
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId) // ORDER BY CTE + sắp gốc RAM theo dropdown.
+        SortByColumn? sort = null) // ORDER BY CTE + sắp gốc RAM theo dropdown.
     { // Mở khối BuildCteTreesPagedCoreAsync.
         // BƯỚC 1 — Nếu có postId: EnsurePostExistsAsync.
         if (postId is { } pid) // Có postId từ client.
@@ -1141,7 +1135,7 @@ public class CommentService : ServiceBase, ICommentService
         var roots = BuildTreeCte(rows);
 
         // BƯỚC 5 — Sắp danh sách gốc theo sort (đồng bộ với GetCommentRootsRoutePagedAsync / dropdown).
-        var orderedRoots = OrderCommentTreeCteRootsForPaging(roots, sort); // Thứ tự gốc trước Skip/Take trong RAM.
+        var orderedRoots = CommentRepository.SortCommentTreeCteRootsForPaging(roots, sort ?? CommentRepository.CommentListSortDefault); // Thứ tự gốc trước Skip/Take trong RAM.
 
         // BƯỚC 6 — totalRootNodesInCte = số gốc trong kết quả CTE (mẫu số TotalPages).
         var totalRootNodesInCte = (long)orderedRoots.Count; // TotalNodes: số gốc trong kết quả CTE (TotalPages theo giá trị này).

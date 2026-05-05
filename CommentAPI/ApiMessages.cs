@@ -106,8 +106,17 @@ public static class ApiErrorCodes
     // Parent thuộc post khác.
     public const string CommentParentWrongPost = "COMMENT_PARENT_WRONG_POST";
 
-    // Query `sort` không khớp enum CommentRouteListSort (tên hoặc số 0..4).
+    // sortDir query không phải asc/desc (hoặc ascending/descending).
+    public const string InvalidSortDirection = "INVALID_SORT_DIRECTION";
+
+    // Tham số sort không khớp cột whitelist của danh sách comment (tên cột JSON/entity + sortDir).
     public const string CommentInvalidSort = "COMMENT_INVALID_SORT";
+
+    // Tham số sort không khớp cột whitelist PostDto.
+    public const string PostInvalidSort = "POST_INVALID_SORT";
+
+    // Tham số sort không khớp cột whitelist UserDto (list).
+    public const string UserInvalidSort = "USER_INVALID_SORT";
 }
 
 #endregion
@@ -362,9 +371,21 @@ public static partial class ApiMessages
     public const string CommentParentWrongPost =
         "The parent comment is missing or not in the same target post as this comment.";
 
-    // Tham số sort query không hợp lệ (dùng tên enum CommentRouteListSort hoặc số nguyên 0..4).
+    // sortDir không phải asc|desc (hoặc ascending|descending).
+    public const string InvalidSortDirection =
+        "Invalid sort direction. Use asc or desc (or ascending / descending).";
+
+    // sort không khớp một cột hợp lệ trong payload comment (Id, Content, CreatedAt, PostId, UserId, ParentId, Level nơi có, v.v.).
     public const string CommentInvalidSort =
-        "Invalid sort parameter. Use a CommentRouteListSort name (e.g. ByPostCreatedAtId) or integer 0..4.";
+        "Invalid sort column for comments. Use a column name from the API response (e.g. CreatedAt, PostId, Level). Legacy names ByCreatedAt / ByPostCreatedAtId / 0..4 are still accepted.";
+
+    // sort không khớp một cột PostDto (Id, Title, Content, CreatedAt, UserId).
+    public const string PostInvalidSort =
+        "Invalid sort column for posts. Use Id, Title, Content, CreatedAt, or UserId.";
+
+    // sort không khớp một cột UserDto list (Id, Name, UserName, Email, CreatedAt, Roles).
+    public const string UserInvalidSort =
+        "Invalid sort column for users. Use Id, Name, UserName, Email, CreatedAt, or Roles.";
 }
 
 #endregion

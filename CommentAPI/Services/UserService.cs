@@ -4,6 +4,7 @@ using CommentAPI.Data;
 using CommentAPI.DTOs;
 using CommentAPI.Entities;
 using CommentAPI.Interfaces;
+using CommentAPI.Repositories;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -53,13 +54,15 @@ public class UserService : ServiceBase, IUserService
         DateTime? createdAtTo = null,
         string? nameContains = null,
         string? userNameContains = null,
-        string? emailContains = null)
+        string? emailContains = null,
+        SortByColumn? sort = null)
     {
+        var sortKey = sort ?? UserRepository.UserListSortDefault;
         // BƯỚC 1: Thử cache chỉ khi không có bất kỳ filter list nào.
         if (!HasUserListFilter(createdAtFrom, createdAtTo, nameContains, userNameContains, emailContains))
         {
             var usr = await _listEpoch.GetUsersListEpochAsync(cancellationToken);
-            var cacheKey = EntityCacheKeys.UsersPaged(usr, page, pageSize);
+            var cacheKey = EntityCacheKeys.UsersPaged(usr, page, pageSize, sortKey);
             var cached = await Cache.GetJsonAsync<PagedResult<UserDto>>(cacheKey, cancellationToken);
             if (cached is not null)
                 return cached;
@@ -74,7 +77,8 @@ public class UserService : ServiceBase, IUserService
             createdAtTo,
             nameContains,
             userNameContains,
-            emailContains);
+            emailContains,
+            sort);
 
         // BƯỚC 3: Gom Id trang hiện tại để một query batch roles.
         var ids = items.ConvertAll(x => x.Id);
@@ -100,7 +104,7 @@ public class UserService : ServiceBase, IUserService
         if (!HasUserListFilter(createdAtFrom, createdAtTo, nameContains, userNameContains, emailContains))
         {
             var usr = await _listEpoch.GetUsersListEpochAsync(cancellationToken);
-            await Cache.SetJsonAsync(EntityCacheKeys.UsersPaged(usr, page, pageSize), result, cancellationToken);
+            await Cache.SetJsonAsync(EntityCacheKeys.UsersPaged(usr, page, pageSize, sortKey), result, cancellationToken);
         }
 
         return result;

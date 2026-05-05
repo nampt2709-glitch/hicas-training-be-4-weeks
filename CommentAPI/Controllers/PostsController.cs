@@ -29,18 +29,28 @@ public class PostsController : ControllerBase // Không view.
 
     private readonly IPostService _service; // Nghiệp vụ post + cache.
 
+    private readonly IPostRepository _postRepository; // Parse sort danh sách post.
+
     // CommentService: [2a]/[2b] — ICommentRepository.GetAllCommentsForPost thực thi CTE SQL riêng (không LoadRawCteAsync); query includeReplies (mặc định true nếu bỏ qua).
     private readonly ICommentService _commentService;
 
+    private readonly ICommentRepository _commentRepository; // Parse sort comment sub-route.
 
-
-    public PostsController(IPostService service, ICommentService commentService) // DI: post + comment cho sub-resource comments dưới một bài.
+    public PostsController(
+        IPostService service,
+        IPostRepository postRepository,
+        ICommentService commentService,
+        ICommentRepository commentRepository) // DI: post + post repo + comment cho sub-resource.
 
     {
 
         _service = service; // Gán field post.
 
+        _postRepository = postRepository; // Parse sort list post.
+
         _commentService = commentService; // Tree/flat theo postId route; không tham số filter trên URL.
+
+        _commentRepository = commentRepository; // Parse sort query comment.
 
     }
 
@@ -67,6 +77,10 @@ public class PostsController : ControllerBase // Không view.
 
         [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
 
+        [FromQuery] string? sort = null, // Cột PostDto.
+
+        [FromQuery] string? sortDir = null, // asc hoặc desc.
+
         CancellationToken cancellationToken = default) // Hủy.
 
     {
@@ -75,7 +89,9 @@ public class PostsController : ControllerBase // Không view.
 
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Chuẩn hóa.
 
-        var result = await _service.GetPagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo, title, content); // DB + cache khi không filter.
+        var sortSpec = _postRepository.ParsePostListSortOrThrow(sort, sortDir);
+
+        var result = await _service.GetPagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo, title, content, sortSpec); // DB + cache khi không filter.
 
         return Ok(new { message = ApiMessages.PostListSuccess, data = result }); // 200.
 
@@ -105,12 +121,12 @@ public class PostsController : ControllerBase // Không view.
 
     [Authorize(Roles = "Admin,User")] // Đọc comment.
 
-    public async Task<IActionResult> GetCommentsTreeByPostId(Guid id, [FromQuery] bool? includeReplies, [FromQuery] string? sort, CancellationToken cancellationToken) // id = PostId; includeReplies + sort (dropdown) tuỳ chọn.
+    public async Task<IActionResult> GetCommentsTreeByPostId(Guid id, [FromQuery] bool? includeReplies, [FromQuery] string? sort, [FromQuery] string? sortDir, CancellationToken cancellationToken) // id = PostId; includeReplies + sort (dropdown) tuỳ chọn.
 
     { // Mở khối GetCommentsTreeByPostId.
         // BƯỚC 1 — Parse sort an toàn rồi gọi service: EnsurePost + GetAllCommentsForPost (CTE repo) + BuildTreeCte.
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort không hợp lệ.
-        var data = await _commentService.GetCommentsTreeForPostAsync(id, includeReplies ?? true, sortEnum, cancellationToken); // Cache riêng l:posts:…:comments:tree:cte:…; null includeReplies → gốc + reply.
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort không hợp lệ.
+        var data = await _commentService.GetCommentsTreeForPostAsync(id, includeReplies ?? true, sortSpec, cancellationToken); // Cache riêng l:posts:…:comments:tree:cte:…; null includeReplies → gốc + reply.
 
         // BƯỚC 2 — 200 + message mô tả đúng nguồn CTE (khác message route tree/flat RAM trên /api/comments).
         return Ok(new { message = ApiMessages.CommentCteTreeByPostSuccess, data }); // data = cây từ CTE.
@@ -125,12 +141,12 @@ public class PostsController : ControllerBase // Không view.
 
     [Authorize(Roles = "Admin,User")] // Đọc comment.
 
-    public async Task<IActionResult> GetCommentsFlatByPostId(Guid id, [FromQuery] bool? includeReplies, [FromQuery] string? sort, CancellationToken cancellationToken) // id = PostId.
+    public async Task<IActionResult> GetCommentsFlatByPostId(Guid id, [FromQuery] bool? includeReplies, [FromQuery] string? sort, [FromQuery] string? sortDir, CancellationToken cancellationToken) // id = PostId.
 
     { // Mở khối GetCommentsFlatByPostId.
         // BƯỚC 1 — Parse sort rồi gọi CTE phẳng theo bài (không BuildTreeCte).
-        var sortEnum = CommentSortQuery.ParseOrThrow(sort); // 400 nếu sort sai.
-        var data = await _commentService.GetCommentsFlatForPostAsync(id, includeReplies ?? true, sortEnum, cancellationToken); // Không phân trang; cache khóa l:posts:…:comments:flat:cte:….
+        var sortSpec = _commentRepository.ParseCommentListSortOrThrow(sort, sortDir); // 400 nếu sort sai.
+        var data = await _commentService.GetCommentsFlatForPostAsync(id, includeReplies ?? true, sortSpec, cancellationToken); // Không phân trang; cache khóa l:posts:…:comments:flat:cte:….
 
         // BƯỚC 2 — 200 + message CTE phẳng theo bài (có Level trên mỗi dòng).
         return Ok(new { message = ApiMessages.CommentCteFlatByPostSuccess, data }); // data = List<CommentCteDto> từ SqlQueryRaw (CTE).

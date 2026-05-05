@@ -1,4 +1,5 @@
 using System.Text.Json; 
+using CommentAPI.Repositories;
 using Microsoft.AspNetCore.Builder; 
 using Microsoft.Extensions.Caching.Distributed; 
 using Microsoft.Extensions.Caching.Memory; 
@@ -62,76 +63,73 @@ public static class EntityCacheKeys // Factory khóa string thống nhất.
     public static string Post(Guid id) => $"p:{id:N}"; // Chi tiết post.
     public static string Comment(Guid id) => $"c:{id:N}"; // Chi tiết comment.
 
-    // GET /api/posts/{postId}/comments/tree — cache JSON resource post (không dùng khóa l:comments:p:… của /api/comments/*).
-    public static string PostsResourceCommentsTreeCte(Guid postId, bool includeReplies, CommentRouteListSort sort) =>
-        $"l:posts:{postId:N}:comments:tree:cte:ir{(includeReplies ? 1 : 0)}:s{(int)sort}";
+    public static string PostsResourceCommentsTreeCte(Guid postId, bool includeReplies, SortByColumn sort) =>
+        $"l:posts:{postId:N}:comments:tree:cte:ir{(includeReplies ? 1 : 0)}:s{sort.CacheKeySegment}";
 
     // GET /api/posts/{postId}/comments/flat — cache JSON danh sách phẳng CTE của resource post (không trùng CommentsCteFlatByPost phân trang).
-    public static string PostsResourceCommentsFlatCte(Guid postId, bool includeReplies, CommentRouteListSort sort) =>
-        $"l:posts:{postId:N}:comments:flat:cte:ir{(includeReplies ? 1 : 0)}:s{(int)sort}";
+    public static string PostsResourceCommentsFlatCte(Guid postId, bool includeReplies, SortByColumn sort) =>
+        $"l:posts:{postId:N}:comments:flat:cte:ir{(includeReplies ? 1 : 0)}:s{sort.CacheKeySegment}";
 
-    // Xóa mọi biến thể includeReplies × sort cho hai resource trên (sau CRUD comment / xóa post).
+    // Xóa mọi biến thể includeReplies × sort (whitelist CTE) cho hai resource trên (sau CRUD comment / xóa post).
     public static IEnumerable<string> PostsResourceCommentsCteAllKeys(Guid postId)
     {
         foreach (var includeReplies in new[] { false, true })
         {
-            foreach (CommentRouteListSort sort in Enum.GetValues<CommentRouteListSort>())
+            foreach (var spec in CommentRepository.EnumerateCommentCteSortSpecsForCache())
             {
-                if (!Enum.IsDefined(typeof(CommentRouteListSort), sort))
-                    continue;
-                yield return PostsResourceCommentsTreeCte(postId, includeReplies, sort);
-                yield return PostsResourceCommentsFlatCte(postId, includeReplies, sort);
+                yield return PostsResourceCommentsTreeCte(postId, includeReplies, spec);
+                yield return PostsResourceCommentsFlatCte(postId, includeReplies, spec);
             }
         }
     }
 
     // Danh sách user phân trang (epoch InvalidateUsersListAsync khi tạo/sửa/xóa user làm khác list).
-    public static string UsersPaged(long usersListEpoch, int page, int pageSize) =>
-        $"usr:{usersListEpoch}:l:users:{page}:{pageSize}";
+    public static string UsersPaged(long usersListEpoch, int page, int pageSize, SortByColumn sort) =>
+        $"usr:{usersListEpoch}:l:users:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
     // Danh sách post phân trang (epoch khi CRUD post).
-    public static string PostsPaged(long postsListEpoch, int page, int pageSize) =>
-        $"pst:{postsListEpoch}:l:posts:{page}:{pageSize}";
+    public static string PostsPaged(long postsListEpoch, int page, int pageSize, SortByColumn sort) =>
+        $"pst:{postsListEpoch}:l:posts:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
     // Prefix cmt:{epoch}: — InvalidateCommentsListsAsync khi CRUD comment / cascade xóa comment.
-    public static string CommentsFlatAll(long commentsListEpoch, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:flat:all:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsFlatAll(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:flat:all:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsByUser(long commentsListEpoch, Guid userId, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:u:{userId:N}:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsByUser(long commentsListEpoch, Guid userId, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:u:{userId:N}:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsAllTreeFlat(long commentsListEpoch, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:tree:flat:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsAllTreeFlat(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:tree:flat:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsAllTreeCte(long commentsListEpoch, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:tree:cte:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsAllTreeCte(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:tree:cte:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsAllTreeFlatFlatten(long commentsListEpoch, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:tree:flat:flatten:all:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsAllTreeFlatFlatten(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:tree:flat:flatten:all:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsAllFlattenCteTree(long commentsListEpoch, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:flat:ctetree:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsAllFlattenCteTree(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:flat:ctetree:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsAllCteFlat(long commentsListEpoch, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:cteflat:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsAllCteFlat(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:cteflat:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsFlatByPost(long commentsListEpoch, Guid postId, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:flat:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsFlatByPost(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:flat:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsCteFlatByPost(long commentsListEpoch, Guid postId, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:cteflat:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsCteFlatByPost(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:cteflat:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsTreeFlatByPost(long commentsListEpoch, Guid postId, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree-flat:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsTreeFlatByPost(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree-flat:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsTreeCteByPost(long commentsListEpoch, Guid postId, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree:cte:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsTreeCteByPost(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree:cte:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsFlattenedCteTree(long commentsListEpoch, Guid postId, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:ctetree:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsFlattenedCteTree(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:ctetree:{page}:{pageSize}:s{sort.CacheKeySegment}";
 
-    public static string CommentsTreeFlatFlattenByPost(long commentsListEpoch, Guid postId, int page, int pageSize, CommentRouteListSort sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree:flat:flatten:{page}:{pageSize}:s{(int)sort}";
+    public static string CommentsTreeFlatFlattenByPost(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree:flat:flatten:{page}:{pageSize}:s{sort.CacheKeySegment}";
 }
 
 public interface IEntityResponseCache // Interface JSON cache cho DTO phản hồi.

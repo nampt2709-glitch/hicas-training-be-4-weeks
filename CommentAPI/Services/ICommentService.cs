@@ -1,4 +1,4 @@
-using CommentAPI; // CommentRouteListSort cho query sort dropdown.
+using CommentAPI;
 using CommentAPI.DTOs;
 
 // Hợp đồng dịch vụ: thứ tự thành viên bám CommentsController (GET → CRUD → flat/cte/tree → demo danh sách), rồi bổ trợ không map route trực tiếp.
@@ -19,7 +19,7 @@ public interface ICommentService
         DateTime? createdAtFrom = null,
         DateTime? createdAtTo = null,
         Guid? userId = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     // GET /api/comments/{id}
     Task<CommentDto> GetByIdAsync(Guid id);
@@ -33,7 +33,7 @@ public interface ICommentService
         DateTime? createdAtFrom = null,
         DateTime? createdAtTo = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     Task<CommentDto> CreateAsync(CreateCommentDto dto);
 
@@ -53,7 +53,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     // GET /api/comments/cte — một hàm xử lý cả postId/null; payload CommentCteDto (CTE + preorder).
     Task<PagedResult<CommentCteDto>> GetCteFlatRoutePagedAsync(
@@ -65,7 +65,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     // GET /api/comments/tree/flat — một hàm xử lý cả postId/null.
     Task<PagedResult<CommentTreeFlatDto>> GetTreeFlatRoutePagedAsync(
@@ -77,7 +77,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     // GET /api/comments/tree/cte — một hàm xử lý cả postId/null; payload CommentTreeCteDto.
     Task<PagedResult<CommentTreeCteDto>> GetTreeCteRoutePagedAsync(
@@ -89,7 +89,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     // GET /api/comments/tree/flat/flatten — một hàm xử lý cả postId/null; payload CommentFlattenFlatDto.
     Task<PagedResult<CommentFlattenFlatDto>> GetTreeFlatFlattenRoutePagedAsync(
@@ -101,7 +101,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     // GET /api/comments/tree/cte/flatten — một hàm xử lý cả postId/null; payload CommentFlattenCteDto.
     Task<PagedResult<CommentFlattenCteDto>> GetTreeCteFlattenRoutePagedAsync(
@@ -113,20 +113,20 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     // GET /api/posts/{postId}/comments/tree — CommentTreeCteDto (CTE repo + BuildTreeCte).
     Task<IReadOnlyList<CommentTreeCteDto>> GetCommentsTreeForPostAsync(
         Guid postId,
         bool includeReplies = true,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId,
+        SortByColumn? sort = null,
         CancellationToken cancellationToken = default);
 
     // GET /api/posts/{postId}/comments/flat — CommentCteDto (CTE repo, không BuildTreeCte).
     Task<IReadOnlyList<CommentCteDto>> GetCommentsFlatForPostAsync(
         Guid postId,
         bool includeReplies = true,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId,
+        SortByColumn? sort = null,
         CancellationToken cancellationToken = default);
 
     // Demo danh sách: GET /api/comments/demo/* (lazy, eager, explicit, projection) — unpaged + paged.
@@ -139,7 +139,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     Task<PagedResult<CommentLoadingDemoDto>> GetCommentsEagerLoadingDemoPagedAsync(
         int page,
@@ -150,7 +150,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     Task<PagedResult<CommentLoadingDemoDto>> GetCommentsExplicitLoadingDemoPagedAsync(
         int page,
@@ -161,7 +161,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     Task<PagedResult<CommentLoadingDemoDto>> GetCommentsProjectionDemoPagedAsync(
         int page,
@@ -172,7 +172,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsLazyLoadingDemoAsync(
         CancellationToken cancellationToken = default,
@@ -181,7 +181,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsEagerLoadingDemoAsync(
         CancellationToken cancellationToken = default,
@@ -190,7 +190,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsExplicitLoadingDemoAsync(
         CancellationToken cancellationToken = default,
@@ -199,7 +199,7 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
     Task<IReadOnlyList<CommentLoadingDemoDto>> GetAllCommentsProjectionDemoAsync(
         CancellationToken cancellationToken = default,
@@ -208,6 +208,6 @@ public interface ICommentService
         DateTime? createdAtTo = null,
         Guid? userId = null,
         string? contentContains = null,
-        CommentRouteListSort sort = CommentRouteListSort.ByPostCreatedAtId);
+        SortByColumn? sort = null);
 
 }

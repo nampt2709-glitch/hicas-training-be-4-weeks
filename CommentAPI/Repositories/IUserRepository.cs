@@ -1,3 +1,4 @@
+using CommentAPI;
 using CommentAPI.DTOs;
 using CommentAPI.Entities;
 
@@ -7,6 +8,8 @@ namespace CommentAPI.Interfaces;
 // Tầng truy vấn: danh sách, phân trang có projection, tìm, gom role theo nhiều id, CRUD, lưu.
 public interface IUserRepository
 {
+    SortByColumn ParseUserListSortOrThrow(string? sort, string? sortDir);
+
     Task<List<User>> GetAllAsync(); // Đọc toàn bộ user thành entity (thường ít dùng sản xuất, debug/ admin).
 
     // Phân trang: trả tuple (danh sách dòng projection, tổng số bản ghi); name/userName/email là filter Contains tuỳ chọn.
@@ -18,7 +21,8 @@ public interface IUserRepository
         DateTime? createdAtTo = null, // Lọc CreatedAt inclusive.
         string? nameContains = null, // Chuỗi con trong Name.
         string? userNameContains = null, // Chuỗi con trong UserName.
-        string? emailContains = null); // Chuỗi con trong Email.
+        string? emailContains = null, // Chuỗi con trong Email.
+        SortByColumn? sort = null); // ApplyUniversalSorting trên User entity.
 
     // Một truy vấn lấy mọi role theo danh sách user id, tránh N+1 lần gọi GetRoles mỗi user.
     Task<Dictionary<Guid, List<string>>> GetRoleNamesByUserIdsAsync(

@@ -89,7 +89,7 @@ public class CommentServiceTests
     public async Task CM04_GetCommentListAsync_ShouldReturnUnpagedGlobal_WhenNoContentAndNoPost()
     {
         var repo = new Mock<ICommentRepository>();
-        repo.Setup(x => x.LoadFlatUnpagedAsync(null, null, null, null, null, It.IsAny<CommentRouteListSort>(), It.IsAny<CancellationToken>()))
+        repo.Setup(x => x.LoadFlatUnpagedAsync(null, null, null, null, null, It.IsAny<SortByColumn?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<Comment>
             {
                 new() { Id = Guid.NewGuid(), Content = "a", CreatedAt = DateTime.UtcNow, PostId = Guid.NewGuid(), UserId = Guid.NewGuid() },
@@ -256,7 +256,7 @@ public class CommentServiceTests
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.GetByIdAsync(rootId)).ReturnsAsync(root);
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.LoadFlatUnpagedAsync(postId, null, null, null, null, CommentRouteListSort.ByCreatedAt, It.IsAny<CancellationToken>())).ReturnsAsync(new List<Comment> { root, child });
+        repo.Setup(x => x.LoadFlatUnpagedAsync(postId, null, null, null, null, null, It.IsAny<CancellationToken>())).ReturnsAsync(new List<Comment> { root, child });
         repo.Setup(x => x.SaveChangesAsync()).Returns(Task.CompletedTask);
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(x => x.RemoveManyAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
@@ -283,7 +283,7 @@ public class CommentServiceTests
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
         // [08] GetFlatByPostIdPagedAsync: LoadFlatAsync [1][8][10][12] (danh sách phẳng).
-        repo.Setup(x => x.LoadFlatAsync(postId, 1, 10, It.IsAny<CancellationToken>(), null, null, null, null, It.IsAny<CommentRouteListSort>()))
+        repo.Setup(x => x.LoadFlatAsync(postId, 1, 10, It.IsAny<CancellationToken>(), null, null, null, null, It.IsAny<SortByColumn?>()))
             .ReturnsAsync((entities, 1L));
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(x => x.GetJsonAsync<PagedResult<CommentDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -321,7 +321,7 @@ public class CommentServiceTests
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
         repo.Setup(x => x.CountCommentsMatchingRouteAsync(postId, null, It.IsAny<CancellationToken>(), null, null, null))
             .ReturnsAsync(2L);
-        repo.Setup(x => x.LoadRawCteAsync(postId, It.IsAny<CancellationToken>(), null, null, null, null, It.IsAny<CommentRouteListSort>())).ReturnsAsync(rows);
+        repo.Setup(x => x.LoadRawCteAsync(postId, It.IsAny<CancellationToken>(), null, null, null, null, It.IsAny<SortByColumn?>())).ReturnsAsync(rows);
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(x => x.GetJsonAsync<PagedResult<CommentTreeCteDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((PagedResult<CommentTreeCteDto>?)null);
@@ -366,9 +366,9 @@ public class CommentServiceTests
         repo.Setup(x => x.CountCommentRootsMatchingRouteAsync(postId, null, It.IsAny<CancellationToken>(), null, null, null))
             .ReturnsAsync(1L);
         // BuildFlatTreesPagedCoreAsync: một trang gốc → LoadCommentsForSubtreesAsync → cây đầy đủ → flatten preorder.
-        repo.Setup(x => x.GetCommentRootsRoutePagedAsync(postId, null, 1, 10, It.IsAny<CancellationToken>(), null, null, null, It.IsAny<CommentRouteListSort>()))
+        repo.Setup(x => x.GetCommentRootsRoutePagedAsync(postId, null, 1, 10, It.IsAny<CancellationToken>(), null, null, null, It.IsAny<SortByColumn?>()))
             .ReturnsAsync((new List<Comment> { roots[0] }, 1L));
-        repo.Setup(x => x.LoadCommentsForSubtreesAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()))
+        repo.Setup(x => x.LoadCommentsForSubtreesAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>()))
             .ReturnsAsync(rawComments);
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(x => x.GetJsonAsync<PagedResult<CommentFlattenFlatDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -408,7 +408,7 @@ public class CommentServiceTests
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
         repo.Setup(x => x.CountCommentsMatchingRouteAsync(postId, null, It.IsAny<CancellationToken>(), null, null, null))
             .ReturnsAsync(2L);
-        repo.Setup(x => x.LoadRawCteAsync(postId, It.IsAny<CancellationToken>(), null, null, null, null, It.IsAny<CommentRouteListSort>())).ReturnsAsync(rows);
+        repo.Setup(x => x.LoadRawCteAsync(postId, It.IsAny<CancellationToken>(), null, null, null, null, It.IsAny<SortByColumn?>())).ReturnsAsync(rows);
         var cache = new Mock<IEntityResponseCache>();
         cache.Setup(x => x.GetJsonAsync<PagedResult<CommentFlattenCteDto>>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((PagedResult<CommentFlattenCteDto>?)null);
@@ -443,7 +443,7 @@ public class CommentServiceTests
         };
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(cteRows);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>())).ReturnsAsync(cteRows);
         var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
         var result = await sut.GetCommentsTreeForPostAsync(postId);
@@ -473,7 +473,7 @@ public class CommentServiceTests
         };
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(cteRows);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>())).ReturnsAsync(cteRows);
         var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
         var result = await sut.GetCommentsFlatForPostAsync(postId);
@@ -491,13 +491,13 @@ public class CommentServiceTests
         var postId = Guid.NewGuid();
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(new List<CommentCteDto>());
+        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>())).ReturnsAsync(new List<CommentCteDto>());
         var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
         var result = await sut.GetCommentsTreeForPostAsync(postId);
 
         Assert.Empty(result);
-        repo.Verify(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Once);
+        repo.Verify(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>()), Times.Once);
     }
 
     // F.I.R.S.T: includeReplies=false được truyền xuống repository.
@@ -508,12 +508,12 @@ public class CommentServiceTests
         var postId = Guid.NewGuid();
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(new List<CommentCteDto>());
+        repo.Setup(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>())).ReturnsAsync(new List<CommentCteDto>());
         var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
         await sut.GetCommentsFlatForPostAsync(postId, includeReplies: false);
 
-        repo.Verify(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Once);
+        repo.Verify(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>()), Times.Once);
     }
 
     // F.I.R.S.T: post không tồn tại — 404 trước khi đọc comment.
@@ -528,7 +528,7 @@ public class CommentServiceTests
 
         await Assert.ThrowsAsync<ApiException>(() => sut.GetCommentsFlatForPostAsync(postId));
 
-        repo.Verify(x => x.GetAllCommentsForPost(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Never);
+        repo.Verify(x => x.GetAllCommentsForPost(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>()), Times.Never);
     }
 
     // F.I.R.S.T: negative — post không tồn tại trên route tree.
@@ -543,7 +543,7 @@ public class CommentServiceTests
 
         await Assert.ThrowsAsync<ApiException>(() => sut.GetCommentsTreeForPostAsync(postId));
 
-        repo.Verify(x => x.GetAllCommentsForPost(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Never);
+        repo.Verify(x => x.GetAllCommentsForPost(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>()), Times.Never);
     }
 
     // F.I.R.S.T: happy path biên — bài tồn tại nhưng không có comment; flat trả rỗng.
@@ -554,13 +554,13 @@ public class CommentServiceTests
         var postId = Guid.NewGuid();
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(new List<CommentCteDto>());
+        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>())).ReturnsAsync(new List<CommentCteDto>());
         var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
         var result = await sut.GetCommentsFlatForPostAsync(postId);
 
         Assert.Empty(result);
-        repo.Verify(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Once);
+        repo.Verify(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>()), Times.Once);
     }
 
     // F.I.R.S.T: includeReplies=false trên tree — truyền xuống repository.
@@ -578,14 +578,14 @@ public class CommentServiceTests
         };
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(flatRows);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>())).ReturnsAsync(flatRows);
         var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
         var result = await sut.GetCommentsTreeForPostAsync(postId, includeReplies: false);
 
         Assert.Single(result);
         Assert.Equal(rootId, result[0].Id);
-        repo.Verify(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>()), Times.Once);
+        repo.Verify(x => x.GetAllCommentsForPost(postId, false, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>()), Times.Once);
     }
 
     // F.I.R.S.T: happy path — hai gốc cùng bài (CTE phẳng hai dòng Level 0); BuildTreeCte trả hai nút gốc.
@@ -605,7 +605,7 @@ public class CommentServiceTests
         };
         var repo = new Mock<ICommentRepository>();
         repo.Setup(x => x.PostExistsAsync(postId)).ReturnsAsync(true);
-        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<CommentRouteListSort>())).ReturnsAsync(flatRows);
+        repo.Setup(x => x.GetAllCommentsForPost(postId, true, It.IsAny<CancellationToken>(), It.IsAny<SortByColumn?>())).ReturnsAsync(flatRows);
         var sut = CreateSut(repo, new Mock<IEntityResponseCache>());
 
         var result = (await sut.GetCommentsTreeForPostAsync(postId)).OrderBy(x => x.Id).ToList();
