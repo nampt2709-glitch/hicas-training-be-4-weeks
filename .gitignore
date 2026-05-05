@@ -85,6 +85,9 @@ $RECYCLE.BIN/
 CommentAPI/.env
 *.env.local
 
+## Agent / local scratch output (do not commit — flat copies of build/test outputs)
+.tmp-*/
+
 ## Local build scratch folders
 _build_chk/
 _build_out_tests/
