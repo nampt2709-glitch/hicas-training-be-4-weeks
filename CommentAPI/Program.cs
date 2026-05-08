@@ -20,6 +20,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc.Controllers;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -52,6 +53,14 @@ if (string.IsNullOrWhiteSpace(sqlConnectionString))
 {
     throw new InvalidOperationException(
         "Connection string 'DefaultConnection' is missing or empty. Set ConnectionStrings__DefaultConnection in .env (see CommentAPI/.env.example) or user secrets, and load .env before WebApplication.CreateBuilder.");
+}
+
+// Ghi đè Password bằng MSSQL_SA_PASSWORD từ file .env gốc solution (cùng nguồn với docker-compose) — tránh lệch mật khẩu trong CommentAPI/.env.
+var saPwd = Environment.GetEnvironmentVariable("MSSQL_SA_PASSWORD");
+if (!string.IsNullOrWhiteSpace(saPwd))
+{
+    var csb = new SqlConnectionStringBuilder(sqlConnectionString) { Password = saPwd };
+    sqlConnectionString = csb.ConnectionString;
 }
 
 // Cấu hình IDistributedCache: ưu tiên Redis, bộ nhớ dự phòng; xem DistributedCaching.cs.

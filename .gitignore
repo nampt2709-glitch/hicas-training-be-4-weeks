@@ -83,6 +83,7 @@ $RECYCLE.BIN/
 ## Docker / local secrets (uncomment if you keep local-only env files)
 /.env
 CommentAPI/.env
+ApartmentAPI/.env
 *.env.local
 
 ## Agent / local scratch output (do not commit — flat copies of build/test outputs)

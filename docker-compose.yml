@@ -3,6 +3,7 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
+      # Mật khẩu SA duy nhất cho stack; hai API dùng cùng User Id=sa và Password= giá trị này (compose ghép vào connection string).
       MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
     ports:
       - "${SQLSERVER_PORT:-18433}:1433"
@@ -30,10 +31,25 @@ services:
       - "${COMMENTAPI_PORT:-8080}:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
-      ConnectionStrings__DefaultConnection: "${COMMENTAPI_DOCKER_DEFAULT_CONNECTION}"
-      ConnectionStrings__Redis: "${COMMENTAPI_DOCKER_REDIS_CONNECTION}"
+      # Cùng máy chủ sqlserver, database riêng HICAS_Comment_API, cùng tài khoản sa.
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=HICAS_Comment_API;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True"
+      ConnectionStrings__Redis: "redis:6379"
     depends_on:
       sqlserver:
         condition: service_healthy
       redis:
         condition: service_started
+
+  apartmentapi:
+    build:
+      context: .
+      dockerfile: ApartmentAPI/Dockerfile
+    ports:
+      - "${APARTMENTAPI_PORT:-8081}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
+      # Cùng sqlserver và sa; chỉ khác database HICAS_Apartment_API.
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=HICAS_Apartment_API;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
