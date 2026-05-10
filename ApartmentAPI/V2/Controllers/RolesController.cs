@@ -1,14 +1,18 @@
-using ApartmentAPI.V1.DTOs;
-using ApartmentAPI.Services;
-using Asp.Versioning;
-using ApartmentAPI.Versioning;
-using Microsoft.AspNetCore.Mvc;
+using ApartmentAPI.DTOs; // ApiMessages, PaginationQuery.
+using ApartmentAPI.Services; // IRoleService — CRUD vai trò Identity.
+using ApartmentAPI.V1.DTOs; // Role DTO (create/update/list).
+using ApartmentAPI.Versioning; // ApiVersionRouteValues.WithVersion.
+using Asp.Versioning; // [ApiVersion] trên controller.
+using ApartmentAPI.Authorization; // ApiAuthorization — chuỗi role thống nhất với seed Identity.
+using Microsoft.AspNetCore.Authorization; // [Authorize(Roles = ...)] — phân quyền endpoint.
+using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V2.Controllers;
 
-// Vai trò Identity (Role): CRUD.
+// Vai trò Identity — CRUD không lọc theo CreatedAt (role ít): phân trang theo NameContains. Chỉ Admin.
 [ApiController]
 [ApiVersion("2.0")]
+[Authorize(Roles = ApiAuthorization.AdminOnly)]
 [Route("api/v{version:apiVersion}/roles")]
 public class RolesController : ControllerBase
 {
@@ -17,17 +21,24 @@ public class RolesController : ControllerBase
     public RolesController(IRoleAppService service) => _service = service;
 
     [HttpGet]
-    public async Task<IActionResult> GetAll(CancellationToken ct)
+    public async Task<IActionResult> GetAll(
+        [FromQuery] string? page,
+        [FromQuery] string? pageSize,
+        [FromQuery] string? nameContains = null,
+        [FromQuery] string? sort = null,
+        [FromQuery] string? sortDir = null,
+        CancellationToken ct = default)
     {
-        var data = await _service.GetAllAsync(ct);
-        return Ok(new { message = ApiMessages.Ok, data });
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
+        var data = await _service.GetPagedAsync(p, s, nameContains, sort, sortDir, ct);
+        return Ok(new { message = ApiMessages.RoleListSuccess, data });
     }
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {
         var data = await _service.GetByIdAsync(id, ct);
-        return Ok(new { message = ApiMessages.Ok, data });
+        return Ok(new { message = ApiMessages.RoleGetSuccess, data });
     }
 
     [HttpPost]

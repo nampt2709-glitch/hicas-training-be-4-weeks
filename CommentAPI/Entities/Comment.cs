@@ -17,4 +17,4 @@ public class Comment
     public virtual Comment? Parent { get; set; } // Navigation tùy chọn: phía cha, virtual cho path leo cây.
 
     public virtual ICollection<Comment> Children { get; set; } = new List<Comment>(); // Các bản ghi con (reply), tập dùng cho lazy/INCLUDE.
-}
+} // Kết thúc lớp Comment.

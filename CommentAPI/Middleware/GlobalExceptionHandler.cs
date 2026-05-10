@@ -1,13 +1,17 @@
-using System.Diagnostics; 
-using System.Reflection; 
-using CommentAPI; 
-using FluentValidation; 
-using Microsoft.AspNetCore.Diagnostics; 
-using Microsoft.AspNetCore.Http; 
-using Microsoft.Data.SqlClient; 
-using Microsoft.EntityFrameworkCore;
+using System.Diagnostics; // StackTrace, StackFrame — xác định method CommentAPI ném lỗi.
+using System.Reflection; // MethodBase — metadata khung gọi cho header lỗi.
+using CommentAPI.Logging; // StructuredFileLogger.Errors, Security, Warnings.
+using FluentValidation; // ValidationException — gom lỗi field thành dictionary.
+using Microsoft.AspNetCore.Diagnostics; // IExceptionHandler — hợp đồng handler toàn cục.
+using Microsoft.AspNetCore.Http; // HttpContext, StatusCodes, WriteAsJsonAsync.
+using Microsoft.Data.SqlClient; // SqlException — map số lỗi SQL Server → HTTP.
+using Microsoft.EntityFrameworkCore; // DbUpdateException — lỗi lưu EF.
 
 namespace CommentAPI.Middleware;
+
+// =============================================================================
+// File GlobalExceptionHandler.cs: IExceptionHandler — JSON lỗi thống nhất + ghi ERRORS/WARNINGS/SECURITY.
+// =============================================================================
 
 // Bắt mọi exception chưa xử lý trong pipeline (sau khi gỡ bọc Aggregate/TargetInvocation).
 // Body thành công và message trong Ok(...) là việc của controller — file này chỉ tạo JSON khi có exception.
@@ -19,35 +23,76 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
     private readonly IHostEnvironment _environment; // Development → chi tiết lỗi trong JSON.
 
     public GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger, IHostEnvironment environment) // DI.
-    {
+    { // Mở khối constructor GlobalExceptionHandler.
+        // BƯỚC 1 — Lưu logger theo category handler (mức Warning vs Error tùy HTTP).
         _logger = logger; // Logger.
+        // BƯỚC 2 — Lưu IHostEnvironment để chỉ Development mới trả detail exception trong JSON.
         _environment = environment; // Env.
-    }
+    } // Kết thúc constructor GlobalExceptionHandler.
+
+    // Body request (đã capture middleware) phục vụ file ERRORS.
+    private static string RequestBodySnapshot(HttpContext http) =>
+        http.Items.TryGetValue(StructuredFileLogger.RequestBodyItemKey, out var v) ? v?.ToString() ?? "" : "";
+
+    private static void FileLogError(
+        HttpContext http,
+        string correlationId,
+        int statusCode,
+        string code,
+        string type,
+        string message,
+        Exception exception) =>
+        StructuredFileLogger.Errors(
+            correlationId,
+            statusCode,
+            http.Request.Method,
+            http.Request.Path.Value ?? "",
+            code,
+            type,
+            message,
+            exception,
+            RequestBodySnapshot(http));
 
     public async ValueTask<bool> TryHandleAsync( // Trả true nếu đã xử lý (luôn true ở đây).
         HttpContext httpContext, // Context hiện tại.
         Exception exception, // Exception gốc hoặc đã unwrap.
         CancellationToken cancellationToken) // Hủy ghi response.
-    {
+    { // Mở khối TryHandleAsync.
+        // BƯỚC 1 — Gỡ AggregateException / TargetInvocationException để các nhánh is phía dưới khớp loại thật.
         exception = Unwrap(exception); // Gỡ lớp bọc phổ biến.
 
+        // BƯỚC 2 — Đọc correlation id và gắn header echo trước khi ghi body (nếu response chưa bắt đầu).
         var correlationId = RequestPerformanceMiddleware.GetCorrelationId(httpContext); // Correlation id.
         if (!httpContext.Response.HasStarted) // Chỉ set header nếu chưa flush.
         {
             httpContext.Response.Headers.Append(RequestPerformanceMiddleware.HeaderName, correlationId); // Echo correlation.
         }
 
+        // BƯỚC 3 — Chuẩn bị response JSON + header nguồn lỗi + header đếm SQL (quan sát vận hành).
         httpContext.Response.ContentType = "application/json"; // Luôn JSON lỗi.
         RequestPerformanceMiddleware.AppendErrorSourceHeader( // Header vận hành.
             httpContext, // Context.
             ResolveThrowingDescriptor(exception) ?? exception.GetType().FullName ?? "Exception"); // Descriptor.
         RequestPerformanceMiddleware.TryAppendSqlQueryCountHeader(httpContext); // Đếm SQL nếu có.
 
+        // BƯỚC 4 — Phân nhánh theo loại exception (ApiException → Validation → SQL → EF → … → 500).
         if (exception is ApiException app) // Lỗi nghiệp vụ có mã HTTP cố định.
         {
             LogForStatus(app.StatusCode, app, correlationId); // Warning vs Error.
             httpContext.Response.StatusCode = app.StatusCode; // Status từ exception.
             await WriteErrorAsync(httpContext, app.ErrorCode, nameof(ApiException), app.ClientMessage, correlationId, app, cancellationToken); // JSON.
+            FileLogError(httpContext, correlationId, app.StatusCode, app.ErrorCode, nameof(ApiException), app.ClientMessage, app);
+            if (app.ErrorCode is ApiErrorCodes.LoginFailed or ApiErrorCodes.RefreshFailed)
+            {
+                StructuredFileLogger.Security(
+                    correlationId,
+                    "AuthCredentialRejected",
+                    httpContext.Request.Method,
+                    httpContext.Request.Path.Value ?? "",
+                    app.StatusCode,
+                    $"{app.ErrorCode}: {app.ClientMessage}");
+            }
+
             return true; // Handled.
         }
 
@@ -57,6 +102,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
             var errors = vex.Errors // Danh sách lỗi.
                 .GroupBy(e => e.PropertyName) // Theo property.
                 .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray()); // Mảng message mỗi field.
+            var errSummary = string.Join("; ", vex.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}"));
             await httpContext.Response.WriteAsJsonAsync( // Trả validation shape.
                 new // Anonymous.
                 {
@@ -68,6 +114,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
                     detail = DevDetail(vex) // Dev-only detail.
                 },
                 cancellationToken); // CT.
+            FileLogError(httpContext, correlationId, StatusCodes.Status400BadRequest, ApiErrorCodes.ValidationFailed, vex.GetType().Name, errSummary, vex);
             return true; // Handled.
         }
 
@@ -76,6 +123,17 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
             _logger.LogWarning(sqlDirect, "SqlException {CorrelationId}", correlationId); // Warning log.
             httpContext.Response.StatusCode = st; // Mapped status.
             await WriteErrorAsync(httpContext, cd, nameof(SqlException), msg, correlationId, sqlDirect, cancellationToken); // JSON.
+            FileLogError(httpContext, correlationId, st, cd, nameof(SqlException), msg, sqlDirect);
+            StructuredFileLogger.Warnings(correlationId, httpContext.Request.Method, httpContext.Request.Path.Value ?? "", $"SqlException mapped: {cd}", sqlDirect);
+            return true; // Handled.
+        }
+
+        if (exception is SqlException sqlUnmapped) // SQL lỗi không map được số lỗi → 500 + ERRORS.
+        {
+            _logger.LogError(sqlUnmapped, "SqlException unmapped {CorrelationId}", correlationId); // Log đầy đủ.
+            httpContext.Response.StatusCode = StatusCodes.Status500InternalServerError; // 500.
+            await WriteErrorAsync(httpContext, ApiErrorCodes.InternalError, nameof(SqlException), ApiMessages.ServerError, correlationId, sqlUnmapped, cancellationToken); // JSON an toàn client.
+            FileLogError(httpContext, correlationId, StatusCodes.Status500InternalServerError, ApiErrorCodes.InternalError, nameof(SqlException), ApiMessages.ServerError, sqlUnmapped);
             return true; // Handled.
         }
 
@@ -86,6 +144,8 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
             {
                 httpContext.Response.StatusCode = st2; // Mapped.
                 await WriteErrorAsync(httpContext, cd2, dbEx.GetType().Name, msg2, correlationId, dbEx, cancellationToken); // JSON.
+                FileLogError(httpContext, correlationId, st2, cd2, dbEx.GetType().Name, msg2, dbEx);
+                StructuredFileLogger.Warnings(correlationId, httpContext.Request.Method, httpContext.Request.Path.Value ?? "", "DbUpdateException (inner SQL mapped)", dbEx);
                 return true; // Handled.
             }
 
@@ -98,6 +158,8 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
                 correlationId, // Correlation.
                 dbEx, // Ex.
                 cancellationToken); // CT.
+            FileLogError(httpContext, correlationId, StatusCodes.Status400BadRequest, ApiErrorCodes.DatabaseUpdateFailed, dbEx.GetType().Name, ApiMessages.InvalidRequest, dbEx);
+            StructuredFileLogger.Warnings(correlationId, httpContext.Request.Method, httpContext.Request.Path.Value ?? "", "DbUpdateException (generic)", dbEx);
             return true; // Handled.
         }
 
@@ -113,6 +175,8 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
                 correlationId, // Id.
                 badReq, // Ex.
                 cancellationToken); // CT.
+            FileLogError(httpContext, correlationId, StatusCodes.Status400BadRequest, ApiErrorCodes.InvalidOperation, badReq.GetType().Name, ApiMessages.InvalidRequest, badReq);
+            StructuredFileLogger.Warnings(correlationId, httpContext.Request.Method, httpContext.Request.Path.Value ?? "", "BadHttpRequestException", badReq);
             return true; // Handled.
         }
 
@@ -128,6 +192,8 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
                 correlationId, // Id.
                 denied, // Ex.
                 cancellationToken); // CT.
+            FileLogError(httpContext, correlationId, StatusCodes.Status403Forbidden, ApiErrorCodes.Forbidden, denied.GetType().Name, ApiMessages.InsufficientPermission, denied);
+            StructuredFileLogger.Security(correlationId, "UnauthorizedAccessException", httpContext.Request.Method, httpContext.Request.Path.Value ?? "", StatusCodes.Status403Forbidden, denied.Message);
             return true; // Handled.
         }
 
@@ -143,6 +209,8 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
                 correlationId, // Id.
                 cancelled, // Ex.
                 cancellationToken); // CT.
+            FileLogError(httpContext, correlationId, StatusCodes.Status408RequestTimeout, ApiErrorCodes.RequestAborted, cancelled.GetType().Name, ApiMessages.RequestCancelled, cancelled);
+            StructuredFileLogger.Warnings(correlationId, httpContext.Request.Method, httpContext.Request.Path.Value ?? "", "Request cancelled / timeout", cancelled);
             return true; // Handled.
         }
 
@@ -158,6 +226,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
                 correlationId, // Id.
                 exception, // Ex.
                 cancellationToken); // CT.
+            FileLogError(httpContext, correlationId, StatusCodes.Status400BadRequest, ApiErrorCodes.InvalidOperation, exception.GetType().Name, ApiMessages.InvalidRequest, exception);
             return true; // Handled.
         }
 
@@ -173,6 +242,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
                 correlationId, // Id.
                 io, // Ex.
                 cancellationToken); // CT.
+            FileLogError(httpContext, correlationId, StatusCodes.Status400BadRequest, ApiErrorCodes.InvalidOperation, io.GetType().Name, ApiMessages.InvalidRequest, io);
             return true; // Handled.
         }
 
@@ -188,6 +258,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
                 correlationId, // Id.
                 exception, // Ex.
                 cancellationToken); // CT.
+            FileLogError(httpContext, correlationId, StatusCodes.Status400BadRequest, ApiErrorCodes.InvalidOperation, exception.GetType().Name, ApiMessages.InvalidRequest, exception);
             return true; // Handled.
         }
 
@@ -201,8 +272,9 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
             correlationId, // Id.
             exception, // Ex.
             cancellationToken); // CT.
+        FileLogError(httpContext, correlationId, StatusCodes.Status500InternalServerError, ApiErrorCodes.InternalError, exception.GetType().Name, ApiMessages.ServerError, exception);
         return true; // Always handled.
-    }
+    } // Kết thúc TryHandleAsync.
 
     // Gỡ AggregateException / TargetInvocation để nhánh is phía dưới khớp đúng loại thật.
     private static Exception Unwrap(Exception ex) // Loop unwrap.
@@ -330,5 +402,5 @@ public sealed class GlobalExceptionHandler : IExceptionHandler // ASP.NET Core g
         }
 
         return null; // Fallback handled by caller.
-    }
-}
+    } // Kết thúc ResolveThrowingDescriptor.
+} // Kết thúc lớp GlobalExceptionHandler.

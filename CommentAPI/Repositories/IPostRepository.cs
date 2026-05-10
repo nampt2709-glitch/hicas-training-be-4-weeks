@@ -1,6 +1,6 @@
-using CommentAPI;
-using CommentAPI.DTOs;
-using CommentAPI.Entities;
+using CommentAPI; // SortByColumn.
+using CommentAPI.DTOs; // PostDto, PagedResult.
+using CommentAPI.Entities; // Post entity.
 
 // Hợp đồng truy cập bảng Posts, tách khỏi service.
 namespace CommentAPI.Interfaces;

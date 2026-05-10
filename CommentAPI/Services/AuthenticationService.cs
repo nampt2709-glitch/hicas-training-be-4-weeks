@@ -1,13 +1,15 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
-using CommentAPI;
-using CommentAPI.DTOs;
-using CommentAPI.Entities;
-using CommentAPI.Interfaces;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt; // JwtRegisteredClaimNames.Sub khi đọc refresh principal.
+using System.Security.Claims; // Claim tùy chỉnh token_type, stamp, role.
+using System.Text; // Encoding.UTF8 cho SymmetricSecurityKey.
+using CommentAPI; // ApiException, ApiErrorCodes, ApiMessages.
+using CommentAPI.DTOs; // Login / Refresh / SignUp / TokenResponse.
+using CommentAPI.Entities; // User entity.
+using CommentAPI.Interfaces; // IAuthenticationRepository, IUserService.
+using CommentAPI.Logging; // StructuredFileLogger (SECURITY).
+using CommentAPI.Middleware; // RequestPerformanceMiddleware.GetCorrelationId cho log SECURITY (Serilog).
+using Microsoft.AspNetCore.Http; // StatusCodes trong ApiException.
+using Microsoft.Extensions.Options; // IOptions JwtOptions.
+using Microsoft.IdentityModel.Tokens; // JwtSecurityTokenHandler, TokenValidationParameters, signing.
 
 namespace CommentAPI.Services;
 
@@ -34,15 +36,20 @@ public class AuthenticationService : IAuthenticationService
     // Snapshot JwtOptions (issuer, audience, signing key, TTL access/refresh).
     private readonly JwtOptions _jwt;
 
-    // BƯỚC 1: Tiêm repository + user service + IOptions JwtOptions.
+    // Truy cập HttpContext hiện tại để lấy correlation id và path ghi SECURITY (Serilog).
+    private readonly IHttpContextAccessor _httpContextAccessor;
+
+    // BƯỚC 1: Tiêm repository + user service + IOptions JwtOptions + HttpContext (correlation / path cho SECURITY log).
     public AuthenticationService(
         IAuthenticationRepository authRepository,
         IUserService userService,
-        IOptions<JwtOptions> jwtOptions)
+        IOptions<JwtOptions> jwtOptions,
+        IHttpContextAccessor httpContextAccessor)
     {
         _authRepository = authRepository; // Lưu để gọi Identity.
         _userService = userService; // Lưu để CreateAsync sau signup.
         _jwt = jwtOptions.Value; // .Value đọc cấu hình đã bind từ appsettings.
+        _httpContextAccessor = httpContextAccessor; // Correlation + route cho Serilog SECURITY.
     }
 
     #endregion
@@ -75,7 +82,9 @@ public class AuthenticationService : IAuthenticationService
 
         // BƯỚC 3: Lấy role names và phát access + refresh.
         var roles = await _authRepository.GetRoleNamesAsync(user, cancellationToken);
-        return await CreateTokenPairAsync(user, roles, cancellationToken);
+        var signUpTokens = await CreateTokenPairAsync(user, roles, cancellationToken);
+        LogSecurityInfo("SignUpSuccess", user, "Access and refresh tokens issued after sign-up."); // SECURITY: đăng ký thành công.
+        return signUpTokens;
     }
 
     // [2] POST /api/auth/login — FindByName + CheckPassword + phát token.
@@ -104,7 +113,9 @@ public class AuthenticationService : IAuthenticationService
 
         // BƯỚC 3: Phát cặp token mới.
         var roles = await _authRepository.GetRoleNamesAsync(user, cancellationToken);
-        return await CreateTokenPairAsync(user, roles, cancellationToken);
+        var tokens = await CreateTokenPairAsync(user, roles, cancellationToken);
+        LogSecurityInfo("LoginSuccess", user, "Access and refresh tokens issued after login."); // SECURITY: đăng nhập thành công.
+        return tokens;
     }
 
     // [3] POST /api/auth/refresh — validate refresh JWT, so stamp, phát cặp token mới.
@@ -157,7 +168,9 @@ public class AuthenticationService : IAuthenticationService
 
         // BƯỚC 5: Phát cặp token mới (rotation refresh).
         var roles = await _authRepository.GetRoleNamesAsync(user, cancellationToken);
-        return await CreateTokenPairAsync(user, roles, cancellationToken);
+        var tokens = await CreateTokenPairAsync(user, roles, cancellationToken);
+        LogSecurityInfo("RefreshSuccess", user, "Access and refresh tokens issued after refresh."); // SECURITY: làm mới token thành công.
+        return tokens;
     }
 
     // [4] POST /api/auth/logout — xoay security stamp nếu user còn tồn tại; idempotent nếu user null.
@@ -168,8 +181,12 @@ public class AuthenticationService : IAuthenticationService
         if (user is not null) // TRƯỜNG HỢP: user còn tồn tại.
         {
             await _authRepository.RevokeSessionsAsync(user, cancellationToken); // UpdateSecurityStampAsync.
+            LogSecurityInfo("LogoutSuccess", user, "Security stamp rotated; sessions revoked."); // SECURITY: logout có user.
         }
-        // TRƯỜNG HỢP: user null — không ném lỗi (logout idempotent theo thiết kế API).
+        else // TRƯỜNG HỢP: user null — không ném lỗi (logout idempotent theo thiết kế API).
+        {
+            LogSecurityLogoutIdempotent(userId); // SECURITY: logout idempotent khi không còn user.
+        }
     }
 
     #endregion
@@ -283,6 +300,42 @@ public class AuthenticationService : IAuthenticationService
             // TRƯỜNG HỢP: bất kỳ lỗi validate — trả null để RefreshAsync trả 401 thống nhất.
             return null;
         }
+    }
+
+    // Ghi SECURITY (Serilog) khi thao tác auth thành công — có user đầy đủ.
+    private void LogSecurityInfo(string eventType, User user, string detail)
+    {
+        var http = _httpContextAccessor.HttpContext; // Request hiện tại (có thể null trong test DI).
+        if (http is null) // Không có HTTP → bỏ qua file SECURITY.
+        {
+            return;
+        }
+
+        var cid = RequestPerformanceMiddleware.GetCorrelationId(http); // Correlation thống nhất pipeline.
+        var method = http.Request.Method; // Verb.
+        var path = http.Request.Path.Value ?? ""; // Route.
+        StructuredFileLogger.SecurityInfo(cid, eventType, method, path, user.UserName, user.Id.ToString(), detail); // Nhóm SECURITY.
+    }
+
+    // Logout idempotent khi User không còn trong store — vẫn ghi SECURITY với user id.
+    private void LogSecurityLogoutIdempotent(Guid userId)
+    {
+        var http = _httpContextAccessor.HttpContext;
+        if (http is null)
+        {
+            return;
+        }
+
+        var cid = RequestPerformanceMiddleware.GetCorrelationId(http);
+        StructuredFileLogger.SecurityInfo(
+            cid,
+            "LogoutSuccess",
+            http.Request.Method,
+            http.Request.Path.Value ?? "",
+            null,
+            userId.ToString(),
+            "Logout idempotent: user no longer exists in the store.");
+
     }
 
     #endregion

@@ -1,11 +1,15 @@
-using CommentAPI;
-using CommentAPI.Entities;
-using CommentAPI.Interfaces;
-using CommentAPI.Data;
-using CommentAPI.DTOs;
-using Microsoft.EntityFrameworkCore;
+using CommentAPI; // SortByColumn — tham số sort phân trang user.
+using CommentAPI.Entities; // User entity Identity.
+using CommentAPI.Interfaces; // IUserRepository.
+using CommentAPI.Data; // AppDbContext, DbSet Users/Roles/UserRoles.
+using CommentAPI.DTOs; // UserPageRow projection.
+using Microsoft.EntityFrameworkCore; // AsNoTracking, ToListAsync, v.v.
 
 namespace CommentAPI.Repositories;
+
+// =============================================================================
+// File UserRepository.cs (partial): GET phân trang UserPageRow + batch roles; kế thừa RepositoryBase<User>.
+// =============================================================================
 
 // Truy vấn Users + batch role names — dùng cho GET /api/users và service gắn Roles vào UserDto.
 public partial class UserRepository : RepositoryBase<User>, IUserRepository
@@ -14,8 +18,9 @@ public partial class UserRepository : RepositoryBase<User>, IUserRepository
 
     public UserRepository(AppDbContext context)
         : base(context)
-    {
-    }
+    { // Mở khối constructor UserRepository.
+        // BƯỚC 1 — Base(context) gán Context protected — không cần trường riêng.
+    } // Kết thúc constructor UserRepository.
 
     #endregion
 
@@ -107,12 +112,13 @@ public partial class UserRepository : RepositoryBase<User>, IUserRepository
 
     // Toàn bộ user entity read-only — dùng ít; cẩn thận bộ nhớ khi bảng lớn.
     public async Task<List<User>> GetAllAsync()
-    {
+    { // Mở khối GetAllAsync.
+        // BƯỚC 1 — Nạp toàn bộ user read-only theo CreatedAt — cẩn thận bộ nhớ khi bảng lớn.
         return await Context.Users
             .AsNoTracking()
             .OrderBy(x => x.CreatedAt)
             .ToListAsync();
-    }
+    } // Kết thúc GetAllAsync.
 
     #endregion
-}
+} // Kết thúc partial UserRepository.

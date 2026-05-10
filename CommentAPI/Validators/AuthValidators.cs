@@ -1,5 +1,5 @@
-using CommentAPI.DTOs;
-using FluentValidation; 
+using CommentAPI.DTOs; // LoginRequestDto, SignupRequestDto, RefreshRequestDto — body auth.
+using FluentValidation; // AbstractValidator, RuleFor. 
 
 namespace CommentAPI.Validators; 
 

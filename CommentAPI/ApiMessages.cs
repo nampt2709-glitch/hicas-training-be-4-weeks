@@ -1,3 +1,11 @@
+// =============================================================================
+// File ApiMessages.cs + ApiErrorCodes: mã lỗi ổn định (field "code"), thông điệp thành công/lỗi (field "message"),
+// và ApiException cho GlobalExceptionHandler. Không gọi DB — chỉ hằng và lớp ngoại lệ.
+// =============================================================================
+// =============================================================================
+// ApiMessages.cs + ApiErrorCodes: hằng số thông điệp client (thành công / lỗi) và mã lỗi ổn định (field "code").
+// GlobalExceptionHandler / middleware đọc các chuỗi này khi trả JSON — giữ đồng bộ với luồng throw ApiException.
+// =============================================================================
 namespace CommentAPI;
 
 // Thành công: thường là field "message" trong body 200/201.

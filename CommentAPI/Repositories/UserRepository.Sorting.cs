@@ -1,6 +1,6 @@
 using CommentAPI; // ApiException.
-using CommentAPI.DTOs;
-using CommentAPI.Entities;
+using CommentAPI.DTOs; // UserDto projection sort keys.
+using CommentAPI.Entities; // User.
 using Microsoft.EntityFrameworkCore; // AsNoTracking trên DbSet Identity.
 
 namespace CommentAPI.Repositories;

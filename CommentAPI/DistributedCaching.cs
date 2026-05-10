@@ -1,76 +1,74 @@
-using System.Text.Json; 
-using CommentAPI.Repositories;
-using Microsoft.AspNetCore.Builder; 
-using Microsoft.Extensions.Caching.Distributed; 
-using Microsoft.Extensions.Caching.Memory; 
-using Microsoft.Extensions.Caching.StackExchangeRedis; 
-using Microsoft.Extensions.Logging; 
-using Microsoft.Extensions.Options;
-using StackExchange.Redis;
+using System.Text.Json; // JsonSerializer: tuỳ chọn camelCase, serialize DTO cache.
+using CommentAPI.Repositories; // CommentRepository.EnumerateCommentCteSortSpecsForCache — sinh mọi khóa cache CTE theo sort.
+using Microsoft.AspNetCore.Builder; // WebApplicationBuilder.AddDistributedCaching.
+using Microsoft.Extensions.Caching.Distributed; // IDistributedCache, DistributedCacheEntryOptions, Get/Set string & byte.
+using Microsoft.Extensions.Caching.Memory; // MemoryDistributedCache — lớp fallback trong process.
+using Microsoft.Extensions.Caching.StackExchangeRedis; // RedisCache, RedisCacheOptions.
+using Microsoft.Extensions.Logging; // ILogger, ILoggerFactory — log startup và soft-fail cache.
+using Microsoft.Extensions.Options; // IOptions<CacheOptions>, Options.Create.
+using StackExchange.Redis; // RedisException từ StackExchange khi failover sang bộ nhớ.
 
 namespace CommentAPI;
 
 // =============================================================================
-// File DistributedCaching.cs: đăng ký + cấu hình + triển khai cache phân tán (Redis ưu tiên,
-// in-memory dự phòng) và lớp tiện ích IEntityResponseCache (JSON).
+// File DistributedCaching.cs: đăng ký IDistributedCache (Redis ưu tiên, memory dự phòng),
+// CacheOptions, EntityCacheKeys, IEntityResponseCache/EntityResponseCache, wrapper prefix,
+// failover Redis→memory, extension AddDistributedCaching.
 // =============================================================================
 
-// Cấu hình cache entity (JSON) và cách chọn backend.
-public sealed class CacheOptions // Bind từ appsettings section "Cache".
+// Cấu hình bind từ section "Cache" trong appsettings — TTL entity, cờ ép memory, timeout dự phòng.
+public sealed class CacheOptions
 {
-    public const string SectionName = "Cache"; // Tên section cấu hình.
+    public const string SectionName = "Cache"; // Tên section trong IConfiguration.
 
-    // Thời gian sống mặc định của mỗi key entity (giây).
-    public int EntityTtlSeconds { get; set; } = 120; // Mặc định 120s.
+    // Thời gian sống mặc định (giây) cho mỗi key JSON entity do EntityResponseCache ghi.
+    public int EntityTtlSeconds { get; set; } = 120; // Mặc định 120 giây.
 
-    // Khi true (tùy chọn dev): ép chỉ dùng bộ nhớ trong process, không dùng Redis.
-    // Mặc định false = luôn ưu tiên Redis nếu có connection string Redis.
-    public bool PreferInProcessCache { get; set; } = false; // Tắt Redis khi true.
+    // true: bỏ Redis, chỉ dùng DistributedMemoryCache (tiện máy dev không có Redis).
+    public bool PreferInProcessCache { get; set; } = false;
 
-    // Giới hạn thời gian (ms) cho thao tác phụ; để dự phòng tương lai/điều chỉnh chuỗi kết nối (500..30000).
-    public int RedisProbeTimeoutMilliseconds { get; set; } = 5_000; // Hiện chưa dùng probe blocking.
-}
+    // Giới hạn thời gian probe (ms) — dự phòng mở rộng; hiện không chặn khởi động bằng probe blocking.
+    public int RedisProbeTimeoutMilliseconds { get; set; } = 5_000;
+} // Kết thúc CacheOptions.
 
-// Trạng thái backend dùng cho header — cập nhật theo từng thao tác cache thành công (redis / memory).
-public sealed class CacheBackendState // Singleton mutable kind string.
+// Singleton: nhãn backend gần nhất thành công — middleware gắn header X-Cache-Backend (redis | memory).
+public sealed class CacheBackendState
 {
-    private string _kind = "memory"; // Default until Redis succeeds.
+    private string _kind = "memory"; // Mặc định cho tới khi Redis trả OK.
 
-    // Header X-Cache-Backend: redis hoặc memory (cái mới dùng gần nhất cho request hiện tại nếu có nhiều bước).
-    public string Kind // Backend label.
+    public string Kind
     {
-        get => _kind; // Read current.
-        set => _kind = value; // Write last successful backend.
+        get => _kind;
+        set => _kind = value;
     }
-}
+} // Kết thúc CacheBackendState.
 
-// Scoped: HIT/MISS theo request cho header X-Cache-Status.
-public sealed class CacheResponseTracker // Per-request cache lookup telemetry.
+// Scoped theo HTTP request: ghi nhận đã lookup cache và có HIT không — header X-Cache-Status.
+public sealed class CacheResponseTracker
 {
-    public bool LookupPerformed { get; private set; } // Có gọi Get không.
-    public bool WasHit { get; private set; } // Kết quả hit nếu đã lookup.
+    public bool LookupPerformed { get; private set; } // Đã gọi GetJsonAsync hay chưa.
+    public bool WasHit { get; private set; } // Kết quả sau lookup.
 
-    public void ReportLookup(bool cacheHit) // EntityResponseCache gọi sau GetJsonAsync.
+    public void ReportLookup(bool cacheHit)
     {
-        LookupPerformed = true; // Mark touched.
-        WasHit = cacheHit; // Hit flag.
+        LookupPerformed = true;
+        WasHit = cacheHit;
     }
-}
+} // Kết thúc CacheResponseTracker.
 
-public static class EntityCacheKeys // Factory khóa string thống nhất.
+// Factory khóa chuỗi thống nhất — prefix phân biệt u:/p:/c:/l:/cmt:/pst:/usr: và tham số sort/epoch/post.
+public static class EntityCacheKeys
 {
-    public static string User(Guid id) => $"u:{id:N}"; // Chi tiết user.
+    public static string User(Guid id) => $"u:{id:N}"; // Chi tiết user theo Guid.
     public static string Post(Guid id) => $"p:{id:N}"; // Chi tiết post.
     public static string Comment(Guid id) => $"c:{id:N}"; // Chi tiết comment.
 
     public static string PostsResourceCommentsTreeCte(Guid postId, bool includeReplies, SortByColumn sort) =>
-        $"l:posts:{postId:N}:comments:tree:cte:ir{(includeReplies ? 1 : 0)}:s{sort.CacheKeySegment}";
+        $"l:posts:{postId:N}:comments:tree:cte:ir{(includeReplies ? 1 : 0)}:s{sort.CacheKeySegment}"; // GET …/posts/{id}/comments/tree — cache rừng CTE.
 
-    // GET /api/posts/{postId}/comments/flat — cache JSON danh sách phẳng CTE của resource post (không trùng CommentsCteFlatByPost phân trang).
     public static string PostsResourceCommentsFlatCte(Guid postId, bool includeReplies, SortByColumn sort) =>
-        $"l:posts:{postId:N}:comments:flat:cte:ir{(includeReplies ? 1 : 0)}:s{sort.CacheKeySegment}";
+        $"l:posts:{postId:N}:comments:flat:cte:ir{(includeReplies ? 1 : 0)}:s{sort.CacheKeySegment}"; // GET …/posts/{id}/comments/flat — danh sách phẳng CTE.
 
-    // Xóa mọi biến thể includeReplies × sort (whitelist CTE) cho hai resource trên (sau CRUD comment / xóa post).
     public static IEnumerable<string> PostsResourceCommentsCteAllKeys(Guid postId)
     {
         foreach (var includeReplies in new[] { false, true })
@@ -81,395 +79,390 @@ public static class EntityCacheKeys // Factory khóa string thống nhất.
                 yield return PostsResourceCommentsFlatCte(postId, includeReplies, spec);
             }
         }
-    }
+    } // Kết thúc PostsResourceCommentsCteAllKeys.
 
-    // Danh sách user phân trang (epoch InvalidateUsersListAsync khi tạo/sửa/xóa user làm khác list).
     public static string UsersPaged(long usersListEpoch, int page, int pageSize, SortByColumn sort) =>
-        $"usr:{usersListEpoch}:l:users:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"usr:{usersListEpoch}:l:users:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Danh sách user phân trang + epoch.
 
-    // Danh sách post phân trang (epoch khi CRUD post).
     public static string PostsPaged(long postsListEpoch, int page, int pageSize, SortByColumn sort) =>
-        $"pst:{postsListEpoch}:l:posts:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"pst:{postsListEpoch}:l:posts:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Danh sách post phân trang + epoch.
 
-    // Prefix cmt:{epoch}: — InvalidateCommentsListsAsync khi CRUD comment / cascade xóa comment.
     public static string CommentsFlatAll(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:flat:all:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:flat:all:{page}:{pageSize}:s{sort.CacheKeySegment}"; // GET /comments/flat toàn hệ.
 
     public static string CommentsByUser(long commentsListEpoch, Guid userId, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:u:{userId:N}:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:u:{userId:N}:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Comment theo tác giả.
 
     public static string CommentsAllTreeFlat(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:tree:flat:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:tree:flat:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Tree/flat phân trang.
 
     public static string CommentsAllTreeCte(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:tree:cte:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:tree:cte:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Tree CTE phân trang.
 
     public static string CommentsAllTreeFlatFlatten(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:tree:flat:flatten:all:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:tree:flat:flatten:all:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Flatten sau tree/flat.
 
     public static string CommentsAllFlattenCteTree(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:flat:ctetree:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:flat:ctetree:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Cte tree từ flat.
 
     public static string CommentsAllCteFlat(long commentsListEpoch, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:cteflat:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:cteflat:{page}:{pageSize}:s{sort.CacheKeySegment}"; // CTE phẳng toàn hệ.
 
     public static string CommentsFlatByPost(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:flat:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:flat:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Flat theo post.
 
     public static string CommentsCteFlatByPost(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:cteflat:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:cteflat:{page}:{pageSize}:s{sort.CacheKeySegment}"; // CTE flat theo post.
 
     public static string CommentsTreeFlatByPost(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree-flat:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree-flat:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Tree flat theo post.
 
     public static string CommentsTreeCteByPost(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree:cte:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree:cte:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Tree CTE theo post.
 
     public static string CommentsFlattenedCteTree(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:ctetree:{page}:{pageSize}:s{sort.CacheKeySegment}";
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:ctetree:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Flatten CTE tree theo post.
 
     public static string CommentsTreeFlatFlattenByPost(long commentsListEpoch, Guid postId, int page, int pageSize, SortByColumn sort) =>
-        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree:flat:flatten:{page}:{pageSize}:s{sort.CacheKeySegment}";
-}
+        $"cmt:{commentsListEpoch}:l:comments:p:{postId:N}:tree:flat:flatten:{page}:{pageSize}:s{sort.CacheKeySegment}"; // Flatten tree/flat theo post.
+} // Kết thúc EntityCacheKeys.
 
-public interface IEntityResponseCache // Interface JSON cache cho DTO phản hồi.
+public interface IEntityResponseCache // Hợp đồng cache JSON response (DTO/list) trên IDistributedCache.
 {
-    Task<T?> GetJsonAsync<T>(string key, CancellationToken cancellationToken = default) where T : class; // Deserialize miss → null.
-    Task SetJsonAsync<T>(string key, T value, CancellationToken cancellationToken = default) where T : class; // Set TTL.
-    Task RemoveAsync(string key, CancellationToken cancellationToken = default); // Invalidate một key.
-    Task RemoveManyAsync(IEnumerable<string> keys, CancellationToken cancellationToken = default); // Invalidate lô.
-}
+    Task<T?> GetJsonAsync<T>(string key, CancellationToken cancellationToken = default) where T : class;
+    Task SetJsonAsync<T>(string key, T value, CancellationToken cancellationToken = default) where T : class;
+    Task RemoveAsync(string key, CancellationToken cancellationToken = default);
+    Task RemoveManyAsync(IEnumerable<string> keys, CancellationToken cancellationToken = default);
+} // Kết thúc IEntityResponseCache.
 
-public sealed class EntityResponseCache : IEntityResponseCache // Triển khai trên IDistributedCache.
+public sealed class EntityResponseCache : IEntityResponseCache
 {
-    private static readonly JsonSerializerOptions Json = new() // Tùy chọn JSON cố định.
+    private static readonly JsonSerializerOptions Json = new()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase, // camelCase output.
-        WriteIndented = false // Compact.
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = false,
     };
 
-    private readonly IDistributedCache _cache; // Backend thực tế (Redis-first hoặc memory).
-    private readonly CacheResponseTracker _tracker; // Báo cáo HIT/MISS.
-    private readonly TimeSpan _ttl; // TTL clamped từ options.
-    private readonly ILogger<EntityResponseCache> _log; // Logger soft-fail.
+    private readonly IDistributedCache _cache;
+    private readonly CacheResponseTracker _tracker;
+    private readonly TimeSpan _ttl;
+    private readonly ILogger<EntityResponseCache> _log;
 
-    public EntityResponseCache( // DI ctor.
-        IDistributedCache cache, // Distributed cache.
-        CacheResponseTracker tracker, // Scoped tracker.
-        IOptions<CacheOptions> options, // Config.
-        ILogger<EntityResponseCache> log) // Logger.
+    // BƯỚC 1 — Clamp TTL từ CacheOptions vào [30s, 1 ngày]; gán tracker + logger.
+    public EntityResponseCache(
+        IDistributedCache cache,
+        CacheResponseTracker tracker,
+        IOptions<CacheOptions> options,
+        ILogger<EntityResponseCache> log)
     {
-        _cache = cache; // Assign cache.
-        _tracker = tracker; // Assign tracker.
-        _log = log; // Assign log.
-        var sec = Math.Clamp(options.Value.EntityTtlSeconds, 30, 86_400); // Clamp 30s..1d.
-        _ttl = TimeSpan.FromSeconds(sec); // Timespan TTL.
-    }
+        _cache = cache;
+        _tracker = tracker;
+        _log = log;
+        var sec = Math.Clamp(options.Value.EntityTtlSeconds, 30, 86_400);
+        _ttl = TimeSpan.FromSeconds(sec);
+    } // Kết thúc constructor.
 
-    public async Task<T?> GetJsonAsync<T>(string key, CancellationToken cancellationToken = default) where T : class // Read JSON.
+    public async Task<T?> GetJsonAsync<T>(string key, CancellationToken cancellationToken = default) where T : class
     {
-        string? raw; // Raw string from cache.
-        try // Isolate cache failures.
+        string? raw;
+        try
         {
-            raw = await _cache.GetStringAsync(key, cancellationToken); // Network/memory get.
+            raw = await _cache.GetStringAsync(key, cancellationToken);
         }
-        catch (OperationCanceledException) // Propagate cancel.
+        catch (OperationCanceledException)
         {
-            throw; // Rethrow.
+            throw;
         }
-        catch (Exception ex) // Any other — treat as miss.
+        catch (Exception ex)
         {
-            _log.LogDebug(ex, "GetStringAsync: lỗi; coi như miss."); // Debug only.
-            _tracker.ReportLookup(false); // Miss.
-            return null; // Degrade.
-        }
-
-        if (string.IsNullOrEmpty(raw)) // Empty key or missing.
-        {
-            _tracker.ReportLookup(false); // Miss.
-            return null; // Null DTO.
+            _log.LogDebug(ex, "GetStringAsync: lỗi; coi như cache miss.");
+            _tracker.ReportLookup(false);
+            return null;
         }
 
-        try // Deserialize guard.
+        if (string.IsNullOrEmpty(raw))
         {
-            var dto = JsonSerializer.Deserialize<T>(raw, Json); // Parse JSON.
-            if (dto is null) // Serializer returned null for reference type.
+            _tracker.ReportLookup(false);
+            return null;
+        }
+
+        try
+        {
+            var dto = JsonSerializer.Deserialize<T>(raw, Json);
+            if (dto is null)
             {
-                _tracker.ReportLookup(false); // Treat as miss.
-                return null; // Null.
+                _tracker.ReportLookup(false);
+                return null;
             }
 
-            _tracker.ReportLookup(true); // Hit.
-            return dto; // DTO.
+            _tracker.ReportLookup(true);
+            return dto;
         }
-        catch (JsonException) // Bad payload in cache.
+        catch (JsonException)
         {
-            _tracker.ReportLookup(false); // Miss.
-            return null; // Ignore corrupt.
+            _tracker.ReportLookup(false);
+            return null;
         }
-    }
+    } // Kết thúc GetJsonAsync.
 
-    public async Task SetJsonAsync<T>(string key, T value, CancellationToken cancellationToken = default) where T : class // Write JSON.
+    public async Task SetJsonAsync<T>(string key, T value, CancellationToken cancellationToken = default) where T : class
     {
-        var raw = JsonSerializer.Serialize(value, Json); // Serialize.
-        try // Set may fail silently for availability.
+        var raw = JsonSerializer.Serialize(value, Json);
+        try
         {
-            await _cache.SetStringAsync( // Put with TTL.
-                key, // Key.
-                raw, // JSON string.
-                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = _ttl }, // Relative expiry.
-                cancellationToken); // CT.
+            await _cache.SetStringAsync(
+                key,
+                raw,
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = _ttl },
+                cancellationToken);
         }
-        catch (Exception ex) // Log and continue — API still returns DB result.
+        catch (Exception ex)
         {
-            _log.LogDebug(ex, "SetStringAsync: bỏ qua ghi cache; API vẫn trả dữ liệu từ DB."); // Soft fail.
+            _log.LogDebug(ex, "SetStringAsync: bỏ qua ghi cache; API vẫn trả dữ liệu từ DB.");
         }
-    }
+    } // Kết thúc SetJsonAsync.
 
-    public async Task RemoveAsync(string key, CancellationToken cancellationToken = default) // Remove one.
+    public async Task RemoveAsync(string key, CancellationToken cancellationToken = default)
     {
-        try // Remove best-effort.
+        try
         {
-            await _cache.RemoveAsync(key, cancellationToken); // Delete key.
+            await _cache.RemoveAsync(key, cancellationToken);
         }
-        catch (Exception ex) // Log only.
+        catch (Exception ex)
         {
-            _log.LogDebug(ex, "RemoveAsync: bỏ qua xóa key {Key}.", key); // Debug.
+            _log.LogDebug(ex, "RemoveAsync: bỏ qua xóa key {Key}.", key);
         }
-    }
+    } // Kết thúc RemoveAsync.
 
-    public async Task RemoveManyAsync(IEnumerable<string> keys, CancellationToken cancellationToken = default) // Remove many.
+    public async Task RemoveManyAsync(IEnumerable<string> keys, CancellationToken cancellationToken = default)
     {
-        foreach (var key in keys) // Sequential removes.
+        foreach (var key in keys)
         {
-            try // Per key.
+            try
             {
-                await _cache.RemoveAsync(key, cancellationToken); // Remove.
+                await _cache.RemoveAsync(key, cancellationToken);
             }
-            catch (Exception ex) // Continue on error.
+            catch (Exception ex)
             {
-                _log.LogDebug(ex, "RemoveAsync lỗi (key: {Key}); bỏ qua.", key); // Debug.
+                _log.LogDebug(ex, "RemoveAsync thất bại (key: {Key}); bỏ qua.", key);
             }
         }
-    }
-}
+    } // Kết thúc RemoveManyAsync.
+} // Kết thúc EntityResponseCache.
 
-// Ghi nhớ tương tự RedisCache: tiền tố RedisCacheOptions.InstanceName trên từng key,
-// để bộ nhớ dự phòng cùng không gian tên với key Redis thực tế.
-public sealed class PrefixedMemoryDistributedCache : IDistributedCache // Wrapper thêm instance prefix.
+// Bọc MemoryDistributedCache: thêm InstanceName như RedisCache để cùng không gian tên logic với Redis.
+public sealed class PrefixedMemoryDistributedCache : IDistributedCache
 {
-    private readonly IDistributedCache _inner; // MemoryDistributedCache inner.
-    private readonly string _prefix; // InstanceName + optional colon.
+    private readonly IDistributedCache _inner;
+    private readonly string _prefix;
 
-    public PrefixedMemoryDistributedCache(IDistributedCache inner, string instanceName) // Ctor.
+    public PrefixedMemoryDistributedCache(IDistributedCache inner, string instanceName)
     {
-        _inner = inner; // Inner cache.
-        _prefix = string.IsNullOrEmpty(instanceName) ? string.Empty : instanceName; // Prefix string.
+        _inner = inner;
+        _prefix = string.IsNullOrEmpty(instanceName) ? string.Empty : instanceName;
     }
 
-    private string P(string k) => _prefix + k; // Apply prefix.
+    private string P(string k) => _prefix + k;
 
-    public byte[]? Get(string key) => _inner.Get(P(key)); // Sync get.
-    public Task<byte[]?> GetAsync(string key, CancellationToken token = default) => _inner.GetAsync(P(key), token); // Async get.
-    public void Set(string key, byte[] value, DistributedCacheEntryOptions options) => _inner.Set(P(key), value, options); // Sync set.
-    public Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default) => // Async set.
-        _inner.SetAsync(P(key), value, options, token); // Forward.
-    public void Remove(string key) => _inner.Remove(P(key)); // Sync remove.
-    public Task RemoveAsync(string key, CancellationToken token = default) => _inner.RemoveAsync(P(key), token); // Async remove.
-    public void Refresh(string key) => _inner.Refresh(P(key)); // Sync refresh.
-    public Task RefreshAsync(string key, CancellationToken token = default) => _inner.RefreshAsync(P(key), token); // Async refresh.
-}
+    public byte[]? Get(string key) => _inner.Get(P(key));
+    public Task<byte[]?> GetAsync(string key, CancellationToken token = default) => _inner.GetAsync(P(key), token);
+    public void Set(string key, byte[] value, DistributedCacheEntryOptions options) => _inner.Set(P(key), value, options);
+    public Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default) =>
+        _inner.SetAsync(P(key), value, options, token);
+    public void Remove(string key) => _inner.Remove(P(key));
+    public Task RemoveAsync(string key, CancellationToken token = default) => _inner.RemoveAsync(P(key), token);
+    public void Refresh(string key) => _inner.Refresh(P(key));
+    public Task RefreshAsync(string key, CancellationToken token = default) => _inner.RefreshAsync(P(key), token);
+} // Kết thúc PrefixedMemoryDistributedCache.
 
-// Luôn thử RedisCache trước; lỗi mạng / Redis down → cùng key logic qua
-// bộ nhớ dự phòng. Khi Redis sống lại, lần thao tác thành công tới sẽ lại dùng Redis
-// (không cần restart API).
-public sealed class RedisFirstFailoverMemoryDistributedCache : IDistributedCache // Composite failover.
+// Đọc/ghi Redis trước; lỗi mạng/Redis → cùng key trên memory có prefix — không cần restart khi Redis hồi phục.
+public sealed class RedisFirstFailoverMemoryDistributedCache : IDistributedCache
 {
-    private readonly RedisCache _redis; // Primary Redis implementation.
-    private readonly IDistributedCache _memoryPrefixed; // Fallback with same logical key space.
-    private readonly CacheBackendState _state; // Update Kind for headers.
-    private readonly ILogger<RedisFirstFailoverMemoryDistributedCache> _log; // Warn on failover.
+    private readonly RedisCache _redis;
+    private readonly IDistributedCache _memoryPrefixed;
+    private readonly CacheBackendState _state;
+    private readonly ILogger<RedisFirstFailoverMemoryDistributedCache> _log;
 
-    public RedisFirstFailoverMemoryDistributedCache( // Ctor.
-        RedisCache redis, // Redis.
-        PrefixedMemoryDistributedCache memoryPrefixed, // Prefixed memory.
-        CacheBackendState state, // State.
-        ILogger<RedisFirstFailoverMemoryDistributedCache> log) // Logger.
+    public RedisFirstFailoverMemoryDistributedCache(
+        RedisCache redis,
+        PrefixedMemoryDistributedCache memoryPrefixed,
+        CacheBackendState state,
+        ILogger<RedisFirstFailoverMemoryDistributedCache> log)
     {
-        _redis = redis; // Assign.
-        _memoryPrefixed = memoryPrefixed; // Assign.
-        _state = state; // Assign.
-        _log = log; // Assign.
+        _redis = redis;
+        _memoryPrefixed = memoryPrefixed;
+        _state = state;
+        _log = log;
     }
 
-    public byte[]? Get(string key) => GetAsync(key).GetAwaiter().GetResult(); // Sync over async (avoid deadlocks in sync callers).
+    public byte[]? Get(string key) => GetAsync(key).GetAwaiter().GetResult();
 
-    public async Task<byte[]?> GetAsync(string key, CancellationToken token = default) // Async get with failover.
+    public async Task<byte[]?> GetAsync(string key, CancellationToken token = default)
     {
-        try // Redis first.
+        try
         {
-            var b = await _redis.GetAsync(key, token); // Try Redis.
-            _state.Kind = "redis"; // Mark backend.
-            return b; // Bytes or null.
+            var b = await _redis.GetAsync(key, token);
+            _state.Kind = "redis";
+            return b;
         }
-        catch (Exception ex) when (ShouldFailoverToMemory(ex)) // Transient Redis errors.
+        catch (Exception ex) when (ShouldFailoverToMemory(ex))
         {
-            _log.LogWarning(ex, "Cache Redis hỏng; đọc bộ nhớ dự phòng (key: {Key}).", key); // Ops visibility.
-            var m = await _memoryPrefixed.GetAsync(key, token); // Fallback read.
-            _state.Kind = "memory"; // Mark memory path.
-            return m; // Bytes or null.
+            _log.LogWarning(ex, "Redis không dùng được; đọc fallback memory (key: {Key}).", key);
+            var m = await _memoryPrefixed.GetAsync(key, token);
+            _state.Kind = "memory";
+            return m;
         }
-    }
+    } // Kết thúc GetAsync.
 
-    public void Set(string key, byte[] value, DistributedCacheEntryOptions options) => // Sync set.
-        SetAsync(key, value, options).GetAwaiter().GetResult(); // Block on async.
+    public void Set(string key, byte[] value, DistributedCacheEntryOptions options) =>
+        SetAsync(key, value, options).GetAwaiter().GetResult();
 
-    public async Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default) // Async set.
+    public async Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default)
     {
-        try // Redis first.
+        try
         {
-            await _redis.SetAsync(key, value, options, token); // Write Redis.
-            _state.Kind = "redis"; // Mark.
+            await _redis.SetAsync(key, value, options, token);
+            _state.Kind = "redis";
         }
-        catch (Exception ex) when (ShouldFailoverToMemory(ex)) // Failover.
+        catch (Exception ex) when (ShouldFailoverToMemory(ex))
         {
-            _log.LogWarning(ex, "Cache Redis hỏng; ghi bộ nhớ dự phòng (key: {Key}).", key); // Warn.
-            await _memoryPrefixed.SetAsync(key, value, options, token); // Write memory.
-            _state.Kind = "memory"; // Mark.
+            _log.LogWarning(ex, "Redis không ghi được; ghi fallback memory (key: {Key}).", key);
+            await _memoryPrefixed.SetAsync(key, value, options, token);
+            _state.Kind = "memory";
         }
-    }
+    } // Kết thúc SetAsync.
 
-    public void Remove(string key) => RemoveAsync(key).GetAwaiter().GetResult(); // Sync remove.
+    public void Remove(string key) => RemoveAsync(key).GetAwaiter().GetResult();
 
-    public async Task RemoveAsync(string key, CancellationToken token = default) // Remove both layers best-effort.
+    public async Task RemoveAsync(string key, CancellationToken token = default)
     {
-        var redisRemoved = false; // Track Redis success.
-        try // Try Redis.
+        var redisRemoved = false;
+        try
         {
-            await _redis.RemoveAsync(key, token); // Redis delete.
-            redisRemoved = true; // Flag.
-            _state.Kind = "redis"; // Mark.
+            await _redis.RemoveAsync(key, token);
+            redisRemoved = true;
+            _state.Kind = "redis";
         }
-        catch (Exception ex) when (ShouldFailoverToMemory(ex)) // Redis down.
+        catch (Exception ex) when (ShouldFailoverToMemory(ex))
         {
-            _log.LogDebug(ex, "Redis Remove lỗi; sẽ gỡ bóng ở bộ nhớ dự phòng (key: {Key}).", key); // Debug.
-        }
-
-        try // Always try shadow memory.
-        {
-            await _memoryPrefixed.RemoveAsync(key, token); // Memory delete.
-        }
-        catch // Swallow — shadow cleanup best effort.
-        {
-            /* bỏ qua: xóa bóng */ // Intentionally empty.
+            _log.LogDebug(ex, "Redis Remove thất bại; xóa khóa bóng memory (key: {Key}).", key);
         }
 
-        if (!redisRemoved) // If Redis path failed earlier.
+        try
         {
-            _state.Kind = "memory"; // Report memory as active path.
+            await _memoryPrefixed.RemoveAsync(key, token);
         }
-    }
+        catch
+        {
+            /* bỏ qua — xóa bóng tốt nhất có thể */
+        }
 
-    public void Refresh(string key) => RefreshAsync(key).GetAwaiter().GetResult(); // Sync refresh.
+        if (!redisRemoved)
+            _state.Kind = "memory";
+    } // Kết thúc RemoveAsync.
 
-    public async Task RefreshAsync(string key, CancellationToken token = default) // Refresh sliding semantics.
+    public void Refresh(string key) => RefreshAsync(key).GetAwaiter().GetResult();
+
+    public async Task RefreshAsync(string key, CancellationToken token = default)
     {
-        try // Redis refresh.
+        try
         {
-            await _redis.RefreshAsync(key, token); // Primary.
-            _state.Kind = "redis"; // Mark.
+            await _redis.RefreshAsync(key, token);
+            _state.Kind = "redis";
         }
-        catch (Exception ex) when (ShouldFailoverToMemory(ex)) // Failover.
+        catch (Exception ex) when (ShouldFailoverToMemory(ex))
         {
-            await _memoryPrefixed.RefreshAsync(key, token); // Memory refresh.
-            _state.Kind = "memory"; // Mark.
+            await _memoryPrefixed.RefreshAsync(key, token);
+            _state.Kind = "memory";
         }
-    }
+    } // Kết thúc RefreshAsync.
 
-    // Lỗi tầng kết nối Redis / thời gian chờ: chuyển sang memory (cùng cấp với ứng dụng, không tốn DB).
-    private static bool ShouldFailoverToMemory(Exception ex) => // Predicate for catch when.
-        ex is RedisException // StackExchange Redis errors.
-        or System.IO.IOException // IO broken pipe etc.
-        or TimeoutException // Timeouts.
-        or System.Net.Sockets.SocketException; // TCP failures.
-}
+    private static bool ShouldFailoverToMemory(Exception ex) =>
+        ex is RedisException
+        or System.IO.IOException
+        or TimeoutException
+        or System.Net.Sockets.SocketException;
+} // Kết thúc RedisFirstFailoverMemoryDistributedCache.
 
-// Đăng ký IDistributedCache: ưu tiên Redis, dự phòng bộ nhớ; chỉ bộ nhớ nếu thiếu cấu hình / ép cờ dev.
-public static class DistributedCaching // Extension AddDistributedCaching.
+public static class DistributedCaching
 {
-    public static void AddDistributedCaching(this WebApplicationBuilder builder) // Host builder entry.
+    // BƯỚC 1 — Bind CacheOptions + tạo logger startup ngắn hạn + đăng ký singleton trạng thái backend.
+    // BƯỚC 2 — Nếu PreferInProcessCache: chỉ AddDistributedMemoryCache và return.
+    // BƯỚC 3 — Nếu thiếu ConnectionStrings:Redis: memory và return.
+    // BƯỚC 4 — Đăng ký RedisCache + MemoryDistributedCache + PrefixedMemory + composite IDistributedCache.
+    public static void AddDistributedCaching(this WebApplicationBuilder builder)
     {
-        builder.Services.Configure<CacheOptions>(builder.Configuration.GetSection(CacheOptions.SectionName)); // Options pattern.
-        var cacheOptions = builder.Configuration.GetSection(CacheOptions.SectionName).Get<CacheOptions>() ?? new(); // Snapshot read.
+        builder.Services.Configure<CacheOptions>(builder.Configuration.GetSection(CacheOptions.SectionName));
+        var cacheOptions = builder.Configuration.GetSection(CacheOptions.SectionName).Get<CacheOptions>() ?? new();
 
-        using var loggerFactory = CreateProbeLoggerFactory(builder); // Short-lived factory for startup logs.
-        var log = loggerFactory.CreateLogger("CommentAPI.Cache"); // Category logger.
-        builder.Services.AddSingleton<CacheBackendState>(); // Singleton state for Kind.
-        // Gắn header từ cùng singleton trạng thái
-        builder.Services.AddSingleton<CacheBackendDescriptor>(sp => new CacheBackendDescriptor(sp.GetRequiredService<CacheBackendState>())); // Adapter.
+        using var loggerFactory = CreateProbeLoggerFactory(builder);
+        var log = loggerFactory.CreateLogger("CommentAPI.Cache");
+        builder.Services.AddSingleton<CacheBackendState>();
+        builder.Services.AddSingleton<CacheBackendDescriptor>(sp =>
+            new CacheBackendDescriptor(sp.GetRequiredService<CacheBackendState>()));
 
-        if (cacheOptions.PreferInProcessCache) // Dev force memory.
+        if (cacheOptions.PreferInProcessCache)
         {
-            log.LogInformation( // Info.
-                "Cache: {Name}=true — chỉ dùng bộ nhớ (DistributedMemory), bỏ qua Redis.", // Message template.
-                nameof(CacheOptions.PreferInProcessCache)); // Property name.
-            builder.Services.AddDistributedMemoryCache(); // Pure memory distributed cache.
-            return; // Skip Redis registration.
+            log.LogInformation(
+                "Cache: {Name}=true — chỉ dùng memory trong process (DistributedMemory); bỏ qua Redis.",
+                nameof(CacheOptions.PreferInProcessCache));
+            builder.Services.AddDistributedMemoryCache();
+            return;
         }
 
-        var rawCs = builder.Configuration.GetConnectionString("Redis"); // Connection string optional.
-        if (string.IsNullOrWhiteSpace(rawCs)) // Missing Redis CS.
+        var rawCs = builder.Configuration.GetConnectionString("Redis");
+        if (string.IsNullOrWhiteSpace(rawCs))
         {
-            log.LogWarning("Cache: không có ConnectionStrings:Redis — dùng bộ nhớ trong process."); // Warn.
-            builder.Services.AddDistributedMemoryCache(); // Fallback only memory.
-            return; // Done.
+            log.LogWarning("Cache: ConnectionStrings:Redis chưa cấu hình — dùng memory trong process.");
+            builder.Services.AddDistributedMemoryCache();
+            return;
         }
 
-        var connectionString = EnsureAbortConnectNotBlocking(rawCs); // Append abortConnect=false if absent.
-        const string instanceName = "CommentAPI:"; // Logical isolation prefix.
+        var connectionString = EnsureAbortConnectNotBlocking(rawCs);
+        const string instanceName = "CommentAPI:";
 
-        builder.Services.Configure<RedisCacheOptions>(o => // Configure Redis client options.
+        builder.Services.Configure<RedisCacheOptions>(o =>
         {
-            o.Configuration = connectionString; // Server connection string.
-            o.InstanceName = instanceName; // Key prefix for RedisCache.
+            o.Configuration = connectionString;
+            o.InstanceName = instanceName;
         });
-        // Redis thật: kết nối lười / thử lại; không cần probe tại startup (tránh cảnh tụ trước: luôn rơi về memory).
-        builder.Services.AddSingleton<RedisCache>(); // Concrete Redis cache singleton.
-        builder.Services.AddSingleton<MemoryDistributedCache>(sp => new MemoryDistributedCache( // In-memory distributed impl.
-            Microsoft.Extensions.Options.Options.Create(new MemoryDistributedCacheOptions()))); // Default options.
 
-        builder.Services.AddSingleton<PrefixedMemoryDistributedCache>(sp => // Prefixed wrapper registration.
-            new PrefixedMemoryDistributedCache( // New instance.
-                sp.GetRequiredService<MemoryDistributedCache>(), // Inner memory.
-                instanceName)); // Same prefix as Redis.
+        builder.Services.AddSingleton<RedisCache>();
+        builder.Services.AddSingleton<MemoryDistributedCache>(sp =>
+            new MemoryDistributedCache(
+                Microsoft.Extensions.Options.Options.Create(new MemoryDistributedCacheOptions())));
 
-        builder.Services.AddSingleton<IDistributedCache, RedisFirstFailoverMemoryDistributedCache>(); // Composite as IDistributedCache.
+        builder.Services.AddSingleton<PrefixedMemoryDistributedCache>(sp =>
+            new PrefixedMemoryDistributedCache(
+                sp.GetRequiredService<MemoryDistributedCache>(),
+                instanceName));
 
-        log.LogInformation( // Success path log.
-            "Cache: Redis ưu tiên (InstanceName {Instance}), bộ nhớ dự phòng nếu Redis không phản hồi; không cần restart để dùng lại Redis khi dịch vụ sống lại.", // Message.
-            instanceName); // Argument.
-    }
+        builder.Services.AddSingleton<IDistributedCache, RedisFirstFailoverMemoryDistributedCache>();
 
-    private static string EnsureAbortConnectNotBlocking(string connectionString) // Avoid blocking startup on Redis down.
+        log.LogInformation(
+            "Cache: ưu tiên Redis (InstanceName {Instance}); fallback memory khi Redis lỗi; không cần restart để quay lại Redis.",
+            instanceName);
+    } // Kết thúc AddDistributedCaching.
+
+    private static string EnsureAbortConnectNotBlocking(string connectionString)
     {
-        if (connectionString.Contains("abortConnect", StringComparison.OrdinalIgnoreCase)) // Already specified.
-            return connectionString; // As-is.
-        return connectionString.TrimEnd(' ', ';') + ",abortConnect=false"; // Append best practice for ASP.NET.
+        if (connectionString.Contains("abortConnect", StringComparison.OrdinalIgnoreCase))
+            return connectionString;
+        return connectionString.TrimEnd(' ', ';') + ",abortConnect=false";
     }
 
-    private static ILoggerFactory CreateProbeLoggerFactory(WebApplicationBuilder builder) => // Local factory for registration logs.
-        LoggerFactory.Create(logging => // Builder lambda.
+    private static ILoggerFactory CreateProbeLoggerFactory(WebApplicationBuilder builder) =>
+        LoggerFactory.Create(logging =>
         {
-            logging.AddConfiguration(builder.Configuration.GetSection("Logging")); // Bind logging config.
-            logging.AddConsole(); // Console sink for startup messages.
+            logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
+            logging.AddConsole();
         });
-}
+} // Kết thúc DistributedCaching.
 
-// Adapter: giữ tên tương thích middleware cũ (chỉ đọc Kind).
-public sealed class CacheBackendDescriptor // Thin read-only view.
+public sealed class CacheBackendDescriptor
 {
-    private readonly CacheBackendState _state; // Backing state.
+    private readonly CacheBackendState _state;
 
-    public CacheBackendDescriptor(CacheBackendState state) => _state = state; // Ctor expression.
-    public string Kind => _state.Kind; // Expose Kind for headers.
-}
+    public CacheBackendDescriptor(CacheBackendState state) => _state = state;
+    public string Kind => _state.Kind;
+} // Kết thúc CacheBackendDescriptor.

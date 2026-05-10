@@ -1,6 +1,6 @@
-using CommentAPI;
-using CommentAPI.DTOs;
-using CommentAPI.Entities;
+using CommentAPI; // SortByColumn — parse sort list user.
+using CommentAPI.DTOs; // UserDto, PagedResult projection.
+using CommentAPI.Entities; // User entity.
 
 // Hợp đồng truy cập dữ liệu user: tách EF khỏi dịch vụ, hỗ trợ kiểm thử thay thế.
 namespace CommentAPI.Interfaces;

@@ -1,6 +1,6 @@
 using CommentAPI; // ApiException, ApiErrorCodes, ApiMessages.
-using CommentAPI.DTOs;
-using CommentAPI.Entities;
+using CommentAPI.DTOs; // CommentDto / projection dùng khi sort map cache key.
+using CommentAPI.Entities; // Comment entity — tên cột whitelist sort.
 
 namespace CommentAPI.Repositories;
 
@@ -19,8 +19,11 @@ public partial class CommentRepository
 
     // Parse sort + sortDir: null sort → default list; legacy tên enum cũ hoặc số 0..4 (client vẫn có thể gửi).
     public SortByColumn ParseCommentListSortOrThrow(string? sort, string? sortDir, bool unpagedFlatDefaultsToCreatedAt = false)
-    {
+    { // Mở khối ParseCommentListSortOrThrow — chuẩn hóa sort query cho mọi route comment list.
+        // BƯỚC 1 — Parse hướng sortDir (null = asc; asc/desc/… hoặc throw ApiException).
         var desc = ParseSortDirectionOrThrow(sortDir);
+
+        // BƯỚC 2 — sort rỗng → default list hoặc default flat unpaged tùy cờ unpagedFlatDefaultsToCreatedAt.
         if (string.IsNullOrWhiteSpace(sort))
         {
             return unpagedFlatDefaultsToCreatedAt
@@ -28,6 +31,7 @@ public partial class CommentRepository
                 : CommentListSortDefault;
         }
 
+        // BƯỚC 3 — Legacy: tên enum/string + số 0..4 — hướng cố định trong mapping (bỏ qua sortDir).
         var t = sort.Trim();
 
         // Legacy — hướng đã nằm trong tên / mã, bỏ qua sortDir.
@@ -44,17 +48,17 @@ public partial class CommentRepository
 
         // Cột tự do: sortDir điều khiển hướng.
         return new SortByColumn(t, desc);
-    }
+    } // Kết thúc ParseCommentListSortOrThrow.
 
     // Mọi cột CTE × asc/desc — dùng xóa cache resource GET /api/posts/{id}/comments/* sau CRUD.
     public static IEnumerable<SortByColumn> EnumerateCommentCteSortSpecsForCache()
-    {
+    { // Mở khối EnumerateCommentCteSortSpecsForCache — sinh mọi biến thể sort whitelist cho khóa cache CTE.
         foreach (var col in new[] { "Id", "Content", "CreatedAt", "PostId", "UserId", "ParentId", "Level" })
         {
             yield return new SortByColumn(col, false);
             yield return new SortByColumn(col, true);
         }
-    }
+    } // Kết thúc EnumerateCommentCteSortSpecsForCache.
 
     // LINQ IQueryable<Comment>: các cột entity (không có Level).
     public IOrderedQueryable<Comment> ApplyUniversalSorting(IQueryable<Comment> query, SortByColumn spec) =>

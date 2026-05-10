@@ -1,73 +1,69 @@
-using CommentAPI.Data;
-using Microsoft.EntityFrameworkCore;
+using CommentAPI.Data; // AppDbContext — DbSet và SaveChangesAsync.
+using Microsoft.EntityFrameworkCore; // DbSet cụ thể, EF.Property, mở rộng IQueryable (Where, FirstOrDefaultAsync…).
 
 namespace CommentAPI.Repositories;
 
-// Lớp cơ sở: CRUD tối thiểu + lọc CreatedAt dùng chung cho repository kế thừa (Post, User, Comment, …).
+// CRUD generic tối thiểu + ApplyCreatedAtRange — repository Post/User/Comment kế thừa và bổ sung truy vấn.
 public abstract class RepositoryBase<TEntity> where TEntity : class
-{
-    // DbContext scoped do DI cấp — mọi repository con dùng chung một instance trong một request.
+{ // Mở khối RepositoryBase generic theo loại entity.
+    // DbContext theo scope request — một instance chung trong một HTTP request.
     protected readonly AppDbContext Context;
 
-    // BƯỚC 1: Lưu tham chiếu DbContext để các phương thức virtual CRUD truy cập Set<T> và SaveChanges.
+    // BƯỚC 1 — Lưu tham chiếu AppDbContext để Set entity, SaveChanges, v.v.
     protected RepositoryBase(AppDbContext context)
-    {
-        Context = context; // Gán vào trường protected để lớp con chỉ đọc, không tự tạo context.
-    }
+    { // Mở constructor.
+        Context = context; // Trường protected cho lớp con.
+    } // Kết thúc constructor.
 
-    // Truy cập DbSet<TEntity> qua API chung của EF — tránh lặp Context.Set<TEntity>() ở mọi chỗ.
+    // Shortcut tới DbSet của TEntity trong context hiện tại.
     protected DbSet<TEntity> Set => Context.Set<TEntity>();
 
-    // Mục đích: đọc một entity theo khóa Guid tên shadow property "Id" (chuẩn hóa cho mọi entity có cột Id).
-    // TRƯỜNG HỢP: Không có bản ghi → null; có → entity (có thể tracked tùy caller đã AsNoTracking hay chưa).
+    // Đọc một entity theo shadow property Id (chuẩn Guid) — không bắt buộc property C# tên Id.
     public virtual Task<TEntity?> GetByIdAsync(Guid id) =>
-        Set.FirstOrDefaultAsync(x => EF.Property<Guid>(x, "Id") == id); // So khóa bằng EF.Property để không phụ thuộc tên property C#.
+        Set.FirstOrDefaultAsync(x => EF.Property<Guid>(x, "Id") == id);
 
-    // Mục đích: đánh dấu entity mới — chưa ghi DB cho đến SaveChangesAsync.
+    // Đánh dấu Added — chờ SaveChangesAsync.
     public virtual async Task AddAsync(TEntity entity)
-    {
-        await Set.AddAsync(entity); // Đưa vào tracker trạng thái Added.
-    }
+    { // Mở AddAsync.
+        await Set.AddAsync(entity);
+    } // Kết thúc AddAsync.
 
-    // Mục đích: đánh dấu entity đã tồn tại là Modified — cập nhật khi SaveChanges.
+    // Đánh dấu Modified — cập nhật khi SaveChanges.
     public virtual void Update(TEntity entity)
-    {
-        Set.Update(entity); // Toàn bộ property có thể được ghi lại tùy cấu hình change tracking.
-    }
+    { // Mở Update.
+        Set.Update(entity);
+    } // Kết thúc Update.
 
-    // Mục đích: đánh dấu xóa (hoặc soft-delete nếu global filter / interceptor xử lý).
+    // Đánh dấu Deleted (hoặc soft-delete nếu có interceptor).
     public virtual void Remove(TEntity entity)
-    {
-        Set.Remove(entity); // Trạng thái Deleted trong change tracker.
-    }
+    { // Mở Remove.
+        Set.Remove(entity);
+    } // Kết thúc Remove.
 
-    // Mục đích: kiểm tra tồn tại theo Id mà không track — dùng cho validate FK nhanh.
+    // Kiểm tra tồn tại không track — chi phí nhẹ cho validate FK.
     public virtual Task<bool> ExistsAsync(Guid id) =>
-        Set.AsNoTracking().AnyAsync(x => EF.Property<Guid>(x, "Id") == id); // Any trả bool; không materialize entity.
+        Set.AsNoTracking().AnyAsync(x => EF.Property<Guid>(x, "Id") == id);
 
-    // Mục đích: flush mọi thay đổi (Insert/Update/Delete) xuống database trong một transaction mặc định của EF.
+    // Flush thay đổi một round-trip DB.
     public virtual Task SaveChangesAsync() =>
-        Context.SaveChangesAsync(); // Trả Task để caller await.
+        Context.SaveChangesAsync();
 
-    // Mục đích: áp điều kiện CreatedAt inclusive trên IQueryable — entity phải có cột CreatedAt map được qua EF.Property.
-    // BƯỚC 1: Nếu có createdAtFrom → thêm Where CreatedAt >= from.
-    // BƯỚC 2: Nếu có createdAtTo → thêm Where CreatedAt <= to.
-    // TRƯỜNG HỢP: Cả hai null → trả query gốc không đổi.
+    // Gắn WHERE CreatedAt từ mốc đến mốc (inclusive: cận dưới và cận trên); cả hai null thì query giữ nguyên.
     protected static IQueryable<TEntity> ApplyCreatedAtRange(
         IQueryable<TEntity> query,
         DateTime? createdAtFrom,
         DateTime? createdAtTo)
-    {
-        if (createdAtFrom is { } from) // Pattern: có giá trị cận dưới.
+    { // Mở ApplyCreatedAtRange.
+        if (createdAtFrom is { } from)
         {
-            query = query.Where(x => EF.Property<DateTime>(x, "CreatedAt") >= from); // Lọc từ mốc thời gian (bao gồm mốc).
+            query = query.Where(x => EF.Property<DateTime>(x, "CreatedAt") >= from);
         }
 
-        if (createdAtTo is { } to) // Pattern: có giá trị cận trên.
+        if (createdAtTo is { } to)
         {
-            query = query.Where(x => EF.Property<DateTime>(x, "CreatedAt") <= to); // Lọc đến mốc (bao gồm mốc).
+            query = query.Where(x => EF.Property<DateTime>(x, "CreatedAt") <= to);
         }
 
-        return query; // IQueryable chưa thực thi SQL — caller tiếp tục OrderBy/Skip/Take.
-    }
-}
+        return query;
+    } // Kết thúc ApplyCreatedAtRange.
+} // Kết thúc lớp RepositoryBase.

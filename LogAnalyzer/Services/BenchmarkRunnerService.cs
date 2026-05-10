@@ -26,6 +26,7 @@ public sealed class BenchmarkRunnerService : IBenchmarkRunner // Triển khai ru
         var readRuns = new List<BenchmarkRun>(2); // Hai kết quả đọc: Sync và Async.
 
         progress?.Invoke("Đang chạy: đọc Sync (ReadLines — duyệt toàn file)"); // Báo bắt đầu đọc đồng bộ.
+        CaptureProcess(out var cpuStartSync, out _); // Mốc CPU/RAM trước khi đo.
         var swReadSync = Stopwatch.StartNew(); // Bắt đầu đồng hồ Sync.
         long syncLineCount = 0; // Bộ đếm dòng Sync.
         foreach (var _ in _fileReader.ReadLines(path)) // Duyệt lazy từng dòng không lưu list.
@@ -34,13 +35,18 @@ public sealed class BenchmarkRunnerService : IBenchmarkRunner // Triển khai ru
         }
 
         swReadSync.Stop(); // Dừng đồng hồ.
-        progress?.Invoke($"Hoàn thành: đọc Sync ({swReadSync.ElapsedMilliseconds} ms, {syncLineCount:n0} dòng)"); // Báo ms và số dòng.
+        var (cpuMsSync, wsSync) = MeasureCpuAndWorkingSetAfter(cpuStartSync); // CPU đã dùng + WS sau bước.
+        progress?.Invoke(
+            $"Hoàn thành: đọc Sync ({swReadSync.ElapsedMilliseconds} ms wall, CPU ~{cpuMsSync} ms, WS ~{FormatMebiBytes(wsSync)}, {syncLineCount:n0} dòng)"); // Báo đầy đủ.
         readRuns.Add(new BenchmarkRun( // Ghi nhận kết quả đọc Sync.
             "Đọc đồng bộ (Sync ReadLines)", // Nhãn hiển thị.
             swReadSync.ElapsedMilliseconds, // Thời gian ms.
-            new List<FrequencyItem>())); // Không có tần suất ở pha đọc.
+            new List<FrequencyItem>(), // Không có tần suất ở pha đọc.
+            cpuMsSync, // CPU time trong khoảng.
+            wsSync)); // Working set sau bước.
 
         progress?.Invoke("Đang chạy: đọc Async (ReadLinesAsync — duyệt toàn file)"); // Báo đọc async.
+        CaptureProcess(out var cpuStartAsync, out _); // Mốc trước Async.
         var swReadAsync = Stopwatch.StartNew(); // Đồng hồ Async.
         long asyncLineCount = 0; // Đếm dòng Async.
         await foreach (var _ in _fileReader.ReadLinesAsync(path).ConfigureAwait(false)) // IAsyncEnumerable từng dòng.
@@ -49,11 +55,15 @@ public sealed class BenchmarkRunnerService : IBenchmarkRunner // Triển khai ru
         }
 
         swReadAsync.Stop(); // Dừng đồng hồ.
-        progress?.Invoke($"Hoàn thành: đọc Async ({swReadAsync.ElapsedMilliseconds} ms, {asyncLineCount:n0} dòng)"); // Báo kết quả.
+        var (cpuMsAsync, wsAsync) = MeasureCpuAndWorkingSetAfter(cpuStartAsync);
+        progress?.Invoke(
+            $"Hoàn thành: đọc Async ({swReadAsync.ElapsedMilliseconds} ms wall, CPU ~{cpuMsAsync} ms, WS ~{FormatMebiBytes(wsAsync)}, {asyncLineCount:n0} dòng)"); // Báo kết quả.
         readRuns.Add(new BenchmarkRun( // Ghi nhận Async.
             "Đọc bất đồng bộ (Async ReadLinesAsync)", // Nhãn.
             swReadAsync.ElapsedMilliseconds, // ms.
-            new List<FrequencyItem>())); // Không Items.
+            new List<FrequencyItem>(), // Không Items.
+            cpuMsAsync,
+            wsAsync));
 
         if (asyncLineCount != syncLineCount) // Hai lần đọc phải cùng số dòng.
         {
@@ -106,16 +116,19 @@ public sealed class BenchmarkRunnerService : IBenchmarkRunner // Triển khai ru
     {
         progress?.Invoke($"Đang chạy: {label}"); // Báo bắt đầu phép đo.
 
+        CaptureProcess(out var cpuStart, out _); // Mốc CPU trước đếm.
         var sw = Stopwatch.StartNew(); // Đồng hồ.
 
         var items = await action().ConfigureAwait(false); // Chạy đếm (Sequential/Parallel/PLINQ).
 
         sw.Stop(); // Dừng.
 
-        progress?.Invoke($"Hoàn thành: {label} ({sw.ElapsedMilliseconds} ms)"); // Báo thời gian.
+        var (cpuMs, wsBytes) = MeasureCpuAndWorkingSetAfter(cpuStart);
+        progress?.Invoke(
+            $"Hoàn thành: {label} ({sw.ElapsedMilliseconds} ms wall, CPU ~{cpuMs} ms, WS ~{FormatMebiBytes(wsBytes)})"); // Báo wall + CPU + RAM.
 
         var storedItems = attachItems ? items : new List<FrequencyItem>(); // Giữ hoặc vứt list kết quả.
-        return new BenchmarkRun(label, sw.ElapsedMilliseconds, storedItems); // Gói kết quả một lần chạy.
+        return new BenchmarkRun(label, sw.ElapsedMilliseconds, storedItems, cpuMs, wsBytes); // Gói kết quả một lần chạy.
     }
 
     // Nhiệm vụ: một lượt ReadLines + cập nhật một Dictionary + SortDictionary. Cách làm: foreach line AddLineToCounts.
@@ -274,5 +287,34 @@ public sealed class BenchmarkRunnerService : IBenchmarkRunner // Triển khai ru
         }
 
         return total; // Tổng occurrences.
+    }
+
+    // Chụp Process.TotalProcessorTime và WorkingSet64 (gọi Refresh trước khi đọc).
+    private static void CaptureProcess(out TimeSpan cpuTime, out long workingSet64)
+    {
+        var p = Process.GetCurrentProcess();
+        p.Refresh();
+        cpuTime = p.TotalProcessorTime;
+        workingSet64 = p.WorkingSet64;
+    }
+
+    // CPU đã tiêu thụ (ms) trong khoảng từ cpuAtStart; Working set hiện tại sau bước.
+    private static (long CpuTimeMs, long WorkingSetBytes) MeasureCpuAndWorkingSetAfter(TimeSpan cpuAtStart)
+    {
+        CaptureProcess(out var cpuEnd, out var ws);
+        var cpuMs = (long)Math.Max(0, (cpuEnd - cpuAtStart).TotalMilliseconds);
+        return (cpuMs, ws);
+    }
+
+    // Chuỗi ngắn MiB cho log (1 MiB = 1024² byte).
+    private static string FormatMebiBytes(long bytes)
+    {
+        if (bytes <= 0)
+        {
+            return "0 MiB";
+        }
+
+        var mib = bytes / (1024.0 * 1024.0);
+        return $"{mib:F2} MiB";
     }
 }

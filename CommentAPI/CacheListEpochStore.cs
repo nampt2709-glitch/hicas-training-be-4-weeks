@@ -1,6 +1,6 @@
-using System.Globalization;
-using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.Logging;
+using System.Globalization; // CultureInfo.InvariantCulture khi parse/ghi chuỗi số epoch vào cache.
+using Microsoft.Extensions.Caching.Distributed; // IDistributedCache — Redis hoặc memory backend từ Program.
+using Microsoft.Extensions.Logging; // ILogger — log mềm khi đọc/ghi epoch thất bại (CRUD không fail).
 
 namespace CommentAPI;
 
@@ -130,7 +130,7 @@ public sealed class CacheListEpochStore : ICacheListEpochStore
         catch (Exception ex) // Timeout / Redis down / lỗi mạng.
         {
             // BƯỚC degrade — Log ở mức Debug (không spam production); trả 0 ⇒ cache key không đổi epoch ⇒ vẫn có thể hit cache cũ trong TTL nếu mạng Redis hỏng một phía — trade-off có chủ đích.
-            _log.LogDebug(ex, "ReadEpochAsync miss cho {Key}; dùng 0.", key);
+            _log.LogDebug(ex, "ReadEpochAsync miss for {Key}; using 0.", key);
             return 0;
         }
     }
@@ -177,7 +177,7 @@ public sealed class CacheListEpochStore : ICacheListEpochStore
         catch (Exception ex) // Mọi lỗi cache khác.
         {
             // BƯỚC degrade — chỉ log; CRUD không throw vì không thể Bump.
-            _log.LogDebug(ex, "BumpEpochAsync lỗi cho {Key}; bỏ qua.", key);
+            _log.LogDebug(ex, "BumpEpochAsync failed for {Key}; skipping.", key);
         }
     }
 
@@ -196,7 +196,7 @@ public sealed class CacheListEpochStore : ICacheListEpochStore
         }
         catch (Exception ex) // Lại fail — chỉ log.
         {
-            _log.LogDebug(ex, "TryWriteEpochAsync lỗi cho {Key}.", key);
+            _log.LogDebug(ex, "TryWriteEpochAsync failed for {Key}.", key);
         }
     }
 }

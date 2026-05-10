@@ -1,18 +1,19 @@
+// File: entity phản hồi — cây cha-con, đính kèm, tác giả User.
 namespace ApartmentAPI.Entities;
 
-// Phản hồi — cây cha-con, Attachments, User tác giả.
+// Nội dung phản hồi + ParentId (thread), cờ resolved/pinned, collection Attachments.
 public class Feedback : BaseEntity
-{
-    public string Content { get; set; } = string.Empty;
-    public bool IsResolved { get; set; }
-    public bool IsPinned { get; set; }
+{ // Mở khối Feedback.
+    public string Content { get; set; } = string.Empty; // Nội dung văn bản.
+    public bool IsResolved { get; set; } // Đã xử lý xong.
+    public bool IsPinned { get; set; } // Ghim lên đầu danh sách.
 
-    public Guid UserId { get; set; }
-    public User User { get; set; } = null!;
+    public Guid UserId { get; set; } // FK tác giả (bắt buộc).
+    public User User { get; set; } = null!; // Navigation tới User.
 
-    public Guid? ParentId { get; set; }
-    public Feedback? Parent { get; set; }
-    public ICollection<Feedback> Children { get; set; } = new List<Feedback>();
+    public Guid? ParentId { get; set; } // FK comment cha (null = gốc thread).
+    public Feedback? Parent { get; set; } // Navigation cha.
+    public ICollection<Feedback> Children { get; set; } = new List<Feedback>(); // Con trực tiếp.
 
-    public ICollection<Attachment> Attachments { get; set; } = new List<Attachment>();
-}
+    public ICollection<Attachment> Attachments { get; set; } = new List<Attachment>(); // File đính kèm feedback.
+} // Kết thúc Feedback.

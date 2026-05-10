@@ -1,3 +1,7 @@
+// =============================================================================
+// CommentDtos.cs: hợp đồng JSON cho resource Comment — CRUD, list phẳng, CTE, cây lồng, flatten, demo loading.
+// Mapper (AutoMapper profile) và FluentValidation tham chiếu các lớp trong file này.
+// =============================================================================
 namespace CommentAPI.DTOs;
 
 // Tạo comment: nội dung, bài, tác giả, cha; Admin route gắn User từ DTO nghiệp vụ.

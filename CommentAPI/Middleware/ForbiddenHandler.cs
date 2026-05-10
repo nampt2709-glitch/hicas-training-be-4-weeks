@@ -1,6 +1,8 @@
-using CommentAPI;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Authorization.Policy;
+using System.Security.Claims; // ClaimTypes — đọc roles/sub khi log 403.
+using CommentAPI; // ApiMessages, ApiErrorCodes.
+using CommentAPI.Logging; // StructuredFileLogger.Security.
+using Microsoft.AspNetCore.Authorization; // AuthorizationPolicy, PolicyAuthorizationResult.
+using Microsoft.AspNetCore.Authorization.Policy; // IAuthorizationMiddlewareResultHandler.
 
 namespace CommentAPI.Middleware;
 
@@ -32,6 +34,20 @@ public sealed class ForbiddenHandler : IAuthorizationMiddlewareResultHandler // 
                     message = ApiMessages.InsufficientPermission // Thông điệp người dùng.
                 })
                 .ConfigureAwait(false); // Tránh capture sync context.
+            var uid = context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? ""; // User id nếu đã xác thực.
+            var uname = context.User.Identity?.Name
+                        ?? context.User.FindFirstValue(ClaimTypes.Name)
+                        ?? context.User.FindFirstValue("unique_name")
+                        ?? ""; // Tên hiển thị tốt nhất có được.
+            StructuredFileLogger.Security( // Nhóm SECURITY: đủ auth nhưng role/policy không cho phép.
+                correlationId,
+                "ForbiddenInsufficientRole",
+                context.Request.Method,
+                context.Request.Path.Value ?? "",
+                StatusCodes.Status403Forbidden,
+                ApiMessages.InsufficientPermission,
+                string.IsNullOrEmpty(uname) ? null : uname,
+                string.IsNullOrEmpty(uid) ? null : uid);
             return; // Kết thúc pipeline tại đây.
         }
 

@@ -1,22 +1,23 @@
-using CommentAPI;
-using CommentAPI.Entities;
-using CommentAPI.Data;
-using CommentAPI.DTOs;
-using CommentAPI.Interfaces;
-using Microsoft.EntityFrameworkCore;
+using CommentAPI; // ApiException, ApiErrorCodes, ApiMessages, SortByColumn (parse sort list post).
+using CommentAPI.Entities; // Thực thể Post — map DbSet.
+using CommentAPI.Data; // AppDbContext.
+using CommentAPI.DTOs; // PostDto projection.
+using CommentAPI.Interfaces; // IPostRepository.
+using Microsoft.EntityFrameworkCore; // AsNoTracking, LongCountAsync, Select, Where, v.v.
 
 namespace CommentAPI.Repositories;
 
-// Truy vấn bảng Post: danh sách phân trang projection PostDto + đọc một bài theo Id.
+// Truy vấn bảng Post: phân trang projection PostDto + đọc một bài theo Id.
 public partial class PostRepository : RepositoryBase<Post>, IPostRepository
 {
     #region Trường & hàm tạo
 
     // BƯỚC 1: Gọi base(context) để gán Context; không cần trường riêng vì đã có Context protected.
+    // BƯỚC 1 — Gọi base(context) để gán Context cho RepositoryBase<Post>; DbSet Posts dùng qua Context.Posts.
     public PostRepository(AppDbContext context)
         : base(context)
     {
-    }
+    } // Kết thúc constructor PostRepository.
 
     #endregion
 
@@ -88,12 +89,12 @@ public partial class PostRepository : RepositoryBase<Post>, IPostRepository
 
     // Helper legacy: toàn bộ entity Post không track — ít dùng trong API hiện tại nhưng giữ cho script/tool.
     public async Task<List<Post>> GetAllAsync()
-    {
+    { // Mở GetAllAsync.
         return await Context.Posts // DbSet Post.
             .AsNoTracking() // Read-only.
             .OrderByDescending(x => x.CreatedAt) // Mới trước.
             .ToListAsync(); // Materialize toàn bộ — cẩn thận khối lượng lớn trên production.
-    }
+    } // Kết thúc GetAllAsync.
 
     #endregion
-}
+} // Kết thúc lớp PostRepository (partial — sort nằm PostRepository.Sorting.cs).

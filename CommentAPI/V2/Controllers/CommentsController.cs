@@ -1,15 +1,19 @@
-using CommentAPI; 
-using CommentAPI.DTOs; 
-using CommentAPI.Interfaces;
-using CommentAPI.Validators;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http; 
-using Microsoft.AspNetCore.Mvc;
-namespace CommentAPI.Controllers; 
+using CommentAPI; // ApiException, PaginationQuery, CreatedAtRangeQuery dùng chung.
+using Asp.Versioning; // [ApiVersion] gắn phiên bản 2.0 vào controller.
+using CommentAPI.Controllers; // HttpContextUserId lấy user id bắt buộc khi cần.
+using CommentAPI.DTOs; // CreateCommentDto, UpdateCommentDto, AdminUpdateCommentDto, phân trang.
+using CommentAPI.Interfaces; // ICommentService, ICommentRepository.
+using CommentAPI.Validators; // FluentValidation cho body comment.
+using Microsoft.AspNetCore.Authorization; // [Authorize(Roles = "...")].
+using Microsoft.AspNetCore.Http; // StatusCodes trong một số phản hồi lỗi có chủ đích.
+using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult, FromQuery/FromBody.
+namespace CommentAPI.V2.Controllers; 
 
 [ApiController] // Web API.
+[ApiVersion("2.0")] // Phiên bản 2.0 trong URL.
+
 [Authorize] // JWT.
-[Route("api/comments")] // Base path.
+[Route("api/v{version:apiVersion}/comments")] // Base path có version.
 public class CommentsController : ControllerBase // JSON only.
 {
     private readonly ICommentService _service; // Service comment phức tạp (cây, CTE, demo loading).
@@ -107,7 +111,7 @@ public class CommentsController : ControllerBase // JSON only.
 
     // [6] PUT /api/admin/comments/{id}
     // Route tuyệt đối: Admin sửa mọi comment với DTO đầy đủ; service chặn chu trình/sai cây thay vì tách controller.
-    [HttpPut("~/api/admin/comments/{id:guid}")] // Admin absolute route.
+    [HttpPut("~/api/v{version:apiVersion}/admin/comments/{id:guid}")] // Admin absolute route có segment version.
     [Authorize(Roles = "Admin")] // Admin only.
     public async Task<IActionResult> UpdateAsAdmin(Guid id, [FromBody] AdminUpdateCommentDto dto) // Payload đầy đủ trường cho Admin.
     { // Mở action UpdateAsAdmin.

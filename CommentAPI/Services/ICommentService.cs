@@ -1,5 +1,5 @@
-using CommentAPI;
-using CommentAPI.DTOs;
+using CommentAPI; // PagedResult, SortByColumn — tham số sort danh sách comment.
+using CommentAPI.DTOs; // CommentDto, CommentFlatDto, CommentCteDto, CreateCommentDto, v.v.
 
 // Hợp đồng dịch vụ: thứ tự thành viên bám CommentsController (GET → CRUD → flat/cte/tree → demo danh sách), rồi bổ trợ không map route trực tiếp.
 

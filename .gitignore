@@ -62,6 +62,7 @@ artifacts/
 **/App_Data/*.db-wal
 **/appsettings.*.local.json
 **/secrets.json
+ApartmentAPI/uploads/
 
 ## Others
 *.dbmdl
@@ -80,11 +81,13 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-## Docker / local secrets (uncomment if you keep local-only env files)
-/.env
-CommentAPI/.env
-ApartmentAPI/.env
+## Docker / local secrets — mọi file tên .env (không áp vào *.env.example)
+**/.env
 *.env.local
+
+## k6 load test — giữ thư mục Results/ và .gitkeep; không commit kết quả chạy (JSON/TXT)
+k6/Results/**/*.json
+k6/Results/**/*.txt
 
 ## Agent / local scratch output (do not commit — flat copies of build/test outputs)
 .tmp-*/

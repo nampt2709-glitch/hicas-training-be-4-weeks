@@ -1,5 +1,5 @@
-using CommentAPI;
-using CommentAPI.DTOs;
+using CommentAPI; // SortByColumn cho list user.
+using CommentAPI.DTOs; // UserDto, Create/Update user, PagedResult.
 
 // Hợp đồng dịch vụ người dùng: tách khỏi controller và lớp UserRepository.
 namespace CommentAPI.Interfaces;

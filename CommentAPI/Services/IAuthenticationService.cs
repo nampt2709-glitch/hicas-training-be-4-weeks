@@ -1,4 +1,4 @@
-using CommentAPI.DTOs;
+using CommentAPI.DTOs; // SignUp, Login, Refresh, TokenResponse — hợp đồng auth.
 
 // Không gian tên: hợp đồng tầng dịch vụ, tách giao diện khỏi lớp cụ thể, — phục vụ thêm unit test, DI mô phỏng.
 namespace CommentAPI.Interfaces;

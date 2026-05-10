@@ -13,4 +13,4 @@ public class Post
     public virtual User? User { get; set; } // Navigation tùy chọn: nạp user chủ bài, virtual cho proxy lazy nếu bật.
 
     public virtual ICollection<Comment> Comments { get; set; } = new List<Comment>(); // Tập comment con, khởi tạo list rỗng để tránh null, virtual cho proxy.
-}
+} // Kết thúc lớp Post.

@@ -24,10 +24,13 @@ public class AuthenticationServiceTests
 
     private static AuthenticationService CreateSut(Mock<IAuthenticationRepository> auth, IUserService? userService = null)
     {
+        var httpAccessor = new Mock<IHttpContextAccessor>(); // HttpContext null → LogSecurity bỏ qua an toàn trong unit test.
+        httpAccessor.Setup(x => x.HttpContext).Returns((HttpContext?)null);
         return new AuthenticationService(
             auth.Object,
             userService ?? Mock.Of<IUserService>(MockBehavior.Strict),
-            Options.Create(TestJwt));
+            Options.Create(TestJwt),
+            httpAccessor.Object);
     }
 
     // F.I.R.S.T: không lộ thông tin tài khoản.

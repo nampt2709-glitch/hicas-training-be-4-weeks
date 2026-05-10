@@ -1,8 +1,8 @@
 // Phân trang: response có metadata (trang, tổng, tổng số trang) và helper chuẩn hóa page/pageSize từ query.
-using System.Globalization;
-using System.Text.Json.Serialization;
-using CommentAPI;
-using Microsoft.AspNetCore.Http;
+using System.Globalization; // InvariantCulture khi format thông báo PageSizeExceedsMax.
+using System.Text.Json.Serialization; // JsonIgnoreCondition — ẩn TotalCommentsInDb khi null.
+using CommentAPI; // ApiMessages cho lỗi pageSize quá lớn.
+using Microsoft.AspNetCore.Http; // StatusCodes cho ApiException trong PaginationQuery.
 
 namespace CommentAPI.DTOs;
 

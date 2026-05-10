@@ -16,4 +16,4 @@ public class User : IdentityUser<Guid>
 
     // Các bình luận user viết; virtual cho lazy/INCLUDE từ phía user.
     public virtual ICollection<Comment> Comments { get; set; } = new List<Comment>();
-}
+} // Kết thúc lớp User.

@@ -1,21 +1,25 @@
-using CommentAPI.Entities; 
-using Microsoft.AspNetCore.Identity; 
-using Microsoft.AspNetCore.Identity.EntityFrameworkCore; 
-using Microsoft.EntityFrameworkCore; 
+using CommentAPI.Entities; // Post, Comment, User — DbSet và quan hệ fluent.
+using Microsoft.AspNetCore.Identity; // IdentityRole<Guid> generic cho AddIdentityCore.
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore; // IdentityDbContext base.
+using Microsoft.EntityFrameworkCore; // DbContext, ModelBuilder, DeleteBehavior, v.v.
 
 namespace CommentAPI.Data;
 
+// DbContext: Identity (Users/AspNet*) + nghiệp vụ Post/Comment; migration phản ánh OnModelCreating.
 public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
-{
+{ // Mở khối lớp AppDbContext.
 
+    // Bảng bài viết — tên bảng mặc định theo convention trừ khi ToTable ở entity.
     public DbSet<Post> Posts => Set<Post>();
 
-    public DbSet<Comment> Comments => Set<Comment>(); 
+    // Bảng bình luận — quan hệ cây Parent/Children cấu hình dưới OnModelCreating.
+    public DbSet<Comment> Comments => Set<Comment>();
 
-
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) 
-    { 
-    } 
+    // BƯỚC 1 — Gọi base(options) để khởi tạo IdentityDbContext với provider SQL Server từ Program.
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
+    { // Mở khối constructor.
+        // Không cần gán thêm: options đã chứa UseSqlServer + interceptor từ AddDbContext.
+    } // Kết thúc constructor.
 
     // Cấu hình model ánh xạ, gọi base để tạo bảng Identity, rồi tùy chỉnh từng thực thể nghiệp vụ.
     protected override void OnModelCreating(ModelBuilder modelBuilder) // ModelBuilder: fluent API, không cần attribute trên nhiều cột; migration phản ánh ánh xạ này.
@@ -69,6 +73,5 @@ public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
             entity.HasIndex(x => new { x.UserId, x.CreatedAt, x.Id }); // Hỗ trợ query theo user + phân trang/sắp xếp.
             entity.HasIndex(x => new { x.ParentId, x.CreatedAt, x.Id }); // Hỗ trợ lấy root/children và duyệt cây theo thời gian.
         }); // Hết ánh xạ comment, tạo index có tên, migration phản ánh, — không tự sinh cột Level (tính ở tầng ứng dụng, không bảng).
-    } 
-    // Kết hàm tạo model, migration sinh/ cập nhật DB khi bạn cần add migration.
-} // Kết lớp AppDbContext, dùng AddDbContext, scope, pool tùy cấu hình.
+    } // Kết thúc OnModelCreating.
+} // Kết thúc lớp AppDbContext.

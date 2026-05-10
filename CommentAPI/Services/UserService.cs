@@ -1,13 +1,13 @@
-using AutoMapper;
-using CommentAPI;
-using CommentAPI.Data;
-using CommentAPI.DTOs;
-using CommentAPI.Entities;
-using CommentAPI.Interfaces;
-using CommentAPI.Repositories;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
+using AutoMapper; // IUserService DTO projection và ánh xạ User scalar.
+using CommentAPI; // ApiException, ApiMessages, ApiErrorCodes, EntityCacheKeys pattern.
+using CommentAPI.Data; // AppDbContext — xóa comment lạc trước khi xóa user.
+using CommentAPI.DTOs; // UserDto, PagedResult, CreateUserDto, ...
+using CommentAPI.Entities; // User entity : IdentityUser.
+using CommentAPI.Interfaces; // IUserService, IUserRepository.
+using CommentAPI.Repositories; // IUserRepository implementation contracts.
+using Microsoft.AspNetCore.Http; // StatusCodes trong ApiException.
+using Microsoft.AspNetCore.Identity; // UserManager, RoleManager, IdentityRole.
+using Microsoft.EntityFrameworkCore; // ExecuteDeleteAsync, DbSet — dọn comment FK.
 
 namespace CommentAPI.Services;
 
@@ -32,14 +32,20 @@ public class UserService : ServiceBase, IUserService
         AppDbContext dbContext,
         ICacheListEpochStore listEpoch)
         : base(cache)
-    {
-        _repository = repository;
-        _userManager = userManager;
-        _roleManager = roleManager;
-        _mapper = mapper;
-        _dbContext = dbContext;
-        _listEpoch = listEpoch;
-    }
+    { // Mở khối constructor UserService.
+        // BƯỚC 1 — Gán repository phân trang/batch roles.
+        _repository = repository; // IUserRepository: GetPagedAsync, GetByIdAsync, v.v.
+        // BƯỚC 2 — Gán UserManager cho Create/roles/SetUserName/Delete.
+        _userManager = userManager; // Identity.
+        // BƯỚC 3 — Gán RoleManager kiểm tra role tồn tại trước khi gán Admin/User.
+        _roleManager = roleManager; // AspNetRoles.
+        // BƯỚC 4 — Gán AutoMapper cho User → UserDto scalar.
+        _mapper = mapper; // MappingProfile.
+        // BƯỚC 5 — Gán DbContext để xóa comment “lạc” trước khi xóa user (FK No Action).
+        _dbContext = dbContext; // AppDbContext scoped.
+        // BƯỚC 6 — Gán epoch store — bump usr/cmt khi CRUD ảnh hưởng list.
+        _listEpoch = listEpoch; // ICacheListEpochStore.
+    } // Kết thúc constructor UserService.
 
     #endregion
 
@@ -112,12 +118,14 @@ public class UserService : ServiceBase, IUserService
 
     // [2] GET /api/users/{id} — cache-aside; miss thì MapToDtoAsync kèm roles live từ UserManager.
     public async Task<UserDto> GetByIdAsync(Guid id)
-    {
-        var cacheKey = EntityCacheKeys.User(id);
+    { // Mở khối GetByIdAsync.
+        // BƯỚC 1 — Thử cache chi tiết user (EntityCacheKeys.User).
+        var cacheKey = EntityCacheKeys.User(id); // Khóa u:{id:N}.
         var cached = await Cache.GetJsonAsync<UserDto>(cacheKey, CancellationToken.None);
-        if (cached is not null)
-            return cached;
+        if (cached is not null) // Hit.
+            return cached; // Không đọc DB.
 
+        // BƯỚC 2 — Tải entity; null → 404 ApiException.
         var entity = await _repository.GetByIdAsync(id);
         if (entity is null)
         {
@@ -127,10 +135,11 @@ public class UserService : ServiceBase, IUserService
                 ApiMessages.UserNotFound);
         }
 
+        // BƯỚC 3 — Map + roles live từ UserManager, ghi cache, trả DTO.
         var dto = await MapToDtoAsync(entity);
         await Cache.SetJsonAsync(cacheKey, dto, default);
         return dto;
-    }
+    } // Kết thúc GetByIdAsync.
 
     // [3] POST /api/users — tạo Identity user + role User; conflict username → 409.
     public async Task<UserDto> CreateAsync(CreateUserDto dto)

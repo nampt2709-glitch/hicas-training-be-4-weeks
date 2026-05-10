@@ -88,4 +88,34 @@ public class ReaderTests
             }
         });
     }
+
+    // F.I.R.S.T — CancellationToken truyền xuống File.ReadLinesAsync.
+    // 3A — Arrange: file nhiều dòng + token đã hủy. Act: foreach async. Assert: TaskCanceledException hoặc OperationCanceledException.
+    [Fact]
+    public async Task RT05_ReadLinesAsync_ShouldThrow_WhenCancellationRequested()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"loganalyzer_cancel_{Guid.NewGuid():N}.txt");
+        await File.WriteAllLinesAsync(tempFile, Enumerable.Repeat("x", 500), Encoding.UTF8);
+
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+            IFileReader reader = new FileReaderService();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            {
+                await foreach (var _ in reader.ReadLinesAsync(tempFile, cts.Token))
+                {
+                }
+            });
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
+            {
+                File.Delete(tempFile);
+            }
+        }
+    }
 }

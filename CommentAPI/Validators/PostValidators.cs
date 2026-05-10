@@ -1,5 +1,5 @@
-using CommentAPI.DTOs; 
-using FluentValidation; 
+using CommentAPI.DTOs; // CreatePostDto, UpdatePostDto.
+using FluentValidation; // AbstractValidator. 
 
 namespace CommentAPI.Validators; 
 

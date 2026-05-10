@@ -148,20 +148,29 @@ public static class Program
     private static void PrintBenchmarkSummaryToConsole(BenchmarkReport report)
     {
         Console.WriteLine(); // Dòng trống.
-        Console.WriteLine("===== THỜI GIAN ĐỌC FILE (ms) ====="); // Tiêu đề khối đọc.
-        Console.WriteLine($"{"Thao tác",-45}{"Thời gian (ms)",15}"); // Header hai cột.
+        Console.WriteLine($"Máy: {Environment.MachineName} | Số lõi (ProcessorCount): {Environment.ProcessorCount}"); // Bối cảnh phần cứng.
+
+        Console.WriteLine(); // Dòng trống.
+        Console.WriteLine("===== THỜI GIAN ĐỌC FILE (wall / CPU / RAM) ====="); // Wall, CPU tiến trình, working set sau bước.
+        Console.WriteLine($"{"Thao tác",-45}{"Wall (ms)",12}{"CPU (ms)",12}{"RAM (MiB)",14}"); // Bốn cột.
         foreach (var run in report.ReadRuns) // Sync rồi Async.
         {
-            Console.WriteLine($"{run.Label,-45}{run.ElapsedMilliseconds,15}"); // Một dòng kết quả đọc.
+            Console.WriteLine(
+                $"{run.Label,-45}{run.ElapsedMilliseconds,12}{run.CpuTimeMilliseconds,12}{FormatMebiBytesConsole(run.WorkingSetBytes),14}");
         }
 
         Console.WriteLine();
-        Console.WriteLine("===== THỜI GIAN ĐẾM TẦN SUẤT (ms) ====="); // Tiêu đề khối đếm.
-        Console.WriteLine($"{"Phương pháp",-45}{"Thời gian (ms)",15}"); // Header.
+        Console.WriteLine("===== THỜI GIAN ĐẾM TẦN SUẤT (wall / CPU / RAM) ====="); // Ba phương pháp đếm.
+        Console.WriteLine($"{"Phương pháp",-45}{"Wall (ms)",12}{"CPU (ms)",12}{"RAM (MiB)",14}"); // Header.
         foreach (var run in report.CountRuns) // Ba phương pháp đếm.
         {
-            Console.WriteLine($"{run.Label,-45}{run.ElapsedMilliseconds,15}"); // Nhãn + ms.
+            Console.WriteLine(
+                $"{run.Label,-45}{run.ElapsedMilliseconds,12}{run.CpuTimeMilliseconds,12}{FormatMebiBytesConsole(run.WorkingSetBytes),14}");
         }
+
+        Console.WriteLine();
+        Console.WriteLine("Ghi chú: CPU = thời gian CPU tiến trình (cộng dồn luồng), có thể > Wall khi Parallel/PLINQ.");
+        Console.WriteLine("        RAM = Working Set sau từng bước (snapshot, không phải peak tuyệt đối).");
 
         Console.WriteLine();
         if (report.Mode == AnalysisMode.Word) // Thống kê theo từ.
@@ -189,6 +198,17 @@ public static class Program
                 Console.WriteLine($"{i + 1,4}. {item.Name} — {item.Count}"); // In STT, tên, count.
             }
         }
+    }
+
+    // Hiển thị MiB trên console (hai chữ số thập phân).
+    private static string FormatMebiBytesConsole(long bytes)
+    {
+        if (bytes <= 0)
+        {
+            return "0.00";
+        }
+
+        return (bytes / (1024.0 * 1024.0)).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     // Nhiệm vụ: chỉ sinh file log lỗi 1M dòng. Cách làm: gọi logGenerator.Generate rồi in đường dẫn; trả CompletedTask.

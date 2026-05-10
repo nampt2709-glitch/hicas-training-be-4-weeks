@@ -1,8 +1,13 @@
-using ApartmentAPI.V1.DTOs;
-using ApartmentAPI.Entities;
-using FluentValidation;
+using System.Globalization; // InvariantCulture format message kích thước file upload.
+using ApartmentAPI.V1.DTOs; // Toàn bộ Create/Update DTO + form model đính kèm.
+using ApartmentAPI.Validators; // AttachmentBinarySignatures kiểm tra magic byte (namespace ApartmentAPI.Validators).
+using FluentValidation; // AbstractValidator, RuleFor — quy tắc validate DTO/form.
+using Microsoft.AspNetCore.Http; // IFormFile multipart.
+using Microsoft.Extensions.Options; // IOptions AttachmentStorageOptions.
 
 namespace ApartmentAPI.V1.Validators;
+
+// Tập FluentValidation tự chạy nhờ AddFluentValidationAutoValidation — đăng ký assembly qua CreateApartmentValidator trong Program.cs.
 
 // Validator tạo căn hộ: số phòng, tầng, diện tích, số cư dân tối đa.
 public sealed class CreateApartmentValidator : AbstractValidator<CreateApartmentDto>
@@ -40,6 +45,7 @@ public sealed class CreateResidentValidator : AbstractValidator<CreateResidentDt
     }
 }
 
+// Cập nhật cư dân: khớp khối trường với CreateResidentDto.
 public sealed class UpdateResidentValidator : AbstractValidator<UpdateResidentDto>
 {
     public UpdateResidentValidator()
@@ -62,6 +68,7 @@ public sealed class CreateUtilityServiceValidator : AbstractValidator<CreateUtil
     }
 }
 
+// Cập nhật tiện ích: không đổi quy tắc khối tạo (name/price/unit).
 public sealed class UpdateUtilityServiceValidator : AbstractValidator<UpdateUtilityServiceDto>
 {
     public UpdateUtilityServiceValidator()
@@ -86,6 +93,7 @@ public sealed class CreateInvoiceValidator : AbstractValidator<CreateInvoiceDto>
     }
 }
 
+// Cập nhật hóa đơn: tái khẳng định FK ApartmentId và số học không âm.
 public sealed class UpdateInvoiceValidator : AbstractValidator<UpdateInvoiceDto>
 {
     public UpdateInvoiceValidator()
@@ -112,6 +120,7 @@ public sealed class CreateInvoiceItemValidator : AbstractValidator<CreateInvoice
     }
 }
 
+// Cập nhật dòng hóa đơn: giữ FK Invoice và Service không rỗng.
 public sealed class UpdateInvoiceItemValidator : AbstractValidator<UpdateInvoiceItemDto>
 {
     public UpdateInvoiceItemValidator()
@@ -134,6 +143,7 @@ public sealed class CreateFeedbackValidator : AbstractValidator<CreateFeedbackDt
     }
 }
 
+// Cập nhật feedback: chủ yếu nội dung và cờ Resolved/Pinned — không tái ép UserId từ DTO PUT.
 public sealed class UpdateFeedbackValidator : AbstractValidator<UpdateFeedbackDto>
 {
     public UpdateFeedbackValidator()
@@ -142,28 +152,211 @@ public sealed class UpdateFeedbackValidator : AbstractValidator<UpdateFeedbackDt
     }
 }
 
-// Validator đính kèm: tên file, đường dẫn lưu, MIME.
-public sealed class CreateAttachmentValidator : AbstractValidator<CreateAttachmentDto>
+// Admin PUT feedback: đủ scalar; UserId không được Guid.Empty; ParentId tuỳ chọn (null = gốc).
+public sealed class AdminUpdateFeedbackValidator : AbstractValidator<AdminUpdateFeedbackDto>
 {
-    public CreateAttachmentValidator()
+    public AdminUpdateFeedbackValidator()
     {
-        RuleFor(x => x.OriginalFileName).NotEmpty().MaximumLength(512);
-        RuleFor(x => x.StoredFileName).NotEmpty().MaximumLength(512);
-        RuleFor(x => x.FilePath).NotEmpty().MaximumLength(2048);
-        RuleFor(x => x.ContentType).NotEmpty().MaximumLength(256);
-        RuleFor(x => x.FileSize).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.Content).NotEmpty().MaximumLength(8000);
+        RuleFor(x => x.UserId).NotEqual(Guid.Empty);
     }
 }
 
-public sealed class UpdateAttachmentValidator : AbstractValidator<UpdateAttachmentDto>
+// Validator multipart tạo avatar: chỉ kiểm file (route đã cố định user đích).
+public sealed class CreateAvatarAttachmentUploadValidator : AbstractValidator<AvatarAttachmentUploadModel>
 {
-    public UpdateAttachmentValidator()
+    private static readonly HashSet<string> AllowedExt =
+        new(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf" };
+
+    public CreateAvatarAttachmentUploadValidator(IOptions<AttachmentStorageOptions> opt)
     {
-        RuleFor(x => x.OriginalFileName).NotEmpty().MaximumLength(512);
-        RuleFor(x => x.StoredFileName).NotEmpty().MaximumLength(512);
-        RuleFor(x => x.FilePath).NotEmpty().MaximumLength(2048);
-        RuleFor(x => x.ContentType).NotEmpty().MaximumLength(256);
-        RuleFor(x => x.FileSize).GreaterThanOrEqualTo(0);
+        var max = opt.Value.MaxFileSizeBytes;
+
+        RuleFor(x => x.File).NotNull().WithMessage(ApiMessages.AttachmentUploadFileRequired);
+
+        RuleFor(x => x.File)
+            .Must(f => f is { Length: > 0 })
+            .When(x => x.File != null)
+            .WithMessage(ApiMessages.AttachmentUploadFileEmpty);
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || f!.Length <= max)
+            .WithMessage(string.Format(CultureInfo.InvariantCulture, ApiMessages.AttachmentUploadFileTooLarge, max));
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || IsAllowedContentType(f!))
+            .WithMessage(ApiMessages.AttachmentUploadContentTypeNotAllowed);
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || HasAllowedExtension(f!.FileName))
+            .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
+
+        RuleFor(x => x.File)
+            .MustAsync(async (f, ct) => f != null && await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+            .When(x => x.File != null)
+            .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
+    }
+
+    private static bool IsAllowedContentType(IFormFile f)
+    {
+        var ct = f.ContentType ?? "";
+        return ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+               || ct.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasAllowedExtension(string? fileName)
+    {
+        var ext = Path.GetExtension(fileName ?? "");
+        return AllowedExt.Contains(ext);
+    }
+}
+
+// Validator multipart tạo file gắn feedback: cùng quy tắc file với avatar.
+public sealed class CreateFeedbackAttachmentUploadValidator : AbstractValidator<FeedbackAttachmentUploadModel>
+{
+    private static readonly HashSet<string> AllowedExt =
+        new(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf" };
+
+    public CreateFeedbackAttachmentUploadValidator(IOptions<AttachmentStorageOptions> opt)
+    {
+        var max = opt.Value.MaxFileSizeBytes;
+
+        RuleFor(x => x.File).NotNull().WithMessage(ApiMessages.AttachmentUploadFileRequired);
+
+        RuleFor(x => x.File)
+            .Must(f => f is { Length: > 0 })
+            .When(x => x.File != null)
+            .WithMessage(ApiMessages.AttachmentUploadFileEmpty);
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || f!.Length <= max)
+            .WithMessage(string.Format(CultureInfo.InvariantCulture, ApiMessages.AttachmentUploadFileTooLarge, max));
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || IsAllowedContentType(f!))
+            .WithMessage(ApiMessages.AttachmentUploadContentTypeNotAllowed);
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || HasAllowedExtension(f!.FileName))
+            .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
+
+        RuleFor(x => x.File)
+            .MustAsync(async (f, ct) => f != null && await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+            .When(x => x.File != null)
+            .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
+    }
+
+    private static bool IsAllowedContentType(IFormFile f)
+    {
+        var ct = f.ContentType ?? "";
+        return ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+               || ct.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasAllowedExtension(string? fileName)
+    {
+        var ext = Path.GetExtension(fileName ?? "");
+        return AllowedExt.Contains(ext);
+    }
+}
+
+// Cập nhật avatar attachment: khi có file mới thì cùng quy tắc MIME/size/extension.
+public sealed class UpdateAvatarAttachmentFormValidator : AbstractValidator<UpdateAvatarAttachmentFormModel>
+{
+    private static readonly HashSet<string> AllowedExt =
+        new(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf" };
+
+    public UpdateAvatarAttachmentFormValidator(IOptions<AttachmentStorageOptions> opt)
+    {
+        var max = opt.Value.MaxFileSizeBytes;
+
+        When(x => x.File != null, () =>
+        {
+            RuleFor(x => x.File!)
+                .Must(f => f.Length > 0)
+                .WithMessage(ApiMessages.AttachmentUploadFileEmpty);
+
+            RuleFor(x => x.File!)
+                .Must(f => f.Length <= max)
+                .WithMessage(string.Format(CultureInfo.InvariantCulture, ApiMessages.AttachmentUploadFileTooLarge, max));
+
+            RuleFor(x => x.File!)
+                .Must(IsAllowedContentType)
+                .WithMessage(ApiMessages.AttachmentUploadContentTypeNotAllowed);
+
+            RuleFor(x => x.File!)
+                .Must(f => HasAllowedExtension(f.FileName))
+                .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
+
+            RuleFor(x => x.File!)
+                .MustAsync(async (f, ct) => await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+                .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
+        });
+    }
+
+    private static bool IsAllowedContentType(IFormFile f)
+    {
+        var ct = f.ContentType ?? "";
+        return ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+               || ct.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasAllowedExtension(string? fileName)
+    {
+        var ext = Path.GetExtension(fileName ?? "");
+        return AllowedExt.Contains(ext);
+    }
+}
+
+// Cập nhật attachment gắn feedback: bắt buộc feedbackId hợp lệ + quy tắc file nếu gửi file mới.
+public sealed class UpdateFeedbackAttachmentFormValidator : AbstractValidator<UpdateFeedbackAttachmentFormModel>
+{
+    private static readonly HashSet<string> AllowedExt =
+        new(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf" };
+
+    public UpdateFeedbackAttachmentFormValidator(IOptions<AttachmentStorageOptions> opt)
+    {
+        var max = opt.Value.MaxFileSizeBytes;
+
+        RuleFor(x => x.FeedbackId)
+            .Must(id => id.HasValue && id.Value != Guid.Empty)
+            .WithMessage(ApiMessages.AttachmentFeedbackIdRequired);
+
+        When(x => x.File != null, () =>
+        {
+            RuleFor(x => x.File!)
+                .Must(f => f.Length > 0)
+                .WithMessage(ApiMessages.AttachmentUploadFileEmpty);
+
+            RuleFor(x => x.File!)
+                .Must(f => f.Length <= max)
+                .WithMessage(string.Format(CultureInfo.InvariantCulture, ApiMessages.AttachmentUploadFileTooLarge, max));
+
+            RuleFor(x => x.File!)
+                .Must(IsAllowedContentType)
+                .WithMessage(ApiMessages.AttachmentUploadContentTypeNotAllowed);
+
+            RuleFor(x => x.File!)
+                .Must(f => HasAllowedExtension(f.FileName))
+                .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
+
+            RuleFor(x => x.File!)
+                .MustAsync(async (f, ct) => await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+                .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
+        });
+    }
+
+    private static bool IsAllowedContentType(IFormFile f)
+    {
+        var ct = f.ContentType ?? "";
+        return ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+               || ct.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasAllowedExtension(string? fileName)
+    {
+        var ext = Path.GetExtension(fileName ?? "");
+        return AllowedExt.Contains(ext);
     }
 }
 
@@ -189,6 +382,7 @@ public sealed class CreateUserValidator : AbstractValidator<CreateUserDto>
     }
 }
 
+// Cập nhật user: chỉ FullName và metadata hiển thị (đổi mật khẩu theo luồng khác trong service riêng nếu có).
 public sealed class UpdateUserValidator : AbstractValidator<UpdateUserDto>
 {
     public UpdateUserValidator()
@@ -206,6 +400,7 @@ public sealed class CreateRoleValidator : AbstractValidator<CreateRoleDto>
     }
 }
 
+// Cập nhật role: chủ yếu Description (Name role thường cố định sau Seed).
 public sealed class UpdateRoleValidator : AbstractValidator<UpdateRoleDto>
 {
     public UpdateRoleValidator()

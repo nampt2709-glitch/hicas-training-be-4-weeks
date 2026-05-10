@@ -1,27 +1,31 @@
-using CommentAPI;
+using Asp.Versioning; // [ApiVersion]: khai báo 1.0 trên URI api/v1/...
+using CommentAPI; // ApiException xử lý lỗi nghiệp vụ nhất quán.
+using CommentAPI.Controllers; // HttpContextUserId khi action cần user id từ JWT.
+using CommentAPI.Versioning; // ApiVersionRouteValues.WithVersion cho CreatedAtRoute.
 
-using CommentAPI.DTOs; 
-using CommentAPI.Validators;
+using CommentAPI.DTOs; // CreateUserDto, UpdateUserDto, AdminUpdateUserDto, UserDto.
+using CommentAPI.Validators; // FluentValidation cho body user.
 
-using CommentAPI.Interfaces;
+using CommentAPI.Interfaces; // IUserService, IUserRepository.
 
-using Microsoft.AspNetCore.Authorization; 
+using Microsoft.AspNetCore.Authorization; // [Authorize], [AllowAnonymous] nếu có.
 
-using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http; // StatusCodes (403, v.v.) trong phản hồi có chủ đích.
 
-using Microsoft.AspNetCore.Mvc; 
+using Microsoft.AspNetCore.Mvc; // ControllerBase, binding, IActionResult.
 
 
 
-namespace CommentAPI.Controllers;
+namespace CommentAPI.V1.Controllers;
 
 
 
 [ApiController] // Controller kiểu API (binding, lỗi validation chuẩn).
+[ApiVersion("1.0")] // Phiên bản API 1.0 (segment URL api/v1/...).
 
 [Authorize] // Mặc định mọi action cần đã xác thực (trừ khi ghi đè).
 
-[Route("api/users")] // Tiền tố URI cho tài nguyên User.
+[Route("api/v{version:apiVersion}/users")] // Tiền tố URI cho tài nguyên User.
 
 public class UsersController : ControllerBase // Không trả view Razor.
 
@@ -120,7 +124,7 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
             nameof(GetById), // Tên action để build URL.
 
-            new { id = result.Id }, // Route values cho id mới.
+            ApiVersionRouteValues.WithVersion(this, new { id = result.Id }), // Route values kèm segment version.
 
             new { message = ApiMessages.UserCreateSuccess, data = result }); // Payload phản hồi.
 
@@ -174,7 +178,7 @@ public class UsersController : ControllerBase // Không trả view Razor.
     // [5] PUT /api/admin/users/{id}
     // Admin: cập nhật đầy đủ UserName, Email, Name, roles (không đổi mật khẩu ở route này).
 
-    [HttpPut("~/api/admin/users/{id:guid}")] // PUT .../api/admin/users/{id}
+    [HttpPut("~/api/v{version:apiVersion}/admin/users/{id:guid}")] // PUT .../api/v{version}/admin/users/{id}
 
     [Authorize(Roles = "Admin")]
 

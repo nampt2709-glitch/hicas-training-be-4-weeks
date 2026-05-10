@@ -34,6 +34,8 @@ services:
       # Cùng máy chủ sqlserver, database riêng HICAS_Comment_API, cùng tài khoản sa.
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=HICAS_Comment_API;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True"
       ConnectionStrings__Redis: "redis:6379"
+      # K6 / load-test: scale fixed-window rate limits (same as launchSettings when omitted = strict 1).
+      RATE_LIMIT_PERMIT_MULTIPLIER: "${RATE_LIMIT_PERMIT_MULTIPLIER:-25}"
     depends_on:
       sqlserver:
         condition: service_healthy
@@ -50,6 +52,7 @@ services:
       ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
       # Cùng sqlserver và sa; chỉ khác database HICAS_Apartment_API.
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=HICAS_Apartment_API;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True"
+      RATE_LIMIT_PERMIT_MULTIPLIER: "${RATE_LIMIT_PERMIT_MULTIPLIER:-25}"
     depends_on:
       sqlserver:
         condition: service_healthy

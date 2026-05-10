@@ -32,7 +32,7 @@ public class CommentService : ServiceBase, ICommentService
         _mapper = mapper; // AutoMapper profile đăng ký ở Program.
         // BƯỚC 3 — Gán store epoch: mọi route GET list dùng GetCommentsListEpochAsync; mọi CRUD ảnh hưởng aggregate gọi InvalidateCommentsListsAsync.
         _listEpoch = listEpoch; // Singleton-scoped theo DI Program: cùng IDistributedCache với EntityResponseCache.
-    }
+    } // Kết thúc constructor CommentService.
 
     // Sort cho chuỗi khóa cache list (null → cùng default như repository list phân trang).
     private static SortByColumn CommentSortCacheKey(SortByColumn? sort) =>

@@ -10,8 +10,13 @@ public enum AnalysisMode
 // Bản ghi bất biến: một hàng trong bảng tần suất (tên + số lần).
 public sealed record FrequencyItem(string Name, int Count); // Name: khóa; Count: số lần xuất hiện.
 
-// Bản ghi: một lần đo benchmark (nhãn hiển thị, thời gian ms, tùy chọn danh sách kết quả).
-public sealed record BenchmarkRun(string Label, long ElapsedMilliseconds, List<FrequencyItem> Items); // Items thường chỉ đầy đủ ở lần Sequential.
+// Bản ghi: một lần đo benchmark — wall-clock, CPU tiến trình (cộng dồn luồng), RAM working set sau bước.
+public sealed record BenchmarkRun(
+    string Label,
+    long ElapsedMilliseconds,
+    List<FrequencyItem> Items,
+    long CpuTimeMilliseconds = 0, // Chênh lệch Process.TotalProcessorTime trong khoảng đo (ms).
+    long WorkingSetBytes = 0); // Working Set sau khi bước kết thúc (snapshot; bytes).
 
 // Bản ghi: báo cáo tổng hợp sau khi chạy đủ pha đọc và đếm.
 public sealed record BenchmarkReport(

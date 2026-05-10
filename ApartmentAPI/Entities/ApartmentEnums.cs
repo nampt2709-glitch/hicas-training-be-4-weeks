@@ -1,26 +1,26 @@
+// File: enum nghiệp vụ — map số nguyên trong cột DB (Apartment, Invoice, Attachment).
 namespace ApartmentAPI.Entities;
 
-// Trạng thái phòng — map số nguyên trong DB.
+// Trạng thái căn hộ — đồng bộ với cột int trên bảng Apartment.
 public enum ApartmentStatus
-{
-    Available = 0,
-    Occupied = 1,
-    Maintenance = 2,
-}
+{ // Mở khối ApartmentStatus.
+    Available = 0, // Còn trống / sẵn sàng cho thuê.
+    Occupied = 1, // Đang có cư dân.
+    Maintenance = 2, // Bảo trì, không gán cư dân.
+} // Kết thúc ApartmentStatus.
 
-// Trạng thái hóa đơn — map số nguyên trong DB.
+// Trạng thái hóa đơn — đồng bộ với cột int trên bảng Invoice.
 public enum InvoiceStatus
-{
-    Unpaid = 0,
-    Paid = 1,
-    Overdue = 2,
-    Cancelled = 3,
-}
+{ // Mở khối InvoiceStatus.
+    Unpaid = 0, // Chưa thanh toán đủ.
+    Paid = 1, // Đã thanh toán.
+    Overdue = 2, // Quá hạn.
+    Cancelled = 3, // Đã hủy.
+} // Kết thúc InvoiceStatus.
 
-// Phạm vi file đính kèm — avatar / feedback / post.
+// Phạm vi file đính kèm — chỉ avatar hoặc file gắn feedback (không có thực thể Post trong ApartmentAPI).
 public enum AttachmentScope
-{
-    Avatar = 0,
-    Feedback = 1,
-    Post = 2,
-}
+{ // Mở khối AttachmentScope.
+    Avatar = 0, // Ảnh đại diện user.
+    Feedback = 1, // Đính kèm phản hồi.
+} // Kết thúc AttachmentScope.

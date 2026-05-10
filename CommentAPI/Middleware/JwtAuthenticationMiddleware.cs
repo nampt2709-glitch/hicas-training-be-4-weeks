@@ -1,18 +1,23 @@
-using CommentAPI;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+using System.Text.RegularExpressions; // Regex whitelist auth ẩn danh theo version URL.
+using CommentAPI; // ApiErrorCodes, ApiMessages — body JSON 401 thống nhất.
+using CommentAPI.Logging; // StructuredFileLogger.Security.
+using Microsoft.AspNetCore.Authentication; // AuthenticateAsync(JwtBearerDefaults…).
+using Microsoft.AspNetCore.Authentication.JwtBearer; // Scheme Bearer sau UseAuthentication.
+using Microsoft.AspNetCore.Http; // HttpContext, StatusCodes, WriteAsJsonAsync.
 
 namespace CommentAPI.Middleware;
 
-// Trừ đăng nhập, làm mới token và Swagger, các route /api còn lại bắt buộc đã xác thực JWT (access). Logout cần gửi access token.
+// =============================================================================
+// File JwtAuthenticationMiddleware.cs: sau UseAuthentication — mọi /api (trừ auth signup/login/refresh và Swagger) bắt buộc có principal authenticated.
+// =============================================================================
+
+// Trừ đăng nhập (segment version), làm mới token và Swagger, các route /api còn lại bắt buộc đã xác thực JWT (access). Logout cần gửi access token.
 public sealed class JwtAuthenticationMiddleware // Bảo vệ prefix /api ngoại trừ whitelist.
 {
-    private static readonly HashSet<string> AnonymousApiPaths = new(StringComparer.OrdinalIgnoreCase) // Đường dẫn không cần JWT.
-    {
-        "/api/auth/signup", // Đăng ký công khai (tạo user + role User).
-        "/api/auth/login", // Đăng nhập.
-        "/api/auth/refresh" // Đổi refresh token.
-    };
+    // Đường dẫn ẩn danh: /api/v1/auth/signup, /api/v2.0/auth/login, … (khớp mọi segment version hợp lệ trong URL).
+    private static readonly Regex AnonymousAuthPath = new(
+        @"^/api/v[\d.]+/auth/(signup|login|refresh)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private readonly RequestDelegate _next; // Bước pipeline kế tiếp.
 
@@ -22,21 +27,25 @@ public sealed class JwtAuthenticationMiddleware // Bảo vệ prefix /api ngoạ
     }
 
     public async Task InvokeAsync(HttpContext context) // Entry mỗi request.
-    {
+    { // Mở khối InvokeAsync.
+        // BƯỚC 1 — Chuẩn hóa path (bỏ slash cuối) để regex whitelist khớp ổn định.
         var path = NormalizePath(context.Request.Path); // Chuẩn hóa path (bỏ slash cuối).
 
+        // BƯỚC 2 — Root và Swagger không chặn (UI thử API, redirect gốc).
         if (path == "/" || path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase)) // Root và Swagger luôn qua.
         {
             await _next(context); // Không chặn.
             return; // Xong.
         }
 
-        if (AnonymousApiPaths.Contains(path)) // Whitelist auth endpoints.
+        // BƯỚC 3 — Các endpoint auth công khai theo version cho qua không cần Bearer.
+        if (AnonymousAuthPath.IsMatch(path)) // Whitelist auth endpoints theo version (v1, v2, …).
         {
             await _next(context); // Cho qua ẩn danh.
             return; // Done.
         }
 
+        // BƯỚC 4 — Chỉ với prefix /api: đảm bảo đã Authenticate Bearer (thử lại lần nữa nếu principal trống).
         if (path.StartsWith("/api", StringComparison.OrdinalIgnoreCase)) // Chỉ áp quy tắc cho API.
         {
             // Nếu User chưa có principal sau UseAuthentication, ép AuthenticateAsync Bearer (một số cấu hình hosting).
@@ -49,6 +58,7 @@ public sealed class JwtAuthenticationMiddleware // Bảo vệ prefix /api ngoạ
                 }
             }
 
+            // BƯỚC 5 — Nếu vẫn chưa authenticated — trả 401 JSON + SECURITY log rồi dừng pipeline.
             if (context.User.Identity is not { IsAuthenticated: true }) // Vẫn chưa đăng nhập.
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized; // 401.
@@ -64,22 +74,30 @@ public sealed class JwtAuthenticationMiddleware // Bảo vệ prefix /api ngoạ
                     message = ApiMessages.Unauthenticated // Message.
                 })
                     .ConfigureAwait(false); // Async.
+                StructuredFileLogger.Security( // Nhóm SECURITY: /api không Bearer nhưng không nằm whitelist ẩn danh.
+                    cid,
+                    "ApiRequiresAuthentication",
+                    context.Request.Method,
+                    path,
+                    StatusCodes.Status401Unauthorized,
+                    "JWT middleware: authenticated user required");
                 return; // Stop.
             }
         }
 
+        // BƯỚC 6 — Route không phải /api hoặc /api đã có user — tiếp tục pipeline.
         await _next(context); // Tiếp tục pipeline cho mọi route khác (không phải /api) hoặc /api đã auth.
-    }
+    } // Kết thúc InvokeAsync.
 
     private static string NormalizePath(PathString path) // Trim trailing slash.
     {
         var s = path.ToString().TrimEnd('/'); // Remove / cuối.
         return string.IsNullOrEmpty(s) ? "/" : s; // Root rỗng → "/".
-    }
-}
+    } // Kết thúc NormalizePath.
+} // Kết thúc lớp JwtAuthenticationMiddleware.
 
 public static class JwtAuthenticationMiddlewareExtensions // Helper đăng ký middleware.
 {
     public static IApplicationBuilder UseJwtAuthentication(this IApplicationBuilder app) => // Extension method.
         app.UseMiddleware<JwtAuthenticationMiddleware>(); // Thêm vào pipeline.
-}
+} // Kết thúc lớp JwtAuthenticationMiddlewareExtensions.

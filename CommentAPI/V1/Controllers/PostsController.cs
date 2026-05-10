@@ -1,27 +1,31 @@
-using CommentAPI;
+using Asp.Versioning; // Thuộc tính [ApiVersion] gắn phiên bản lên controller/action.
+using CommentAPI; // ApiException và lỗi nghiệp vụ dùng chung.
+using CommentAPI.Controllers; // HttpContextUserId: lấy user id bắt buộc từ ClaimsPrincipal.
+using CommentAPI.Versioning; // ApiVersionRouteValues.WithVersion cho CreatedAtRoute kèm segment version.
 
-using CommentAPI.DTOs;
-using CommentAPI.Validators;
+using CommentAPI.DTOs; // CreatePostDto, UpdatePostDto, AdminUpdatePostDto, phản hồi phân trang.
+using CommentAPI.Validators; // FluentValidation: validate body trước khi gọi service.
 
-using CommentAPI.Interfaces; 
+using CommentAPI.Interfaces; // IPostService, IPostRepository, ICommentService.
 
-using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization; // [Authorize], phân quyền theo JWT/Roles.
 
-using Microsoft.AspNetCore.Http; 
+using Microsoft.AspNetCore.Http; // StatusCodes (403, v.v.) trong phản hồi có chủ đích.
 
-using Microsoft.AspNetCore.Mvc; 
+using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult, routing attributes.
 
 
 
-namespace CommentAPI.Controllers; 
+namespace CommentAPI.V1.Controllers; 
 
 
 
 [ApiController] // API controller.
+[ApiVersion("1.0")] // Phiên bản 1.0 trong URL (api/v1/...).
 
 [Authorize] // JWT bắt buộc (trừ route công khai khác pipeline).
 
-[Route("api/posts")] // REST collection posts.
+[Route("api/v{version:apiVersion}/posts")] // REST collection posts có segment version.
 
 public class PostsController : ControllerBase // Không view.
 
@@ -170,7 +174,7 @@ public class PostsController : ControllerBase // Không view.
 
             nameof(GetById), // Action chi tiết.
 
-            new { id = result.Id }, // Route value.
+            ApiVersionRouteValues.WithVersion(this, new { id = result.Id }), // Route value kèm version.
 
             new { message = ApiMessages.PostCreateSuccess, data = result }); // Body.
 
@@ -224,7 +228,7 @@ public class PostsController : ControllerBase // Không view.
     // [5] PUT /api/admin/posts/{id}
     // Route tuyệt đối: Admin dùng DTO mở rộng (có thể gán lại UserId) — tách hẳn với cập nhật của tác giả ở api/posts.
 
-    [HttpPut("~/api/admin/posts/{id:guid}")] // Override route template: không nằm dưới api/posts prefix.
+    [HttpPut("~/api/v{version:apiVersion}/admin/posts/{id:guid}")] // Admin: tuyệt đối, có segment version.
 
     [Authorize(Roles = "Admin")] // Chỉ Admin.
 

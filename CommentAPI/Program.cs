@@ -1,34 +1,44 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
-using CommentAPI;
-using CommentAPI.Configuration;
-using CommentAPI.Data;
-using CommentAPI.Entities;
-using CommentAPI.Interfaces;
-using CommentAPI.Middleware;
-using CommentAPI.Repositories;
-using CommentAPI.Services;
-using CommentAPI.Validators;
-using FluentValidation;
-using FluentValidation.AspNetCore;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Authorization.Policy;
-using Microsoft.AspNetCore.Diagnostics;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.AspNetCore.Mvc.Controllers;
-using Microsoft.Data.SqlClient;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.IdentityModel.Tokens;
-using Microsoft.OpenApi.Models;
-using Swashbuckle.AspNetCore.SwaggerGen;
-using System.Threading.RateLimiting;
+using System.IdentityModel.Tokens.Jwt; // Tên claim JWT chuẩn (Sub, v.v.) khi đọc principal trong Program.
+using System.Security.Claims; // ClaimTypes (NameIdentifier, Role) map vào HttpContext.User.
+using System.Text; // Encoding.UTF8 cho SymmetricSecurityKey từ JwtOptions.SigningKey.
+using Asp.Versioning; // ApiVersion, URL segment reader — versioning giống ApartmentAPI.
+using Asp.Versioning.ApiExplorer; // IApiVersionDescriptionProvider: một document Swagger mỗi version.
+using CommentAPI; // ApiErrorCodes, ApiMessages, SortByColumn, DistributedCaching, CacheListEpochStore, JwtOptions, v.v.
+using CommentAPI.Configuration; // EnvLoader, ConfigureSwaggerOptions, RouteRateLimitConfiguration, SwaggerDefaultValues.
+using CommentAPI.Data; // AppDbContext, SeedData.
+using CommentAPI.Logging; // StructuredFileLogger — kênh Activities/ERRORS/SECURITY.
+using CommentAPI.Entities; // User : IdentityUser<Guid> cho AddIdentityCore generic.
+using CommentAPI.Interfaces; // Không dùng trực tiếp ở đây nhưng cùng assembly với service đăng ký.
+using CommentAPI.Middleware; // RequestPerformance, ActivityAndAudit, GlobalExceptionHandler, JwtAuthentication, ForbiddenHandler.
+using CommentAPI.Repositories; // IUserRepository, IPostRepository, ICommentRepository, IAuthenticationRepository (đăng ký scoped).
+using CommentAPI.Services; // IUserService, IPostService, CommentService, AuthenticationService.
+using CommentAPI.Validators; // CreateUserValidator — assembly quét FluentValidation.
+using FluentValidation; // AbstractValidator baseline.
+using FluentValidation.AspNetCore; // AddFluentValidationAutoValidation.
+using Microsoft.AspNetCore.Authentication.JwtBearer; // JwtBearerDefaults, JwtBearerEvents, Bearer scheme.
+using Microsoft.AspNetCore.Authorization; // AddAuthorization — [Authorize] trên controller.
+using Microsoft.AspNetCore.Authorization.Policy; // IAuthorizationMiddlewareResultHandler (ForbiddenHandler).
+using Microsoft.AspNetCore.Diagnostics; // Exception handler delegate (ở đây gọi UseExceptionHandler rỗng + GlobalExceptionHandler).
+using Microsoft.AspNetCore.Identity; // AddIdentityCore, UserManager, IdentityRole.
+using Microsoft.AspNetCore.Mvc; // ApiBehaviorOptions, BadRequestObjectResult, Controllers.
+using Microsoft.AspNetCore.RateLimiting; // AddRateLimiter, PartitionedRateLimiter, FixedWindow.
+using Microsoft.AspNetCore.Mvc.Controllers; // ControllerActionDescriptor — Swagger OrderActionsBy theo MetadataToken.
+using Microsoft.Data.SqlClient; // SqlConnectionStringBuilder — ghi đè Password từ MSSQL_SA_PASSWORD.
+using Microsoft.EntityFrameworkCore; // UseSqlServer, AddDbContext, AddInterceptors.
+using Microsoft.Extensions.DependencyInjection; // Service lifetime helpers (ở DistributedCaching có dùng).
+using Microsoft.Extensions.Logging; // MinimumLevel trong Serilog bootstrap.
+using Microsoft.Extensions.Options; // IConfigureOptions — ConfigureSwaggerOptions.
+using Microsoft.IdentityModel.Tokens; // SymmetricSecurityKey, TokenValidationParameters.
+using Microsoft.OpenApi.Models; // OpenApiInfo, OpenApiSecurityScheme cho SwaggerGen.
+using Serilog; // Log.Logger, LoggerConfiguration, RollingInterval.
+using Serilog.Events; // LogEventLevel (Verbose override cho pipeline filters).
+using Swashbuckle.AspNetCore.SwaggerGen; // SwaggerGenOptions, IDocumentFilter, IOperationFilter.
+using System.Threading.RateLimiting; // RateLimitPartition, FixedWindowRateLimiterOptions, QueueProcessingOrder.
 
+// =============================================================================
+// File Program.cs: điểm vào CommentAPI — nạp .env, WebApplicationBuilder, DI (EF, Identity, JWT, cache, versioning,
+// rate limit, Serilog, AutoMapper, repo/service), pipeline middleware, Migrate+Seed, MapControllers, Run.
+// =============================================================================
 // Mã hóa UTF-8 cho console: log tiếng Việt không bị thành dấu ch? trên Windows cmd/PowerShell mặc định.
 Console.OutputEncoding = new UTF8Encoding(false);
 
@@ -179,6 +189,13 @@ builder.Services
                     type = "AuthenticationFailed",
                     message = ApiMessages.Unauthenticated // Chuỗi thân thiện client
                 });
+                StructuredFileLogger.Security( // Nhóm SECURITY: challenge JWT (chưa/ sai token).
+                    cid,
+                    "JwtBearerChallenge",
+                    context.HttpContext.Request.Method,
+                    context.HttpContext.Request.Path.Value ?? "",
+                    StatusCodes.Status401Unauthorized,
+                    "Bearer challenge: missing or invalid token");
             }
         };
     });
@@ -192,8 +209,22 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.OnRejected = async (context, cancellationToken) =>
     {
-        context.HttpContext.Response.ContentType = "application/json";
-        await context.HttpContext.Response.WriteAsJsonAsync(new
+        var http = context.HttpContext; // Context hiện tại.
+        var cid = RequestPerformanceMiddleware.GetCorrelationId(http); // Correlation cho log.
+        var path = http.Request.Path.Value ?? ""; // Đường dẫn request.
+        var bodySnap = http.Items.TryGetValue(StructuredFileLogger.RequestBodyItemKey, out var rb) ? rb?.ToString() ?? "" : ""; // Body đã Capture (nếu có).
+        StructuredFileLogger.Errors( // Nhóm ERRORS: 429.
+            cid,
+            StatusCodes.Status429TooManyRequests,
+            http.Request.Method,
+            path,
+            ApiErrorCodes.InvalidOperation,
+            "RateLimitExceeded",
+            ApiMessages.InvalidRequest,
+            null,
+            bodySnap);
+        http.Response.ContentType = "application/json"; // JSON lỗi.
+        await http.Response.WriteAsJsonAsync(new
         {
             code = ApiErrorCodes.InvalidOperation,
             type = "RateLimitExceeded",
@@ -221,6 +252,19 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true
             });
     });
+});
+
+// API Versioning: segment URL api/v{version}/… + ApiExplorer (Swagger một document mỗi version) — giống ApartmentAPI.
+builder.Services.AddApiVersioning(options =>
+{
+    options.DefaultApiVersion = new ApiVersion(1, 0);
+    options.AssumeDefaultVersionWhenUnspecified = true;
+    options.ReportApiVersions = true;
+    options.ApiVersionReader = new UrlSegmentApiVersionReader();
+}).AddApiExplorer(options =>
+{
+    options.GroupNameFormat = "'v'VVV";
+    options.SubstituteApiVersionInUrl = true;
 });
 
 // 403 có body JSON: khi xác thực ok nhưng policy cấm (role), thay vì 403 rỗng mặc định.
@@ -254,22 +298,42 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
                 p => p.Value!.Errors
                     .Select(e => string.IsNullOrEmpty(e.ErrorMessage) ? e.Exception?.Message ?? "" : e.ErrorMessage)
                     .ToArray());
+        var errSummary = string.Join("; ", errors.SelectMany(kv => kv.Value.Select(m => $"{kv.Key}: {m}"))); // Một dòng tóm tắt cho file ERRORS.
+        var bodySnap = http.Items.TryGetValue(StructuredFileLogger.RequestBodyItemKey, out var rb) ? rb?.ToString() ?? "" : ""; // Body đã middleware capture.
+        StructuredFileLogger.Errors( // Nhóm ERRORS: model binding / ModelState 400.
+            cid,
+            StatusCodes.Status400BadRequest,
+            http.Request.Method,
+            http.Request.Path.Value ?? "",
+            ApiErrorCodes.ModelValidationFailed,
+            "ModelStateValidation",
+            errSummary,
+            null,
+            bodySnap);
         return new BadRequestObjectResult(new
         {
-            code = ApiErrorCodes.ModelValidationFailed, // Tách mã lỗi với ngoại lệ Fluent
+            code = ApiErrorCodes.ModelValidationFailed, // Tách mã lỗi với ngoại lệ Fluent.
             type = "ModelStateValidation",
             message = ApiMessages.ValidationFailed,
+            correlationId = cid, // Trả correlation cho client khớp Activities/ERRORS.
             errors
         });
     };
 });
 
-// Kích hoạt controller convention + routing attribute.
-builder.Services.AddControllers();
+// Kích hoạt controller convention + routing attribute; filter pipeline tối giản (PipelineFilters.cs).
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<CommentResourceFilter>();
+    options.Filters.Add<CommentActionFilter>();
+    options.Filters.Add<CommentExceptionFilter>();
+    options.Filters.Add<CommentResultFilter>();
+});
 // Tối thiểu cho Swashbuckle: khám phá endpoint tạo OpenAPI.
 builder.Services.AddEndpointsApiExplorer();
 
-// Swagger: bỏ ví dụ; thêm bảo mật Bearer cho try-it-out.
+// Swagger: một OpenAPI document per version (ConfigureSwaggerOptions) + Bearer; giống ApartmentAPI.
+builder.Services.AddTransient<IConfigureOptions<SwaggerGenOptions>, ConfigureSwaggerOptions>();
 builder.Services.AddSwaggerGen(options =>
 {
     // Swashbuckle mặc định OrderActionsBy theo RelativePath + HttpMethod → thứ tự alphabet của URI (vd. api/admin/... trước api/posts) và của verb (DELETE trước GET), không khớp thứ tự action trong controller. Gom theo controller (FullName) rồi MetadataToken của method (Roslyn thường tăng dần theo thứ tự khai báo trong class) để UI gần với file controller.
@@ -283,6 +347,7 @@ builder.Services.AddSwaggerGen(options =>
 
         return $"{apiDesc.RelativePath}_{apiDesc.HttpMethod}";
     });
+    options.OperationFilter<SwaggerDefaultValues>();
     options.DocumentFilter<RemoveSwaggerExamplesDocumentFilter>();
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
@@ -319,8 +384,60 @@ builder.Services.AddScoped<IPostService, PostService>();
 builder.Services.AddScoped<ICommentService, CommentService>();
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 
+// Serilog: sáu file kênh + FiltersLog (ILogger từ Resource/Action/Exception/Result filter); mỗi kênh qua property LogChannel hoặc SourceContext.
+var logsDir = Path.Combine(builder.Environment.ContentRootPath, "Logs");
+Directory.CreateDirectory(logsDir);
+const string fileTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
+const string filtersLogTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}";
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .MinimumLevel.Override("CommentResourceFilter", LogEventLevel.Verbose)
+    .MinimumLevel.Override("CommentActionFilter", LogEventLevel.Verbose)
+    .MinimumLevel.Override("CommentExceptionFilter", LogEventLevel.Verbose)
+    .MinimumLevel.Override("CommentResultFilter", LogEventLevel.Verbose)
+    .Enrich.FromLogContext()
+    .Enrich.WithThreadId() // Tiện đối chiếu song song.
+    .WriteTo.Logger(lc => lc // ERRORS → ErrorsLog.log.
+        .Filter.ByIncludingOnly(e => StructuredFileLogger.IsChannel(e, StructuredFileLogger.ErrorsChannel))
+        .WriteTo.File(Path.Combine(logsDir, "ErrorsLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: fileTemplate))
+    .WriteTo.Logger(lc => lc // AUDIT → AuditLog.log.
+        .Filter.ByIncludingOnly(e => StructuredFileLogger.IsChannel(e, StructuredFileLogger.AuditChannel))
+        .WriteTo.File(Path.Combine(logsDir, "AuditLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: fileTemplate))
+    .WriteTo.Logger(lc => lc // SECURITY → SecurityLog.log.
+        .Filter.ByIncludingOnly(e => StructuredFileLogger.IsChannel(e, StructuredFileLogger.SecurityChannel))
+        .WriteTo.File(Path.Combine(logsDir, "SecurityLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: fileTemplate))
+    .WriteTo.Logger(lc => lc // WARNINGS → WarningsLog.log.
+        .Filter.ByIncludingOnly(e => StructuredFileLogger.IsChannel(e, StructuredFileLogger.WarningsChannel))
+        .WriteTo.File(Path.Combine(logsDir, "WarningsLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: fileTemplate))
+    .WriteTo.Logger(lc => lc // FATALS + mức Fatal → FatalsLog.log.
+        .Filter.ByIncludingOnly(e => StructuredFileLogger.IsChannel(e, StructuredFileLogger.FatalsChannel) || e.Level == LogEventLevel.Fatal)
+        .WriteTo.File(Path.Combine(logsDir, "FatalsLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: fileTemplate))
+    .WriteTo.Logger(lc => lc // ACTIVITIES → ActivitiesLog.log.
+        .Filter.ByIncludingOnly(e => StructuredFileLogger.IsChannel(e, StructuredFileLogger.ActivitiesChannel))
+        .WriteTo.File(Path.Combine(logsDir, "ActivitiesLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: fileTemplate))
+    .WriteTo.Logger(lc => lc // ILogger từ pipeline filters (LogTrace / LogWarning) → FiltersLog.log.
+        .Filter.ByIncludingOnly(StructuredFileLogger.IsPipelineFilterLog)
+        .WriteTo.File(Path.Combine(logsDir, "FiltersLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: filtersLogTemplate))
+    .CreateLogger(); // Hoàn tất logger tĩnh.
+builder.Host.UseSerilog(Log.Logger, dispose: true); // Host dùng cùng pipeline Serilog, flush khi shutdown.
+
 // Dựng pipeline: host, middleware, endpoint — chưa lắng nghe.
 var app = builder.Build();
+
+// FATALS: bắt lỗi ngoài vòng pipeline (process sắp dừng).
+AppDomain.CurrentDomain.UnhandledException += (_, e) => // Sự kiện CLR cuối cùng.
+{
+    if (e.ExceptionObject is Exception domainEx) // Có stack trace.
+    {
+        StructuredFileLogger.Fatals("AppDomain.UnhandledException", domainEx); // Ghi FatalsLog.
+    }
+    else // Không phải Exception.
+    {
+        StructuredFileLogger.Fatals($"AppDomain.UnhandledException: {e.ExceptionObject}", null); // Ghi mô tả thô.
+    }
+
+    Log.CloseAndFlush(); // Đẩy hết buffer file.
+};
 
 // Một lần khi start: tạo scope, ApplyPendingMigration, seed role Admin/User nếu chưa có.
 using (var scope = app.Services.CreateScope())
@@ -332,12 +449,23 @@ using (var scope = app.Services.CreateScope())
 
 // Header hiệu năng (thời gian, SQL, cache) + X-Correlation-ID; phải sớm trong pipeline.
 app.UseRequestPerformance();
+// ACTIVITIES + AUDIT: bọc response trước exception handler để body lỗi vẫn vào buffer ghi log.
+app.UseActivityAndAuditLogging();
 // IExceptionHandler pipeline: bắt mọi exception chưa xử, trả JSON; delegate rỗng nếu dùng cấu hình mặc định.
 app.UseExceptionHandler(_ => { });
 
-// OpenAPI JSON + UI; chỉ bật khi cần (dev/staging) — ở đây luôn bật tùy môi trường deploy.
+// OpenAPI JSON + UI: một endpoint Swagger JSON cho mỗi version (v1, v2, …).
 app.UseSwagger();
-app.UseSwaggerUI();
+var apiVersionDescriptionProvider = app.Services.GetRequiredService<IApiVersionDescriptionProvider>();
+app.UseSwaggerUI(options =>
+{
+    foreach (var description in apiVersionDescriptionProvider.ApiVersionDescriptions)
+    {
+        var url = $"{description.GroupName}/swagger.json";
+        var name = description.GroupName.ToUpperInvariant();
+        options.SwaggerEndpoint(url, name);
+    }
+});
 
 // Bắt buộc: UseRouting trước UseAuthentication/Authorization; custom JWT sau UseAuthentication.
 app.UseRouting();
@@ -352,8 +480,15 @@ app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 // Map controller attribute [Route], [ApiController], v.v.
 app.MapControllers();
 
-// Chạy Kestrel / IIS in-process, chặn cho tới khi process dừng.
-app.Run();
+// Chạy Kestrel / IIS in-process, chặn cho tới khi process dừng; luôn flush Serilog.
+try
+{
+    app.Run(); // Block tới shutdown.
+}
+finally
+{
+    Log.CloseAndFlush(); // Ghi nốt buffer sink file.
+}
 
 // Bộ lọc tài liệu OpenAPI: gỡ Example/Examples/Default khỏi path và schema tránh Swagger tự điền sẵn mẫu.
 internal sealed class RemoveSwaggerExamplesDocumentFilter : IDocumentFilter
@@ -479,5 +614,5 @@ internal sealed class RemoveSwaggerExamplesDocumentFilter : IDocumentFilter
         {
             ClearSchemaExamples(inner);
         }
-    }
-}
+    } // Kết thúc ClearSchemaExamples.
+} // Kết thúc lớp RemoveSwaggerExamplesDocumentFilter (bộ lọc gỡ Example khỏi OpenAPI).

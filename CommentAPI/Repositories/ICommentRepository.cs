@@ -1,6 +1,6 @@
-using CommentAPI;
-using CommentAPI.DTOs;
-using CommentAPI.Entities;
+using CommentAPI; // SortByColumn, Demo DTO kinds.
+using CommentAPI.DTOs; // CommentDto, CommentFlatDto, CTE/tree shapes.
+using CommentAPI.Entities; // Comment entity + tree.
 
 namespace CommentAPI.Interfaces;
 

@@ -1,5 +1,5 @@
-using CommentAPI;
-using CommentAPI.DTOs;
+using CommentAPI; // SortByColumn — thứ tự danh sách post.
+using CommentAPI.DTOs; // PostDto, Create/Update Post DTO, PagedResult.
 
 // Hợp đồng tầng dịch vụ: triển khai lớp PostService, dùng từ controller, DI, test.
 namespace CommentAPI.Interfaces;

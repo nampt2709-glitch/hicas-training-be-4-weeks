@@ -31,8 +31,8 @@ public class WriterTests
             Assert.Contains("Mode: Word", content);
             Assert.Contains("Source File: sample.txt", content);
             Assert.Contains("Total Words (occurrences): 5", content);
-            Assert.Contains("===== READ PERFORMANCE (ms) =====", content);
-            Assert.Contains("===== COUNT PERFORMANCE (ms) =====", content);
+            Assert.Contains("===== READ PERFORMANCE (wall / CPU / RAM) =====", content);
+            Assert.Contains("===== COUNT PERFORMANCE (wall / CPU / RAM) =====", content);
             Assert.Contains("===== FULL WORD FREQUENCY LIST =====", content);
             Assert.Contains("hello - 3", content);
             Assert.Contains("world - 2", content);
@@ -83,6 +83,53 @@ public class WriterTests
 
             Assert.Contains("Total Errors (occurrences): 0", content);
             Assert.Contains("No error-related terms found.", content);
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+        }
+    }
+
+    [Fact]
+    public void WTT04_ShouldWriteMachineLineAndResourceColumns_WhenCpuAndWorkingSetProvided()
+    {
+        var freqItems = new List<FrequencyItem> { new("only", 1) };
+        var readRuns = new BenchmarkRun[]
+        {
+            new("Đọc test CPU/RAM", 11L, new List<FrequencyItem>(), 888_001L, 3L * 1024L * 1024L),
+        };
+        var countRuns = new BenchmarkRun[]
+        {
+            new("Đếm test CPU/RAM", 22L, freqItems, 888_002L, 5L * 1024L * 1024L),
+            new("Đếm Parallel.ForEach", 1L, new List<FrequencyItem>()),
+            new("Đếm PLINQ", 1L, new List<FrequencyItem>()),
+        };
+
+        var report = new BenchmarkReport(
+            AnalysisMode.Word,
+            "resource.txt",
+            readRuns,
+            countRuns,
+            freqItems,
+            1,
+            1);
+
+        IResultWriter writer = new ResultWriterService();
+        var outputPath = writer.Write(report);
+
+        try
+        {
+            var content = File.ReadAllText(outputPath, Encoding.UTF8);
+            Assert.Contains("Machine:", content);
+            Assert.Contains("Cores:", content);
+            Assert.Contains("888001", content);
+            Assert.Contains("888002", content);
+            Assert.Contains("3.00", content);
+            Assert.Contains("5.00", content);
+            Assert.Contains("Notes: CPU = process processor-time delta", content);
         }
         finally
         {

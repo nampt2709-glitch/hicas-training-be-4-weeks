@@ -1,14 +1,20 @@
-using ApartmentAPI.V1.DTOs;
-using ApartmentAPI.Services;
-using Asp.Versioning;
-using ApartmentAPI.Versioning;
-using Microsoft.AspNetCore.Mvc;
+using ApartmentAPI.DTOs; // ApiMessages, PaginationQuery.
+using ApartmentAPI.Entities; // InvoiceStatus lọc danh sách.
+using ApartmentAPI.Services; // IInvoiceService — hóa đơn và trạng thái.
+using ApartmentAPI.Validators; // CreatedAtRangeQuery.
+using ApartmentAPI.V1.DTOs; // DTO invoice phiên bản 1.
+using ApartmentAPI.Versioning; // ApiVersionRouteValues.WithVersion.
+using Asp.Versioning; // [ApiVersion].
+using ApartmentAPI.Authorization; // ApiAuthorization — chuỗi role thống nhất với seed Identity.
+using Microsoft.AspNetCore.Authorization; // [Authorize(Roles = ...)] — Admin hoặc User.
+using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V1.Controllers;
 
-// Hóa đơn theo căn hộ: CRUD + danh sách theo ApartmentId.
+// Hóa đơn — phân trang tổng / theo căn (một căn nhiều hóa đơn), chi tiết, tạo/sửa/xóa mềm. Admin hoặc User.
 [ApiController]
 [ApiVersion("1.0")]
+[Authorize(Roles = ApiAuthorization.AdminOrUser)]
 [Route("api/v{version:apiVersion}/invoices")]
 public class InvoicesController : ControllerBase
 {
@@ -19,24 +25,50 @@ public class InvoicesController : ControllerBase
     private string? DeletedBy() => User.Identity?.Name;
 
     [HttpGet]
-    public async Task<IActionResult> GetAll(CancellationToken ct)
+    public async Task<IActionResult> GetAll(
+        [FromQuery] string? page,
+        [FromQuery] string? pageSize,
+        [FromQuery] DateTime? createdAtFrom = null,
+        [FromQuery] DateTime? createdAtTo = null,
+        [FromQuery] Guid? apartmentId = null,
+        [FromQuery] InvoiceStatus? status = null,
+        [FromQuery] string? invoiceCode = null,
+        [FromQuery] string? sort = null,
+        [FromQuery] string? sortDir = null,
+        CancellationToken ct = default)
     {
-        var data = await _service.GetAllAsync(ct);
-        return Ok(new { message = ApiMessages.Ok, data });
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
+        var data = await _service.GetPagedAsync(
+            p, s, createdAtFrom, createdAtTo, apartmentId, status, invoiceCode, sort, sortDir, ct);
+        return Ok(new { message = ApiMessages.InvoiceListSuccess, data });
     }
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {
         var data = await _service.GetByIdAsync(id, ct);
-        return Ok(new { message = ApiMessages.Ok, data });
+        return Ok(new { message = ApiMessages.InvoiceGetSuccess, data });
     }
 
     [HttpGet("by-apartment/{apartmentId:guid}")]
-    public async Task<IActionResult> GetByApartment(Guid apartmentId, CancellationToken ct)
+    public async Task<IActionResult> GetByApartment(
+        Guid apartmentId,
+        [FromQuery] string? page,
+        [FromQuery] string? pageSize,
+        [FromQuery] DateTime? createdAtFrom = null,
+        [FromQuery] DateTime? createdAtTo = null,
+        [FromQuery] InvoiceStatus? status = null,
+        [FromQuery] string? invoiceCode = null,
+        [FromQuery] string? sort = null,
+        [FromQuery] string? sortDir = null,
+        CancellationToken ct = default)
     {
-        var data = await _service.GetByApartmentIdAsync(apartmentId, ct);
-        return Ok(new { message = ApiMessages.Ok, data });
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
+        var data = await _service.GetPagedAsync(
+            p, s, createdAtFrom, createdAtTo, apartmentId, status, invoiceCode, sort, sortDir, ct);
+        return Ok(new { message = ApiMessages.InvoiceListSuccess, data });
     }
 
     [HttpPost]

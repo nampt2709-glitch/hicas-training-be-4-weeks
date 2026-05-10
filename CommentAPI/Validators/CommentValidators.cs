@@ -1,5 +1,5 @@
-using CommentAPI.DTOs; 
-using FluentValidation; 
+using CommentAPI.DTOs; // CreateCommentDto, UpdateCommentDto, AdminUpdateCommentDto.
+using FluentValidation; // AbstractValidator. 
 
 namespace CommentAPI.Validators; 
 public sealed class CreateCommentValidator : AbstractValidator<CreateCommentDto> // Tạo comment (thường Admin route).

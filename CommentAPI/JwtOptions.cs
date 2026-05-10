@@ -1,5 +1,9 @@
 namespace CommentAPI;
 
+// =============================================================================
+// File JwtOptions.cs: POCO bind từ section "Jwt" — Program đọc để cấu hình JwtBearer + AuthenticationService phát token.
+// =============================================================================
+
 // Cấu hình JWT đọc từ appsettings: issuer, audience, khóa ký, thời gian sống access/refresh; bind bằng IOptions.
 public class JwtOptions
 {
@@ -23,4 +27,4 @@ public class JwtOptions
 
     // Số ngày sống refresh token (lưu server-side hoặc bảng, tùy implement auth).
     public int RefreshTokenDays { get; set; } = 7;
-}
+} // Kết thúc lớp JwtOptions.

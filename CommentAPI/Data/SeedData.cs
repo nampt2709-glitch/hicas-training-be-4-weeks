@@ -1,7 +1,8 @@
-// RoleManager, IdentityRole — dùng tạo vai trò tĩnh khi vừa chạy migration.
-using Microsoft.AspNetCore.Identity;
+// =============================================================================
+// File SeedData.cs: hạt giống sau migration — tạo role Admin/User trong AspNetRoles (không user mặc định).
+// =============================================================================
+using Microsoft.AspNetCore.Identity; // RoleManager, IdentityRole — tạo bản ghi vai trò nếu chưa tồn tại.
 
-// RoleManager, IdentityRole — tạo bản ghi AspNetRoles nếu chưa tồn tại.
 namespace CommentAPI.Data;
 
 // Hạt giống sau migration: chỉ tạo role Admin, User; không tạo user mặc định (tránh mật khẩu cứng trong repo).

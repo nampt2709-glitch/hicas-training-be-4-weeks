@@ -1,16 +1,17 @@
+// File: entity căn hộ — quan hệ một-nhiều với Resident và Invoice.
 namespace ApartmentAPI.Entities;
 
-// Căn hộ — Residents + Invoices.
+// Phòng: số phòng, tầng, diện tích, trạng thái; navigation Residents + Invoices.
 public class Apartment : BaseEntity
-{
-    public string RoomNumber { get; set; } = string.Empty;
-    public int Floor { get; set; }
-    public decimal Area { get; set; }
-    public ApartmentStatus Status { get; set; } = ApartmentStatus.Available;
+{ // Mở khối Apartment.
+    public string RoomNumber { get; set; } = string.Empty; // Mã/số phòng hiển thị.
+    public int Floor { get; set; } // Tầng (số nguyên).
+    public decimal Area { get; set; } // Diện tích (đơn vị nghiệp vụ, ví dụ m²).
+    public ApartmentStatus Status { get; set; } = ApartmentStatus.Available; // Trạng thái phòng.
 
-    public int MaxResidents { get; set; }
-    public string? Note { get; set; }
+    public int MaxResidents { get; set; } // Số cư dân tối đa cho phép.
+    public string? Note { get; set; } // Ghi chú nội bộ.
 
-    public ICollection<Resident> Residents { get; set; } = new List<Resident>();
-    public ICollection<Invoice> Invoices { get; set; } = new List<Invoice>();
-}
+    public ICollection<Resident> Residents { get; set; } = new List<Resident>(); // Cư dân thuộc phòng.
+    public ICollection<Invoice> Invoices { get; set; } = new List<Invoice>(); // Hóa đơn theo phòng.
+} // Kết thúc Apartment.

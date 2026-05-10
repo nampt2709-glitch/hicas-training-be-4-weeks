@@ -1,9 +1,9 @@
-using System.Data.Common;
+using System.Data.Common; // DbCommand — interceptor bọc đo thời gian SQL.
 using System.Diagnostics; // Stopwatch đo thời gian.
-using CommentAPI;
-using Microsoft.AspNetCore.Http;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.DependencyInjection;
+using CommentAPI; // RequestPerformanceMiddleware constants dùng chung header names nếu cần.
+using Microsoft.AspNetCore.Http; // HttpContext, RequestDelegate, header.
+using Microsoft.EntityFrameworkCore.Diagnostics; // DbCommandInterceptor, CommandExecutedEventData.
+using Microsoft.Extensions.DependencyInjection; // GetRequiredService trong middleware.
 
 namespace CommentAPI.Middleware;
 

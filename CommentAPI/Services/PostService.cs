@@ -1,12 +1,16 @@
-using AutoMapper;
-using CommentAPI;
-using CommentAPI.DTOs;
-using CommentAPI.Entities;
-using CommentAPI.Interfaces;
-using CommentAPI.Repositories;
-using Microsoft.AspNetCore.Http;
+using AutoMapper; // Map Post entity ↔ PostDto / CreatePostDto.
+using CommentAPI; // ApiException, ApiErrorCodes, ApiMessages.
+using CommentAPI.DTOs; // PostDto, CreatePostDto, UpdatePostDto, AdminUpdatePostDto.
+using CommentAPI.Entities; // Thực thể Post.
+using CommentAPI.Interfaces; // IPostService, IPostRepository, IUserRepository, cache.
+using CommentAPI.Repositories; // PostRepository.PostListSortDefault.
+using Microsoft.AspNetCore.Http; // StatusCodes cho ApiException.
 
 namespace CommentAPI.Services;
+
+// =============================================================================
+// File PostService.cs: nghiệp vụ Post — GET phân trang/chi tiết có cache; CRUD; bump epoch pst sau thay đổi danh sách.
+// =============================================================================
 
 // Nghiệp vụ Post: danh sách có cache khi không filter; CRUD + phân quyền tác giả vs admin.
 public class PostService : ServiceBase, IPostService
@@ -25,12 +29,16 @@ public class PostService : ServiceBase, IPostService
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch)
         : base(cache)
-    {
-        _repository = repository;
-        _userRepository = userRepository;
-        _mapper = mapper;
-        _listEpoch = listEpoch;
-    }
+    { // Mở khối constructor PostService.
+        // BƯỚC 1 — Gán repository post (đọc/ghi bảng Posts + projection).
+        _repository = repository; // Lưu IPostRepository đã đăng ký DI.
+        // BƯỚC 2 — Gán repository user để kiểm tra FK trước Create/AdminUpdate.
+        _userRepository = userRepository; // ExistsAsync tránh post mồ côi UserId.
+        // BƯỚC 3 — Gán AutoMapper cho Map sau SaveChanges.
+        _mapper = mapper; // Profile trong MappingProfile.
+        // BƯỚC 4 — Gán store epoch danh sách post (prefix pst: trong EntityCacheKeys).
+        _listEpoch = listEpoch; // Bump sau mỗi thay đổi ảnh hưởng GET /api/posts không filter.
+    } // Kết thúc constructor PostService.
 
     #endregion
 
@@ -46,16 +54,17 @@ public class PostService : ServiceBase, IPostService
         string? titleContains = null,
         string? contentContains = null,
         SortByColumn? sort = null)
-    {
-        var sortKey = sort ?? PostRepository.PostListSortDefault;
+    { // Mở khối GetPagedAsync.
+        var sortKey = sort ?? PostRepository.PostListSortDefault; // Sort mặc định repository (cột + hướng).
+
         // BƯỚC 1: Nếu không có filter list — thử đọc cache theo (page, pageSize) và epoch pst hiện tại.
         if (!HasPostListFilter(createdAtFrom, createdAtTo, titleContains, contentContains))
         {
-            var pst = await _listEpoch.GetPostsListEpochAsync(cancellationToken);
-            var cacheKey = EntityCacheKeys.PostsPaged(pst, page, pageSize, sortKey);
+            var pst = await _listEpoch.GetPostsListEpochAsync(cancellationToken); // Đọc epoch list post.
+            var cacheKey = EntityCacheKeys.PostsPaged(pst, page, pageSize, sortKey); // Khóa JSON danh sách một trang.
             var cached = await Cache.GetJsonAsync<PagedResult<PostDto>>(cacheKey, cancellationToken);
-            if (cached is not null)
-                return cached;
+            if (cached is not null) // Hit cache.
+                return cached; // Trả ngay, không gọi DB.
         }
 
         // BƯỚC 2: Miss hoặc có filter — gọi repository COUNT + SELECT trang.
@@ -72,32 +81,34 @@ public class PostService : ServiceBase, IPostService
         // BƯỚC 3: Gói PagedResult thủ công (không dùng helper static của comment).
         var result = new PagedResult<PostDto>
         {
-            Items = items,
-            Page = page,
-            PageSize = pageSize,
-            TotalCount = total,
+            Items = items, // Một trang projection.
+            Page = page, // Trang hiện tại (1-based).
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = total, // Tổng bản ghi khớp lọc.
         };
 
         // BƯỚC 4: Ghi cache chỉ khi không filter — khóa gắn epoch để InvalidatePostsListAsync sau CRUD không trả snapshot cũ.
         if (!HasPostListFilter(createdAtFrom, createdAtTo, titleContains, contentContains))
         {
-            var pst = await _listEpoch.GetPostsListEpochAsync(cancellationToken);
+            var pst = await _listEpoch.GetPostsListEpochAsync(cancellationToken); // Đồng bộ epoch với lúc đọc (tránh lệch khi bump xen giữa).
             await Cache.SetJsonAsync(EntityCacheKeys.PostsPaged(pst, page, pageSize, sortKey), result, cancellationToken);
         }
 
         return result;
-    }
+    } // Kết thúc GetPagedAsync.
 
     // [2] GET /api/posts/{id} — cache-aside theo Id post.
     public async Task<PostDto> GetByIdAsync(Guid id)
-    {
-        var cacheKey = EntityCacheKeys.Post(id);
+    { // Mở khối GetByIdAsync.
+        // BƯỚC 1 — Tính khóa chi tiết post và thử cache.
+        var cacheKey = EntityCacheKeys.Post(id); // Khóa p:{id:N}.
         var cached = await Cache.GetJsonAsync<PostDto>(cacheKey, default);
-        if (cached is not null)
-            return cached;
+        if (cached is not null) // Hit.
+            return cached; // Không SELECT DB.
 
+        // BƯỚC 2 — Projection một dòng; null → 404 thống nhất.
         var dto = await _repository.GetByIdForReadAsync(id, default);
-        if (dto is null)
+        if (dto is null) // Không tồn tại.
         {
             throw new ApiException(
                 StatusCodes.Status404NotFound,
@@ -105,13 +116,15 @@ public class PostService : ServiceBase, IPostService
                 ApiMessages.PostNotFound);
         }
 
+        // BƯỚC 3 — Ghi cache rồi trả DTO.
         await Cache.SetJsonAsync(cacheKey, dto, default);
         return dto;
-    }
+    } // Kết thúc GetByIdAsync.
 
     // [3] POST /api/posts — kiểm tra UserId tồn tại rồi Insert.
     public async Task<PostDto> CreateAsync(CreatePostDto dto)
-    {
+    { // Mở khối CreateAsync.
+        // BƯỚC 1 — Xác nhận user chủ bài tồn tại (tránh FK hoặc nghiệp vụ sai).
         if (!await _userRepository.ExistsAsync(dto.UserId))
         {
             throw new ApiException(
@@ -120,21 +133,23 @@ public class PostService : ServiceBase, IPostService
                 ApiMessages.UserNotFound);
         }
 
+        // BƯỚC 2 — Map DTO → entity, gán Id mới, Add + SaveChanges.
         var entity = _mapper.Map<Post>(dto);
-        entity.Id = Guid.NewGuid();
+        entity.Id = Guid.NewGuid(); // Khóa do server cấp.
 
         await _repository.AddAsync(entity);
         await _repository.SaveChangesAsync();
 
-        // Bơm epoch pst — danh sách GET /api/posts không filter phải miss cache (bài mới).
+        // BƯỚC 3 — Bơm epoch pst — danh sách GET /api/posts không filter phải miss cache (bài mới).
         await _listEpoch.InvalidatePostsListAsync(default);
 
-        return _mapper.Map<PostDto>(entity);
-    }
+        return _mapper.Map<PostDto>(entity); // Trả DTO sau khi đã persist.
+    } // Kết thúc CreateAsync.
 
     // [4] PUT /api/posts/{id} — chỉ chủ bài (UserId == currentUserId) được sửa title/content.
     public async Task UpdateAsAuthorAsync(Guid id, UpdatePostDto dto, Guid currentUserId)
-    {
+    { // Mở khối UpdateAsAuthorAsync.
+        // BƯỚC 1 — Tải entity tracked; null → 404.
         var entity = await _repository.GetByIdAsync(id);
         if (entity is null)
         {
@@ -144,6 +159,7 @@ public class PostService : ServiceBase, IPostService
                 ApiMessages.PostNotFound);
         }
 
+        // BƯỚC 2 — So khớp chủ bài với currentUserId; sai → 403.
         if (entity.UserId != currentUserId)
         {
             throw new ApiException(
@@ -152,18 +168,20 @@ public class PostService : ServiceBase, IPostService
                 ApiMessages.NotResourceAuthor);
         }
 
+        // BƯỚC 3 — Áp Title/Content, Update + Save; xóa cache chi tiết + bump epoch list.
         entity.Title = dto.Title;
         entity.Content = dto.Content;
         _repository.Update(entity);
         await _repository.SaveChangesAsync();
 
-        await Cache.RemoveAsync(EntityCacheKeys.Post(id), default);
-        await _listEpoch.InvalidatePostsListAsync(default);
-    }
+        await Cache.RemoveAsync(EntityCacheKeys.Post(id), default); // Invalidate chi tiết.
+        await _listEpoch.InvalidatePostsListAsync(default); // Invalidate danh sách (metadata có thể đổi).
+    } // Kết thúc UpdateAsAuthorAsync.
 
     // [5] PUT /api/admin/posts/{id} — admin có thể đổi UserId nếu gửi dto.UserId và user đích tồn tại.
     public async Task UpdateAsAdminAsync(Guid id, AdminUpdatePostDto dto)
-    {
+    { // Mở khối UpdateAsAdminAsync.
+        // BƯỚC 1 — Tải entity; null → 404.
         var entity = await _repository.GetByIdAsync(id);
         if (entity is null)
         {
@@ -173,6 +191,7 @@ public class PostService : ServiceBase, IPostService
                 ApiMessages.PostNotFound);
         }
 
+        // BƯỚC 2 — Nếu có UserId mới — kiểm tra tồn tại rồi gán.
         if (dto.UserId is { } u)
         {
             if (!await _userRepository.ExistsAsync(u))
@@ -183,9 +202,10 @@ public class PostService : ServiceBase, IPostService
                     ApiMessages.UserNotFound);
             }
 
-            entity.UserId = u;
+            entity.UserId = u; // Đổi chủ bài.
         }
 
+        // BƯỚC 3 — Áp tiêu đề/nội dung, Save; invalidate cache chi tiết + epoch list.
         entity.Title = dto.Title;
         entity.Content = dto.Content;
         _repository.Update(entity);
@@ -193,11 +213,12 @@ public class PostService : ServiceBase, IPostService
 
         await Cache.RemoveAsync(EntityCacheKeys.Post(id), default);
         await _listEpoch.InvalidatePostsListAsync(default);
-    }
+    } // Kết thúc UpdateAsAdminAsync.
 
     // [6] DELETE /api/posts/{id} — xóa cache trước rồi Remove entity (cascade comment tùy model).
     public async Task DeleteAsync(Guid id)
-    {
+    { // Mở khối DeleteAsync.
+        // BƯỚC 1 — Tải entity; null → 404.
         var entity = await _repository.GetByIdAsync(id);
         if (entity is null)
         {
@@ -207,17 +228,18 @@ public class PostService : ServiceBase, IPostService
                 ApiMessages.PostNotFound);
         }
 
+        // BƯỚC 2 — Xóa cache chi tiết + mọi biến thể resource comment theo post (CTE tree/flat).
         await Cache.RemoveAsync(EntityCacheKeys.Post(id), default);
-        // Cascade xóa comment: vô hiệu cache riêng GET …/posts/{id}/comments/tree|flat (khóa l:posts:…:comments:*).
-        await Cache.RemoveManyAsync(EntityCacheKeys.PostsResourceCommentsCteAllKeys(id), default);
+        await Cache.RemoveManyAsync(EntityCacheKeys.PostsResourceCommentsCteAllKeys(id), default); // Khóa l:posts:{id}:comments:*.
 
+        // BƯỚC 3 — Remove + SaveChanges (DB cascade comment nếu cấu hình OnDelete Cascade).
         _repository.Remove(entity);
         await _repository.SaveChangesAsync();
 
-        // Xóa post làm đổi danh sách post + mọi danh sách/route comment gắn bài viết đã cascade.
+        // BƯỚC 4 — Bump epoch post list + comment list (xóa post làm đổi aggregate lớn).
         await _listEpoch.InvalidatePostsListAsync(default);
         await _listEpoch.InvalidateCommentsListsAsync(default);
-    }
+    } // Kết thúc DeleteAsync.
 
     #endregion
 
@@ -234,4 +256,4 @@ public class PostService : ServiceBase, IPostService
         || !string.IsNullOrWhiteSpace(contentContains);
 
     #endregion
-}
+} // Kết thúc lớp PostService.

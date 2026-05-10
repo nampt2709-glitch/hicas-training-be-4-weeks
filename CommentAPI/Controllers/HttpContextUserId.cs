@@ -1,40 +1,40 @@
-using System.IdentityModel.Tokens.Jwt; 
-using System.Security.Claims; 
-using CommentAPI; 
-using Microsoft.AspNetCore.Http; 
+using System.IdentityModel.Tokens.Jwt; // JwtRegisteredClaimNames.Sub khi không có NameIdentifier.
+using System.Security.Claims; // ClaimsPrincipal.FindFirstValue, ClaimTypes.
+using CommentAPI; // ApiException, ApiErrorCodes, ApiMessages.
+using Microsoft.AspNetCore.Http; // StatusCodes.Status401Unauthorized.
 
-namespace CommentAPI.Controllers; 
+namespace CommentAPI.Controllers;
 
-/// Tiện ích tập trung: lấy Guid định danh người dùng đã đăng nhập từ <see cref="ClaimsPrincipal"/>
-/// (thường là User trên controller, lấy từ HttpContext.User sau khi JWT được xác thực).
-/// 
-/// Mục đích: cung cấp một điểm gọi duy nhất để controller biết &quot;ai đang gọi API&quot; dưới dạng Guid,
-/// phục vụ các luồng tác giả / chính chủ (ví dụ cập nhật post, hồ sơ user, comment) — truyền Guid xuống service để đối chiếu chủ sở hữu.</para>
-/// Lý do tồn tại: tránh lặp lại cùng một đoạn đọc claim, parse Guid và xử lý lỗi 401 ở nhiều controller;
-/// khi đổi quy tắc map claim chỉ cần sửa một chỗ.
-/// Luồng: client gửi Bearer token → middleware JWT + [Authorize] điền HttpContext.User
+/// <summary>
+/// Tiện ích tập trung: lấy <see cref="Guid"/> định danh người đã đăng nhập từ <see cref="ClaimsPrincipal"/>
+/// (thường là <c>User</c> trên controller, lấy từ HttpContext.User sau khi JWT xác thực).
+/// Mục đích: một điểm gọi để controller biết &quot;ai đang gọi API&quot; — phục vụ luồng tác giả / chánh chủ;
+/// đổi quy tắc đọc claim chỉ sửa một chỗ.
+/// Luồng: Bearer token → JWT + [Authorize] → action gọi <see cref="GetRequiredUserId"/> → Guid hoặc ApiException 401.
+/// Ưu tiên <see cref="ClaimTypes.NameIdentifier"/>; nếu trống thì <see cref="JwtRegisteredClaimNames.Sub"/>.
+/// </summary>
 
-/// → action gọi GetRequiredUserId với User → nhận Guid hoặc ném ApiException 401 (middleware API chuẩn hóa thành JSON lỗi).
-
-/// Logic: ưu tiên <see cref="ClaimTypes.NameIdentifier"/> (chuẩn ASP.NET, thường map từ sub);
-/// nếu trống thì đọc <see cref="JwtRegisteredClaimNames.Sub"/>; chuỗi phải <see cref="Guid.TryParse(string, out Guid)"/> thành công,
-/// ngược lại coi là chưa xác thực hợp lệ và trả lỗi Unauthenticated
-
-// Đọc sub / NameIdentifier; ném ApiException 401 nếu thiếu hoặc Guid sai — tóm tắt nhiệm vụ lớp.
-internal static class HttpContextUserId // Lớp tĩnh, không tạo instance, chứa hàm phục vụ tất cả controller.
-{ // Mở phạm vi lớp tiện ích đọc định danh người dùng.
-    public static Guid GetRequiredUserId(ClaimsPrincipal user) // Hàm trả về Guid user hiện tại hoặc ném 401; user là User từ HttpContext.
-    { // Mở thân phương thức.
-        var s = user.FindFirstValue(ClaimTypes.NameIdentifier) // Thử lấy claim chuẩn ASP.NET map từ sub.
-            ?? user.FindFirstValue(JwtRegisteredClaimNames.Sub); // Nếu thiếu, đọc claim "sub" chuẩn JWT tên ngắn.
-        if (string.IsNullOrEmpty(s) || !Guid.TryParse(s, out var id)) // Nếu không chuỗi hoặc parse Guid thất bại thì thiếu danh tính.
-        { // Nhánh lỗi thiếu claim hợp lệ.
-            throw new ApiException( // Dùng ngoại lệ thống nhất API, middleware chuyển thành JSON lỗi.
-                StatusCodes.Status401Unauthorized, // Mã HTTP 401, client phải gửi lại access token hợp lệ.
-                ApiErrorCodes.Unauthenticated, // Mã lỗi nội bộ, client có thể map i18n.
-                ApiMessages.Unauthenticated); // Thông điệp mô tả từ ApiMessages.
+// Đọc sub / NameIdentifier; ném ApiException 401 nếu thiếu hoặc Guid không parse được.
+internal static class HttpContextUserId // Lớp tĩnh, không khởi tạo instance.
+{ // Mở phạm vi lớp.
+    /// <summary>
+    /// Trả Guid user đã xác thực; ném <see cref="ApiException"/> 401 Unauthenticated khi không đọc được id hợp lệ.
+    /// </summary>
+    public static Guid GetRequiredUserId(ClaimsPrincipal user) // user = HttpContext.User sau middleware JWT.
+    { // Mở GetRequiredUserId.
+        // BƯỚC 1 — Đọc claim định danh: ASP.NET NameIdentifier hoặc claim JWT &quot;sub&quot;.
+        var s = user.FindFirstValue(ClaimTypes.NameIdentifier) // Chuẩn ASP.NET map từ subject.
+            ?? user.FindFirstValue(JwtRegisteredClaimNames.Sub); // Dự phòng khi chỉ có sub JWT.
+        // BƯỚC 2 — Thiếu chuỗi hoặc không parse Guid ⇒ coi là chưa đăng nhập hợp lệ.
+        if (string.IsNullOrEmpty(s) || !Guid.TryParse(s, out var id)) // Kiểm tra danh tính.
+        { // Nhánh lỗi.
+            throw new ApiException(
+                StatusCodes.Status401Unauthorized, // HTTP 401.
+                ApiErrorCodes.Unauthenticated, // Mã ổn định.
+                ApiMessages.Unauthenticated); // Thông điệp thân thiện client.
         } // Kết nhánh throw.
 
-        return id; // Trả về Guid user đã xác thực dùng cho kiểm tra tác giả, v.v.
-    } 
-} 
+        // BƯỚC 3 — Trả Guid dùng cho kiểm tra tác giả, v.v.
+        return id;
+    } // Kết thúc GetRequiredUserId.
+} // Kết thúc lớp HttpContextUserId.

@@ -1,6 +1,6 @@
-using CommentAPI.Entities;
-using CommentAPI.Interfaces;
-using Microsoft.AspNetCore.Identity;
+using CommentAPI.Entities; // User : IdentityUser.
+using CommentAPI.Interfaces; // IAuthenticationRepository contract.
+using Microsoft.AspNetCore.Identity; // UserManager — login, stamp, roles.
 
 namespace CommentAPI.Repositories;
 

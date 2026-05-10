@@ -1,14 +1,19 @@
-using ApartmentAPI.V1.DTOs;
-using ApartmentAPI.Services;
-using Asp.Versioning;
-using ApartmentAPI.Versioning;
-using Microsoft.AspNetCore.Mvc;
+using ApartmentAPI.DTOs; // ApiMessages, PaginationQuery.
+using ApartmentAPI.Services; // IRefreshTokenService — quản lý refresh token (phân trang, xóa mềm).
+using ApartmentAPI.Validators; // CreatedAtRangeQuery cho bộ lọc ngày tạo.
+using ApartmentAPI.V1.DTOs; // DTO refresh token phiên bản 1.
+using ApartmentAPI.Versioning; // ApiVersionRouteValues.WithVersion cho CreatedAtAction.
+using Asp.Versioning; // [ApiVersion] segment URL.
+using ApartmentAPI.Authorization; // ApiAuthorization — chuỗi role thống nhất với seed Identity.
+using Microsoft.AspNetCore.Authorization; // [Authorize(Roles = ...)] — phân quyền endpoint.
+using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V1.Controllers;
 
-// Refresh token (lưu hash): CRUD + theo user.
+// Refresh token — hỗ trợ quản trị / debug: phân trang tổng và theo user; xóa mềm bản ghi hash. Chỉ Admin.
 [ApiController]
 [ApiVersion("1.0")]
+[Authorize(Roles = ApiAuthorization.AdminOnly)]
 [Route("api/v{version:apiVersion}/refresh-tokens")]
 public class RefreshTokensController : ControllerBase
 {
@@ -19,24 +24,45 @@ public class RefreshTokensController : ControllerBase
     private string? DeletedBy() => User.Identity?.Name;
 
     [HttpGet]
-    public async Task<IActionResult> GetAll(CancellationToken ct)
+    public async Task<IActionResult> GetAll(
+        [FromQuery] string? page,
+        [FromQuery] string? pageSize,
+        [FromQuery] DateTime? createdAtFrom = null,
+        [FromQuery] DateTime? createdAtTo = null,
+        [FromQuery] bool? isRevoked = null,
+        [FromQuery] string? sort = null,
+        [FromQuery] string? sortDir = null,
+        CancellationToken ct = default)
     {
-        var data = await _service.GetAllAsync(ct);
-        return Ok(new { message = ApiMessages.Ok, data });
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
+        var data = await _service.GetPagedAsync(p, s, createdAtFrom, createdAtTo, null, isRevoked, sort, sortDir, ct);
+        return Ok(new { message = ApiMessages.RefreshTokenListSuccess, data });
     }
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {
         var data = await _service.GetByIdAsync(id, ct);
-        return Ok(new { message = ApiMessages.Ok, data });
+        return Ok(new { message = ApiMessages.RefreshTokenGetSuccess, data });
     }
 
     [HttpGet("by-user/{userId:guid}")]
-    public async Task<IActionResult> GetByUser(Guid userId, CancellationToken ct)
+    public async Task<IActionResult> GetByUser(
+        Guid userId,
+        [FromQuery] string? page,
+        [FromQuery] string? pageSize,
+        [FromQuery] DateTime? createdAtFrom = null,
+        [FromQuery] DateTime? createdAtTo = null,
+        [FromQuery] bool? isRevoked = null,
+        [FromQuery] string? sort = null,
+        [FromQuery] string? sortDir = null,
+        CancellationToken ct = default)
     {
-        var data = await _service.GetByUserIdAsync(userId, ct);
-        return Ok(new { message = ApiMessages.Ok, data });
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
+        var data = await _service.GetPagedAsync(p, s, createdAtFrom, createdAtTo, userId, isRevoked, sort, sortDir, ct);
+        return Ok(new { message = ApiMessages.RefreshTokenListSuccess, data });
     }
 
     [HttpPost]

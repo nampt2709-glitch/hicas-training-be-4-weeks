@@ -29,6 +29,12 @@ public class BenchmarkTests
             Assert.NotEmpty(report.CountRuns[0].Items);
             Assert.Empty(report.CountRuns[1].Items);
             Assert.Empty(report.CountRuns[2].Items);
+
+            foreach (var run in report.ReadRuns.Concat(report.CountRuns))
+            {
+                Assert.True(run.CpuTimeMilliseconds >= 0);
+                Assert.True(run.WorkingSetBytes >= 0);
+            }
         }
         finally
         {
@@ -58,6 +64,12 @@ public class BenchmarkTests
             Assert.True(report.FrequencyItems.Count > 0);
             Assert.Equal(1, report.TotalOccurrences);
             Assert.Equal(1, report.DistinctTypeCount);
+
+            foreach (var run in report.ReadRuns.Concat(report.CountRuns))
+            {
+                Assert.True(run.CpuTimeMilliseconds >= 0);
+                Assert.True(run.WorkingSetBytes >= 0);
+            }
         }
         finally
         {

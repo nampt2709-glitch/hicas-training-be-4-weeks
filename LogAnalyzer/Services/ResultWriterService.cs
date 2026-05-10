@@ -33,25 +33,33 @@ public sealed class ResultWriterService : IResultWriter // Triển khai ghi kế
             sb.AppendLine($"Distinct Error Types: {report.DistinctTypeCount:n0}"); // Số loại lỗi khác nhau.
         }
 
+        sb.AppendLine($"Machine: {Environment.MachineName} | Cores: {Environment.ProcessorCount}"); // Bối cảnh CPU OS.
+
         sb.AppendLine(); // Dòng trống phân cách.
 
-        sb.AppendLine("===== READ PERFORMANCE (ms) ====="); // Tiêu đề khối đọc file.
-        sb.AppendLine($"{"Operation",-45}{"Time(ms)",15}"); // Hàng header hai cột.
+        sb.AppendLine("===== READ PERFORMANCE (wall / CPU / RAM) ====="); // Đọc: thời gian tường, CPU tiến trình, working set sau bước.
+        sb.AppendLine($"{"Operation",-45}{"Wall(ms)",12}{"CPU(ms)",12}{"WS(MiB)",14}"); // Bốn cột.
 
         foreach (var run in report.ReadRuns) // Duyệt từng pha đọc Sync/Async.
         {
-            sb.AppendLine($"{run.Label,-45}{run.ElapsedMilliseconds,15}"); // Một dòng: nhãn + thời gian.
+            sb.AppendLine(
+                $"{run.Label,-45}{run.ElapsedMilliseconds,12}{run.CpuTimeMilliseconds,12}{FormatMebiBytesFixed(run.WorkingSetBytes),14}"); // Một dòng đủ chỉ số.
         }
 
         sb.AppendLine(); // Dòng trống.
 
-        sb.AppendLine("===== COUNT PERFORMANCE (ms) ====="); // Tiêu đề khối đếm.
-        sb.AppendLine($"{"Method",-45}{"Time(ms)",15}"); // Header.
+        sb.AppendLine("===== COUNT PERFORMANCE (wall / CPU / RAM) ====="); // Đếm: cùng bộ chỉ số.
+        sb.AppendLine($"{"Method",-45}{"Wall(ms)",12}{"CPU(ms)",12}{"WS(MiB)",14}"); // Header.
 
         foreach (var run in report.CountRuns) // Duyệt Sequential / ForEach / PLINQ.
         {
-            sb.AppendLine($"{run.Label,-45}{run.ElapsedMilliseconds,15}"); // Nhãn + ms.
+            sb.AppendLine(
+                $"{run.Label,-45}{run.ElapsedMilliseconds,12}{run.CpuTimeMilliseconds,12}{FormatMebiBytesFixed(run.WorkingSetBytes),14}");
         }
+
+        sb.AppendLine(); // Ghi chú nghĩa chỉ số (CPU có thể > wall khi song song).
+        sb.AppendLine("Notes: CPU = process processor-time delta (ms), sum across threads; can exceed wall time when parallel.");
+        sb.AppendLine("        WS = working set after each step (snapshot, not necessarily peak allocation).");
 
         sb.AppendLine(); // Dòng trống.
 
@@ -76,5 +84,16 @@ public sealed class ResultWriterService : IResultWriter // Triển khai ghi kế
 
         File.WriteAllText(outputPath, sb.ToString(), Encoding.UTF8); // Ghi toàn bộ nội dung UTF-8 không BOM mặc định WriteAllText.
         return outputPath; // Trả đường dẫn cho caller (ví dụ in console).
+    }
+
+    // Định dạng MiB cố định chiều rộng cột (hai chữ số thập phân).
+    private static string FormatMebiBytesFixed(long bytes)
+    {
+        if (bytes <= 0)
+        {
+            return "0.00";
+        }
+
+        return (bytes / (1024.0 * 1024.0)).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
     }
 }
