@@ -52,7 +52,11 @@ services:
       ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
       # Cùng sqlserver và sa; chỉ khác database HICAS_Apartment_API.
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=HICAS_Apartment_API;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True;MultipleActiveResultSets=True"
+      # Cùng instance Redis với CommentAPI (prefix khóa khác nhau: ApartmentAPI: vs CommentAPI: trong code).
+      ConnectionStrings__Redis: "redis:6379"
       RATE_LIMIT_PERMIT_MULTIPLIER: "${RATE_LIMIT_PERMIT_MULTIPLIER:-25}"
     depends_on:
       sqlserver:
         condition: service_healthy
+      redis:
+        condition: service_started

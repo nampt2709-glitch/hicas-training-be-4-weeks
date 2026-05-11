@@ -80,6 +80,18 @@ public static class EntityCacheKeys
     public static string FeedbacksPaged(long epoch, int page, int pageSize, int sortSeg, bool desc) =>
         $"apt:{epoch}:l:f:{page}:{pageSize}:s{sortSeg}:{(desc ? 1 : 0)}";
 
+    // Danh sách phẳng SqlQueryRaw CTE — GET .../feedbacks/cte (cùng epoch InvalidateFeedbacksListsAsync).
+    public static string FeedbacksCteFlat(long epoch, int page, int pageSize, int sortSeg, bool desc) =>
+        $"apt:{epoch}:l:f:cte:{page}:{pageSize}:s{sortSeg}:{(desc ? 1 : 0)}";
+
+    // Cây từ CTE — GET .../feedbacks/tree/cte.
+    public static string FeedbacksTreeCte(long epoch, int page, int pageSize, int sortSeg, bool desc) =>
+        $"apt:{epoch}:l:f:tree:cte:{page}:{pageSize}:s{sortSeg}:{(desc ? 1 : 0)}";
+
+    // Preorder flatten cây CTE — GET .../feedbacks/tree/cte/flatten.
+    public static string FeedbacksTreeCteFlatten(long epoch, int page, int pageSize, int sortSeg, bool desc) =>
+        $"apt:{epoch}:l:f:tree:cte:flat:{page}:{pageSize}:s{sortSeg}:{(desc ? 1 : 0)}";
+
     public static string PostsPaged(long epoch, int page, int pageSize, int sortSeg, bool desc) =>
         $"apt:{epoch}:l:pst:{page}:{pageSize}:s{sortSeg}:{(desc ? 1 : 0)}";
 
@@ -402,9 +414,21 @@ public static class DistributedCaching
             return;
         }
 
-        // BƯỚC 4 — Lấy connection string Redis.
+        // BƯỚC 4 — Lấy connection string Redis (JSON/env/.env); DotNetEnv chỉ map vào process env khi file được load đúng chỗ.
         var rawCs = builder.Configuration.GetConnectionString("Redis");
-        // TRƯỜNG HỢP B — Không cấu hình Redis → memory distributed.
+        // TRƯỜNG HỢP B1 — Nếu GetConnectionString trả rỗng, đọc trực tiếp ConnectionStrings__Redis từ tiến trình (DotNetEnv/.env hoặc launchSettings).
+        if (string.IsNullOrWhiteSpace(rawCs))
+        {
+            rawCs = Environment.GetEnvironmentVariable("ConnectionStrings__Redis");
+        }
+
+        // TRƯỜNG HỢP B2 — Development + Redis Docker map cổng host mặc định (compose REDIS_PORT 6379) khi chưa có .env.
+        if (string.IsNullOrWhiteSpace(rawCs) && builder.Environment.IsDevelopment())
+        {
+            rawCs = "localhost:6379";
+        }
+
+        // TRƯỜNG HỢP B — Vẫn không có Redis → memory distributed.
         if (string.IsNullOrWhiteSpace(rawCs))
         {
             log.LogWarning("Cache: ConnectionStrings:Redis is not set — using in-process memory.");

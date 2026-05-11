@@ -8,8 +8,6 @@ namespace ApartmentAPI.Tests;
 
 public class AttachmentRepositoryTests
 {
-    private static AttachmentListSort Sort() => new(AttachmentSortColumn.CreatedAt, false);
-
     // F.I.R.S.T — GetByUserIdAsync.
     [Fact]
     public async Task ATR01_GetByUserIdAsync_ShouldListForUser()
@@ -139,19 +137,21 @@ public class AttachmentRepositoryTests
         db.Attachments.AddRange(noise, target);
         await db.SaveChangesAsync();
 
-        var (items, total, _, _) = await sut.GetPagedAsync(
-            1,
-            10,
-            null,
-            null,
-            user.Id,
-            fb.Id,
-            AttachmentScope.Feedback,
-            "UT-99",
-            Sort());
+        // BƯỚC 1 — Tham số sort (AttachmentListSort) là bắt buộc; dùng đặt tên + tuple có field để tránh lỗi suy luận kiểu (var (...) không suy ra được khi chữ ký lệch).
+        var result = await sut.GetPagedAsync(
+            page: 1,
+            pageSize: 10,
+            createdAtFrom: null,
+            createdAtTo: null,
+            userId: user.Id,
+            feedbackId: fb.Id,
+            postId: null,
+            scope: AttachmentScope.Feedback,
+            originalFileNameContains: "UT-99",
+            sort: new AttachmentListSort(AttachmentSortColumn.CreatedAt, Descending: false));
 
-        Assert.Equal(1, total);
-        Assert.Equal(target.Id, items[0].Id);
+        Assert.Equal(1, result.TotalCount);
+        Assert.Equal(target.Id, result.Items[0].Id);
     }
 
     // F.I.R.S.T — SoftDelete thiếu file.

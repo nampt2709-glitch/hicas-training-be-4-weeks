@@ -138,8 +138,10 @@ public static class ListSortParsing
             : c.Equals("isPinned", StringComparison.OrdinalIgnoreCase) ? FeedbackSortColumn.IsPinned
             : c.Equals("isResolved", StringComparison.OrdinalIgnoreCase) ? FeedbackSortColumn.IsResolved
             : c.Equals("parentId", StringComparison.OrdinalIgnoreCase) ? FeedbackSortColumn.ParentId
+            : c.Equals("content", StringComparison.OrdinalIgnoreCase) ? FeedbackSortColumn.Content
+            : c.Equals("level", StringComparison.OrdinalIgnoreCase) ? FeedbackSortColumn.Level
             : c.Equals("createdAt", StringComparison.OrdinalIgnoreCase) ? FeedbackSortColumn.CreatedAt
-            : throw InvalidSort("Id, UserId, IsPinned, IsResolved, ParentId, CreatedAt");
+            : throw InvalidSort("Id, UserId, IsPinned, IsResolved, ParentId, Content, Level, CreatedAt");
         return new FeedbackListSort(col, desc);
     } // Kết thúc ParseFeedbackSort.
 
@@ -312,6 +314,8 @@ public enum FeedbackSortColumn
     IsPinned = 3,
     IsResolved = 4,
     ParentId = 5,
+    Content = 6, // Sort sau khi materialize CTE (thêm ở cuối để không đổi CacheSegment 0..5).
+    Level = 7, // Độ sâu cây CTE.
 }
 
 public readonly record struct FeedbackListSort(FeedbackSortColumn Column, bool Descending)

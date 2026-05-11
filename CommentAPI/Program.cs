@@ -384,13 +384,15 @@ builder.Services.AddScoped<IPostService, PostService>();
 builder.Services.AddScoped<ICommentService, CommentService>();
 builder.Services.AddScoped<IAuthenticationService, AuthenticationService>();
 
-// Serilog: sáu file kênh + FiltersLog (ILogger từ Resource/Action/Exception/Result filter); mỗi kênh qua property LogChannel hoặc SourceContext.
+// Serilog: sáu file kênh + FiltersLog; Development thêm Console để xem SQL EF và log runtime trên terminal (UseSerilog thay provider mặc định — trước đây chỉ có file nên console trống).
 var logsDir = Path.Combine(builder.Environment.ContentRootPath, "Logs");
 Directory.CreateDirectory(logsDir);
 const string fileTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
 const string filtersLogTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}";
-Log.Logger = new LoggerConfiguration()
+var serilogCfg = new LoggerConfiguration()
     .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Database.Command", LogEventLevel.Information)
     .MinimumLevel.Override("CommentResourceFilter", LogEventLevel.Verbose)
     .MinimumLevel.Override("CommentActionFilter", LogEventLevel.Verbose)
     .MinimumLevel.Override("CommentExceptionFilter", LogEventLevel.Verbose)
@@ -417,8 +419,17 @@ Log.Logger = new LoggerConfiguration()
         .WriteTo.File(Path.Combine(logsDir, "ActivitiesLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: fileTemplate))
     .WriteTo.Logger(lc => lc // ILogger từ pipeline filters (LogTrace / LogWarning) → FiltersLog.log.
         .Filter.ByIncludingOnly(StructuredFileLogger.IsPipelineFilterLog)
-        .WriteTo.File(Path.Combine(logsDir, "FiltersLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: filtersLogTemplate))
-    .CreateLogger(); // Hoàn tất logger tĩnh.
+        .WriteTo.File(Path.Combine(logsDir, "FiltersLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: filtersLogTemplate));
+
+if (builder.Environment.IsDevelopment())
+{
+    // BƯỚC — In ra console: SourceContext + message (gồm câu SQL từ EF).
+    serilogCfg = serilogCfg.WriteTo.Console(
+        restrictedToMinimumLevel: LogEventLevel.Information,
+        outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}");
+}
+
+Log.Logger = serilogCfg.CreateLogger(); // Hoàn tất logger tĩnh.
 builder.Host.UseSerilog(Log.Logger, dispose: true); // Host dùng cùng pipeline Serilog, flush khi shutdown.
 
 // Dựng pipeline: host, middleware, endpoint — chưa lắng nghe.

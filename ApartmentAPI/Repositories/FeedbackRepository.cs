@@ -1,10 +1,12 @@
 using ApartmentAPI.Data; // AppDbContext — DbSet Feedback.
 using ApartmentAPI.Entities; // Feedback POCO.
+using ApartmentAPI.V1.DTOs; // FeedbackCteDto — projection SqlQueryRaw.
 using Microsoft.EntityFrameworkCore; // EF Core truy vấn và lưu thay đổi.
 
 namespace ApartmentAPI.Repositories;
 
-// Hợp đồng repository Feedback: CRUD + cây (gốc/con) + lọc user/nội dung + phân trang sort.
+// Triển khai FeedbackRepository: CRUD/phân trang ở file này; CTE đệ quy (chuỗi SQL + LoadRawCteAsync) nằm trong FeedbackRepository.Cte.cs (partial cùng lớp).
+// Hợp đồng repository Feedback: CRUD + cây (gốc/con) + lọc user/nội dung + phân trang sort + CTE đệ quy (mirror CommentAPI).
 public interface IFeedbackRepository
 { // Mở khối IFeedbackRepository.
     Task<List<Feedback>> GetAllAsync(CancellationToken ct = default); // Toàn bộ feedback.
@@ -35,10 +37,27 @@ public interface IFeedbackRepository
 
     // Toàn bộ cặp (Id, ParentId) bản ghi còn sống — BFS subtree khi admin đổi ParentId (chống chu trình).
     Task<List<(Guid Id, Guid? ParentId)>> GetAllIdParentPairsAsync(CancellationToken ct = default);
+
+    // Đếm mọi feedback khớp lọc route (metadata TotalComments trên route tree/cte; đồng bộ với GetPaged khi không rootsOnly).
+    Task<long> CountFeedbacksMatchingRouteAsync(
+        DateTime? createdAtFrom,
+        DateTime? createdAtTo,
+        Guid? userId,
+        string? contentContains,
+        CancellationToken ct = default);
+
+    // SqlQueryRaw một lần: CTE đệ quy + WHERE sau CTE; sort whitelist trong RAM sau materialize.
+    Task<List<FeedbackCteDto>> LoadRawCteAsync(
+        CancellationToken ct = default,
+        DateTime? createdAtFrom = null,
+        DateTime? createdAtTo = null,
+        Guid? userId = null,
+        string? contentContains = null,
+        FeedbackListSort sort = default);
 } // Kết thúc IFeedbackRepository.
 
 // Truy vấn bảng Feedback — phân trang, sort, lọc cây phản hồi.
-public sealed class FeedbackRepository : RepositoryBase<Feedback>, IFeedbackRepository
+public sealed partial class FeedbackRepository : RepositoryBase<Feedback>, IFeedbackRepository
 { // Mở khối FeedbackRepository.
     public FeedbackRepository(AppDbContext context)
         : base(context)

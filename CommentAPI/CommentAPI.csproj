@@ -16,6 +16,7 @@
 	  <PackageReference Include="DotNetEnv" Version="3.1.1" />
 	  <PackageReference Include="FluentValidation.AspNetCore" Version="11.3.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.8" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
     <!-- Đồng bộ với Microsoft.IdentityModel.Tokens (transitive 8.x); Jwt 7.x + Tokens 8.x có thể tạo payload JWT thiếu aud/exp/claim tùy chỉnh. -->
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.14.0" />
 	  <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="8.0.8" />

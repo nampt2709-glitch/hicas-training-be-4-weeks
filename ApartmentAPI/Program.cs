@@ -357,8 +357,11 @@ var logsDir = Path.Combine(builder.Environment.ContentRootPath, "Logs"); // Thư
 Directory.CreateDirectory(logsDir);
 const string fileTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
 const string filtersLogTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}";
-Log.Logger = new LoggerConfiguration()
+// Serilog: file sinks luôn bật; console chỉ Development để xem SQL EF (Microsoft.EntityFrameworkCore.Database.Command) và log runtime trên terminal.
+var serilogCfg = new LoggerConfiguration()
     .MinimumLevel.Debug()
+    .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Database.Command", LogEventLevel.Information)
     .MinimumLevel.Override("ApartmentResourceFilter", LogEventLevel.Verbose)
     .MinimumLevel.Override("ApartmentActionFilter", LogEventLevel.Verbose)
     .MinimumLevel.Override("ApartmentExceptionFilter", LogEventLevel.Verbose)
@@ -385,8 +388,17 @@ Log.Logger = new LoggerConfiguration()
         .WriteTo.File(Path.Combine(logsDir, "ActivitiesLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: fileTemplate))
     .WriteTo.Logger(lc => lc
         .Filter.ByIncludingOnly(StructuredFileLogger.IsPipelineFilterLog)
-        .WriteTo.File(Path.Combine(logsDir, "FiltersLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: filtersLogTemplate))
-    .CreateLogger();
+        .WriteTo.File(Path.Combine(logsDir, "FiltersLog.log"), rollingInterval: RollingInterval.Infinite, shared: true, outputTemplate: filtersLogTemplate));
+
+if (builder.Environment.IsDevelopment())
+{
+    // BƯỚC — Console: cùng định dạng gần với file pipeline để đọc SourceContext + SQL dễ hơn.
+    serilogCfg = serilogCfg.WriteTo.Console(
+        restrictedToMinimumLevel: LogEventLevel.Information,
+        outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}");
+}
+
+Log.Logger = serilogCfg.CreateLogger();
 builder.Host.UseSerilog(Log.Logger, dispose: true);
 
 var app = builder.Build(); // Đóng băng pipeline — thêm middleware dưới đây.

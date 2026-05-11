@@ -15,28 +15,32 @@ public static class AttachmentBinarySignatures
         Pdf,
     }
 
-    // FluentValidation / pipeline: đọc đầu stream, bắt buộc ảnh hoặc PDF thật và extension khớp loại phát hiện.
-    public static async Task<bool> IsValidUploadAsync(IFormFile file, CancellationToken ct = default)
-    { // Mở khối IsValidUploadAsync.
-        // BƯỚC 1 — Mở stream sequential và đọc tối đa 16 byte đầu.
-        await using var stream = file.OpenReadStream();
+    // Đọc tối đa 16 byte đầu + so magic bytes — dùng .Must() trong FluentValidation auto-validation (pipeline đồng bộ).
+    public static bool IsValidUpload(IFormFile file)
+    { // Mở khối IsValidUpload.
+        using var stream = file.OpenReadStream();
         var header = new byte[16];
         var total = 0;
         while (total < 16)
         { // Lặp cho đến đủ 16 byte hoặc EOF.
-            var n = await stream.ReadAsync(header.AsMemory(total, 16 - total), ct).ConfigureAwait(false);
+            var n = stream.Read(header, total, 16 - total);
             if (n == 0)
-                break; // File rất ngắn — Detect sẽ Unknown.
+                break;
             total += n;
         }
 
-        // BƯỚC 2 — Suy loại từ span thực tế đã đọc.
         var kind = Detect(header.AsSpan(0, total));
         if (kind == DetectedKind.Unknown)
-            return false; // Không khớp JPEG/PNG/GIF/WEBP/PDF.
+            return false;
 
-        // BƯỚC 3 — So khớp phần mở rộng với loại phát hiện.
         return ExtensionMatchesDetectedKind(Path.GetExtension(file.FileName), kind);
+    } // Kết thúc IsValidUpload.
+
+    // Overload async: cùng kết quả IsValidUpload — giữ cho caller await (không dùng trong rule .MustAsync của auto-validation).
+    public static Task<bool> IsValidUploadAsync(IFormFile file, CancellationToken ct = default)
+    { // Mở khối IsValidUploadAsync.
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(IsValidUpload(file));
     } // Kết thúc IsValidUploadAsync.
 
     // Lưu đĩa (defense in depth): kiểm tra header đã đọc + extension trước khi ghi bytes.

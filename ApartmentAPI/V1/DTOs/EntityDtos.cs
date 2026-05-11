@@ -191,6 +191,46 @@ public class FeedbackDto
     public DateTime CreatedAt { get; set; } // Thời gian tạo.
 }
 
+// Một dòng phẳng từ SqlQueryRaw CTE đệ quy (cùng họ route với CommentAPI CommentCteDto; không có PostId — cây toàn hệ).
+public class FeedbackCteDto
+{ // Mở khối FeedbackCteDto — projection EF Core sau EXEC CTE.
+    public Guid Id { get; set; } // Khóa nút feedback.
+    public string Content { get; set; } = string.Empty; // Nội dung.
+    public DateTime CreatedAt { get; set; } // Thời điểm tạo.
+    public Guid UserId { get; set; } // Tác giả.
+    public Guid? ParentId { get; set; } // Cha trong cây (null = gốc).
+    public bool IsResolved { get; set; } // Cờ đã xử lý.
+    public bool IsPinned { get; set; } // Cờ ghim.
+    public int Level { get; set; } // Độ sâu do CTE gán (0 = gốc).
+} // Kết thúc FeedbackCteDto.
+
+// Cây lồng sau BuildFeedbackTreeCte — payload GET .../feedbacks/tree/cte (mirror CommentTreeCteDto).
+public class FeedbackTreeCteDto
+{ // Mở khối FeedbackTreeCteDto — nút có danh sách con đệ quy.
+    public Guid Id { get; set; } // Id nút.
+    public string Content { get; set; } = string.Empty; // Nội dung.
+    public DateTime CreatedAt { get; set; } // Thời tạo.
+    public Guid UserId { get; set; } // Tác giả.
+    public Guid? ParentId { get; set; } // Cha (tham chiếu phẳng).
+    public bool IsResolved { get; set; } // Đã xử lý.
+    public bool IsPinned { get; set; } // Ghim.
+    public int Level { get; set; } // Độ sâu từ hàng CTE.
+    public List<FeedbackTreeCteDto> Children { get; set; } = new(); // Con trực tiếp (cấu trúc cây).
+} // Kết thúc FeedbackTreeCteDto.
+
+// Một dòng preorder sau flatten cây CTE — GET .../feedbacks/tree/cte/flatten (mirror CommentFlattenCteDto).
+public class FeedbackFlattenCteDto
+{ // Mở khối FeedbackFlattenCteDto — danh sách phẳng theo thứ tự duyệt cây.
+    public Guid Id { get; set; } // Id nút.
+    public string Content { get; set; } = string.Empty; // Nội dung.
+    public DateTime CreatedAt { get; set; } // Thời tạo.
+    public Guid UserId { get; set; } // Tác giả.
+    public Guid? ParentId { get; set; } // Cha.
+    public bool IsResolved { get; set; } // Đã xử lý.
+    public bool IsPinned { get; set; } // Ghim.
+    public int Level { get; set; } // Độ sâu giữ nguyên từ cây CTE.
+} // Kết thúc FeedbackFlattenCteDto.
+
 public class CreateFeedbackDto
 {
     public string Content { get; set; } = string.Empty; // Nội dung bắt buộc.

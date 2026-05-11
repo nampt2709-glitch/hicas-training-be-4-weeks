@@ -81,6 +81,9 @@ public static class ApiMessages
     public const string InvoiceListSuccess = "Invoices retrieved successfully."; // Danh sách hóa đơn.
     public const string InvoiceItemListSuccess = "Invoice items retrieved successfully."; // Dòng hóa đơn.
     public const string FeedbackListSuccess = "Feedbacks retrieved successfully."; // Phản hồi.
+    public const string FeedbackCteFlatSuccess = "Feedback CTE flat list retrieved successfully."; // GET .../feedbacks/cte.
+    public const string FeedbackCteTreeSuccess = "Feedback tree (CTE) retrieved successfully."; // GET .../feedbacks/tree/cte.
+    public const string FeedbackCteFlattenSuccess = "Feedback tree (CTE) flattened retrieved successfully."; // GET .../feedbacks/tree/cte/flatten.
     public const string PostListSuccess = "Posts retrieved successfully."; // Bài đăng / thông báo.
     public const string AttachmentListSuccess = "Attachments retrieved successfully."; // Đính kèm.
     public const string RefreshTokenListSuccess = "Refresh tokens retrieved successfully."; // Token làm mới (admin).

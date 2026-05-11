@@ -28,6 +28,40 @@ public interface IFeedbackService
     // Admin: PUT .../feedbacks/{id}/admin — đổi UserId, ParentId, cờ; chặn ParentId tạo chu trình (giống CommentAPI admin).
     Task UpdateAsAdminAsync(Guid id, AdminUpdateFeedbackDto dto, CancellationToken ct = default);
     Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default);
+
+    // CTE đệ quy + flatten (mirror CommentAPI /comments/cte, /tree/cte, /tree/cte/flatten).
+    Task<PagedResult<FeedbackCteDto>> GetCteFlatRoutePagedAsync(
+        int page,
+        int pageSize,
+        DateTime? createdAtFrom,
+        DateTime? createdAtTo,
+        Guid? userId,
+        string? contentContains,
+        string? sort,
+        string? sortDir,
+        CancellationToken ct = default);
+
+    Task<PagedResult<FeedbackTreeCteDto>> GetTreeCteRoutePagedAsync(
+        int page,
+        int pageSize,
+        DateTime? createdAtFrom,
+        DateTime? createdAtTo,
+        Guid? userId,
+        string? contentContains,
+        string? sort,
+        string? sortDir,
+        CancellationToken ct = default);
+
+    Task<PagedResult<FeedbackFlattenCteDto>> GetTreeCteFlattenRoutePagedAsync(
+        int page,
+        int pageSize,
+        DateTime? createdAtFrom,
+        DateTime? createdAtTo,
+        Guid? userId,
+        string? contentContains,
+        string? sort,
+        string? sortDir,
+        CancellationToken ct = default);
 }
 
 // CRUD Feedback: UserId và ParentId (nếu có) phải hợp lệ.
@@ -117,6 +151,262 @@ public sealed class FeedbackService : ServiceBase, IFeedbackService
 
         return result;
     } // Kết thúc GetPagedAsync.
+
+    // Tắt cache JSON danh sách CTE khi có lọc nặng (cùng tinh thần SuppressCommentRouteCache trong CommentAPI).
+    private static bool SuppressFeedbackRouteCache(
+        DateTime? createdAtFrom,
+        DateTime? createdAtTo,
+        Guid? userId,
+        string? contentContains) =>
+        HasCreatedAtFilter(createdAtFrom, createdAtTo)
+        || userId is not null
+        || HasTextFilter(contentContains);
+
+    // GET .../feedbacks/cte — phân trang theo dòng phẳng CTE (mỗi item một nút + Level).
+    public async Task<PagedResult<FeedbackCteDto>> GetCteFlatRoutePagedAsync(
+        int page,
+        int pageSize,
+        DateTime? createdAtFrom,
+        DateTime? createdAtTo,
+        Guid? userId,
+        string? contentContains,
+        string? sort,
+        string? sortDir,
+        CancellationToken ct = default)
+    { // Mở khối GetCteFlatRoutePagedAsync.
+        // BƯỚC 1 — Chuẩn hóa sort + phân trang (trùng quy tắc CommentsController).
+        var sortSpec = ListSortParsing.ParseFeedbackSort(sort, sortDir);
+        var (p, s) = PaginationQuery.Normalize(page, pageSize);
+        // BƯỚC 2 — Cache-aside khi không suppress (epoch chung InvalidateFeedbacksListsAsync).
+        if (!SuppressFeedbackRouteCache(createdAtFrom, createdAtTo, userId, contentContains))
+        { // Mở nhánh đọc cache.
+            var epoch = await ListEpoch.GetFeedbacksListEpochAsync(ct);
+            var cacheKey = EntityCacheKeys.FeedbacksCteFlat(epoch, p, s, sortSpec.CacheSegment, sortSpec.Descending);
+            var cached = await Cache.GetJsonAsync<PagedResult<FeedbackCteDto>>(cacheKey, ct);
+            if (cached is not null)
+                return cached;
+        } // Kết thúc đọc cache.
+
+        // BƯỚC 3 — Một round-trip CTE + sort RAM; cắt trang trên list phẳng.
+        var flatRows = await _repository.LoadRawCteAsync(ct, createdAtFrom, createdAtTo, userId, contentContains, sortSpec);
+        var totalRows = (long)flatRows.Count;
+        var pageItems = flatRows
+            .Skip((p - 1) * s)
+            .Take(s)
+            .ToList();
+        var result = FeedbackPagedResult.ForFlatFeedbackCteList(pageItems, p, s, totalRows);
+
+        // BƯỚC 4 — Ghi cache khi được phép.
+        if (!SuppressFeedbackRouteCache(createdAtFrom, createdAtTo, userId, contentContains))
+        { // Mở nhánh ghi cache.
+            var epoch = await ListEpoch.GetFeedbacksListEpochAsync(ct);
+            var cacheKey = EntityCacheKeys.FeedbacksCteFlat(epoch, p, s, sortSpec.CacheSegment, sortSpec.Descending);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
+        } // Kết thúc ghi cache.
+
+        return result;
+    } // Kết thúc GetCteFlatRoutePagedAsync.
+
+    // GET .../feedbacks/tree/cte — phân trang theo gốc thread; mỗi item là cây lồng FeedbackTreeCteDto.
+    public async Task<PagedResult<FeedbackTreeCteDto>> GetTreeCteRoutePagedAsync(
+        int page,
+        int pageSize,
+        DateTime? createdAtFrom,
+        DateTime? createdAtTo,
+        Guid? userId,
+        string? contentContains,
+        string? sort,
+        string? sortDir,
+        CancellationToken ct = default)
+    { // Mở khối GetTreeCteRoutePagedAsync.
+        var sortSpec = ListSortParsing.ParseFeedbackSort(sort, sortDir);
+        var (p, s) = PaginationQuery.Normalize(page, pageSize);
+        if (!SuppressFeedbackRouteCache(createdAtFrom, createdAtTo, userId, contentContains))
+        {
+            var epoch = await ListEpoch.GetFeedbacksListEpochAsync(ct);
+            var cacheKey = EntityCacheKeys.FeedbacksTreeCte(epoch, p, s, sortSpec.CacheSegment, sortSpec.Descending);
+            var cached = await Cache.GetJsonAsync<PagedResult<FeedbackTreeCteDto>>(cacheKey, ct);
+            if (cached is not null)
+                return cached;
+        }
+
+        var (items, totalNodes, totalFeedbacks) = await BuildFeedbackCteTreesPagedCoreAsync(
+            p, s, ct, createdAtFrom, createdAtTo, userId, contentContains, sortSpec);
+        var result = FeedbackPagedResult.ForCtePagedByRootNodes(items, p, s, totalFeedbacks, totalNodes);
+
+        if (!SuppressFeedbackRouteCache(createdAtFrom, createdAtTo, userId, contentContains))
+        {
+            var epoch = await ListEpoch.GetFeedbacksListEpochAsync(ct);
+            var cacheKey = EntityCacheKeys.FeedbacksTreeCte(epoch, p, s, sortSpec.CacheSegment, sortSpec.Descending);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
+        }
+
+        return result;
+    } // Kết thúc GetTreeCteRoutePagedAsync.
+
+    // GET .../feedbacks/tree/cte/flatten — preorder các thread gốc của trang → danh sách phẳng có Level.
+    public async Task<PagedResult<FeedbackFlattenCteDto>> GetTreeCteFlattenRoutePagedAsync(
+        int page,
+        int pageSize,
+        DateTime? createdAtFrom,
+        DateTime? createdAtTo,
+        Guid? userId,
+        string? contentContains,
+        string? sort,
+        string? sortDir,
+        CancellationToken ct = default)
+    { // Mở khối GetTreeCteFlattenRoutePagedAsync.
+        var sortSpec = ListSortParsing.ParseFeedbackSort(sort, sortDir);
+        var (p, s) = PaginationQuery.Normalize(page, pageSize);
+        if (!SuppressFeedbackRouteCache(createdAtFrom, createdAtTo, userId, contentContains))
+        {
+            var epoch = await ListEpoch.GetFeedbacksListEpochAsync(ct);
+            var cacheKey = EntityCacheKeys.FeedbacksTreeCteFlatten(epoch, p, s, sortSpec.CacheSegment, sortSpec.Descending);
+            var cached = await Cache.GetJsonAsync<PagedResult<FeedbackFlattenCteDto>>(cacheKey, ct);
+            if (cached is not null)
+                return cached;
+        }
+
+        var (cteRootsOnPage, totalCteRootNodes, totalFeedbacksMatchingFilter) = await BuildFeedbackCteTreesPagedCoreAsync(
+            p, s, ct, createdAtFrom, createdAtTo, userId, contentContains, sortSpec);
+        var preorderRows = new List<FeedbackFlattenCteDto>();
+        foreach (var root in cteRootsOnPage)
+            FlattenTreeCteToFlattenCteDto(root, preorderRows);
+        var result = FeedbackPagedResult.ForCtePagedByRootNodes(
+            preorderRows, p, s, totalFeedbacksMatchingFilter, totalCteRootNodes);
+
+        if (!SuppressFeedbackRouteCache(createdAtFrom, createdAtTo, userId, contentContains))
+        {
+            var epoch = await ListEpoch.GetFeedbacksListEpochAsync(ct);
+            var cacheKey = EntityCacheKeys.FeedbacksTreeCteFlatten(epoch, p, s, sortSpec.CacheSegment, sortSpec.Descending);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
+        }
+
+        return result;
+    } // Kết thúc GetTreeCteFlattenRoutePagedAsync.
+
+    // Pipeline CTE: COUNT bảng + LoadRawCteAsync + BuildFeedbackTreeCte + sort gốc + Skip/Take theo thread (mirror BuildCteTreesPagedCoreAsync).
+    private async Task<(List<FeedbackTreeCteDto> PagedRoots, long TotalRootNodesInCte, long TotalFeedbacksInTable)> BuildFeedbackCteTreesPagedCoreAsync(
+        int page,
+        int pageSize,
+        CancellationToken ct,
+        DateTime? createdAtFrom,
+        DateTime? createdAtTo,
+        Guid? userId,
+        string? contentContains,
+        FeedbackListSort sortSpec)
+    { // Mở khối BuildFeedbackCteTreesPagedCoreAsync.
+        // BƯỚC 1 — Tổng feedback khớp lọc trên bảng (TotalComments / metadata).
+        var totalFeedbacksTable = await _repository.CountFeedbacksMatchingRouteAsync(
+            createdAtFrom, createdAtTo, userId, contentContains, ct);
+        // BƯỚC 2 — Toàn bộ hàng CTE đã sort phẳng.
+        var rows = await _repository.LoadRawCteAsync(ct, createdAtFrom, createdAtTo, userId, contentContains, sortSpec);
+        // BƯỚC 3 — Dựng rừng gốc (một “PostId” toàn hệ — không GroupBy).
+        var roots = BuildFeedbackTreeCte(rows);
+        // BƯỚC 4 — Sắp danh sách gốc rồi phân trang trong RAM.
+        var orderedRoots = FeedbackRepository.SortFeedbackTreeCteRootsForPaging(roots, sortSpec);
+        var totalRootNodesInCte = (long)orderedRoots.Count;
+        var pagedRoots = orderedRoots
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+        return (pagedRoots, totalRootNodesInCte, totalFeedbacksTable);
+    } // Kết thúc BuildFeedbackCteTreesPagedCoreAsync.
+
+    // Dựng FeedbackTreeCteDto từ hàng phẳng: lookup Id; orphan/cycle → nâng thành gốc (cùng CommentAPI BuildTreeCte nhưng không nhóm PostId).
+    private static List<FeedbackTreeCteDto> BuildFeedbackTreeCte(List<FeedbackCteDto> rows)
+    { // Mở khối BuildFeedbackTreeCte.
+        if (rows is null || rows.Count == 0)
+            return new List<FeedbackTreeCteDto>();
+
+        // BƯỚC 0 — Map Id → ParentId một lần cho cả tập (CommentAPI gọi ToDictionary trong HasCycleCte mỗi nút → O(n²); ở đây một cây toàn hệ n lớn nên phải tránh).
+        var parentById = rows.ToDictionary(x => x.Id, x => x.ParentId);
+
+        var forest = new List<FeedbackTreeCteDto>();
+        var lookup = rows.ToDictionary(
+            x => x.Id,
+            x => new FeedbackTreeCteDto
+            {
+                Id = x.Id,
+                Content = x.Content,
+                CreatedAt = x.CreatedAt,
+                UserId = x.UserId,
+                ParentId = x.ParentId,
+                IsResolved = x.IsResolved,
+                IsPinned = x.IsPinned,
+                Level = x.Level,
+            });
+
+        var threadRoots = new List<FeedbackTreeCteDto>();
+        foreach (var row in rows.OrderBy(x => x.Level).ThenBy(x => x.CreatedAt).ThenBy(x => x.Id))
+        { // Duyệt theo Level để cha luôn xử lý trước con khi nối Children.
+            var node = lookup[row.Id];
+            if (row.ParentId is null)
+            {
+                threadRoots.Add(node);
+                continue;
+            }
+
+            if (!lookup.TryGetValue(row.ParentId.Value, out var parent))
+            {
+                threadRoots.Add(node);
+                continue;
+            }
+
+            if (HasCycleFeedbackCte(row.Id, parentById))
+            {
+                threadRoots.Add(node);
+                continue;
+            }
+
+            parent.Children.Add(node);
+        }
+
+        foreach (var root in threadRoots.OrderBy(r => r.CreatedAt).ThenBy(r => r.Id))
+            forest.Add(root);
+
+        return forest;
+    } // Kết thúc BuildFeedbackTreeCte.
+
+    // Leo ngược ParentId trong map đã có để phát hiện chu trình (không tạo lại Dictionary mỗi lần gọi).
+    private static bool HasCycleFeedbackCte(Guid feedbackId, IReadOnlyDictionary<Guid, Guid?> parentById)
+    { // Mở khối HasCycleFeedbackCte.
+        if (!parentById.ContainsKey(feedbackId))
+            return false;
+
+        var visited = new HashSet<Guid>();
+        Guid? parentId = parentById[feedbackId];
+        while (parentId is not null)
+        {
+            if (parentId == feedbackId)
+                return true;
+            if (!visited.Add(parentId.Value))
+                return true;
+            if (!parentById.TryGetValue(parentId.Value, out var nextParent))
+                return false;
+            parentId = nextParent;
+        }
+
+        return false;
+    } // Kết thúc HasCycleFeedbackCte.
+
+    // Preorder một nhánh FeedbackTreeCteDto → danh sách FeedbackFlattenCteDto
+    private static void FlattenTreeCteToFlattenCteDto(FeedbackTreeCteDto node, ICollection<FeedbackFlattenCteDto> sink)
+    { // Mở khối FlattenTreeCteToFlattenCteDto.
+        sink.Add(new FeedbackFlattenCteDto
+        {
+            Id = node.Id,
+            Content = node.Content,
+            CreatedAt = node.CreatedAt,
+            UserId = node.UserId,
+            ParentId = node.ParentId,
+            IsResolved = node.IsResolved,
+            IsPinned = node.IsPinned,
+            Level = node.Level,
+        });
+        foreach (var child in node.Children.OrderBy(c => c.CreatedAt).ThenBy(c => c.Id))
+            FlattenTreeCteToFlattenCteDto(child, sink);
+    } // Kết thúc FlattenTreeCteToFlattenCteDto.
 
     public async Task<FeedbackDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.

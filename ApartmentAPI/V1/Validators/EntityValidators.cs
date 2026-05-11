@@ -212,8 +212,9 @@ public sealed class CreateAvatarAttachmentUploadValidator : AbstractValidator<Av
             .Must(f => f == null || HasAllowedExtension(f!.FileName))
             .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
 
+        // Magic bytes đồng bộ — tương thích AddFluentValidationAutoValidation (không MustAsync).
         RuleFor(x => x.File)
-            .MustAsync(async (f, ct) => f != null && await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+            .Must(f => f != null && AttachmentBinarySignatures.IsValidUpload(f))
             .When(x => x.File != null)
             .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
     }
@@ -261,8 +262,9 @@ public sealed class UploadsAvatarUploadValidator : AbstractValidator<UploadsAvat
             .Must(f => f == null || UploadsAvatarHasAllowedExtension(f!.FileName))
             .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
 
+        // Magic bytes đồng bộ — tương thích AddFluentValidationAutoValidation (không MustAsync).
         RuleFor(x => x.File)
-            .MustAsync(async (f, ct) => f != null && await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+            .Must(f => f != null && AttachmentBinarySignatures.IsValidUpload(f))
             .When(x => x.File != null)
             .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
     }
@@ -310,8 +312,9 @@ public sealed class CreateFeedbackAttachmentUploadValidator : AbstractValidator<
             .Must(f => f == null || HasAllowedExtension(f!.FileName))
             .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
 
+        // Magic bytes đồng bộ — tương thích AddFluentValidationAutoValidation (không MustAsync).
         RuleFor(x => x.File)
-            .MustAsync(async (f, ct) => f != null && await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+            .Must(f => f != null && AttachmentBinarySignatures.IsValidUpload(f))
             .When(x => x.File != null)
             .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
     }
@@ -359,8 +362,9 @@ public sealed class CreatePostAttachmentUploadValidator : AbstractValidator<Post
             .Must(f => f == null || HasAllowedExtension(f!.FileName))
             .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
 
+        // Magic bytes đồng bộ — tương thích AddFluentValidationAutoValidation (không MustAsync).
         RuleFor(x => x.File)
-            .MustAsync(async (f, ct) => f != null && await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+            .Must(f => f != null && AttachmentBinarySignatures.IsValidUpload(f))
             .When(x => x.File != null)
             .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
     }
@@ -407,8 +411,9 @@ public sealed class UpdateAvatarAttachmentFormValidator : AbstractValidator<Upda
                 .Must(f => HasAllowedExtension(f.FileName))
                 .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
 
+            // Magic bytes đồng bộ — tương thích AddFluentValidationAutoValidation (không MustAsync).
             RuleFor(x => x.File!)
-                .MustAsync(async (f, ct) => await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+                .Must(AttachmentBinarySignatures.IsValidUpload)
                 .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
         });
     }
@@ -459,8 +464,9 @@ public sealed class UpdateFeedbackAttachmentFormValidator : AbstractValidator<Up
                 .Must(f => HasAllowedExtension(f.FileName))
                 .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
 
+            // Magic bytes đồng bộ — tương thích AddFluentValidationAutoValidation (không MustAsync).
             RuleFor(x => x.File!)
-                .MustAsync(async (f, ct) => await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+                .Must(AttachmentBinarySignatures.IsValidUpload)
                 .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
         });
     }
@@ -511,8 +517,9 @@ public sealed class UpdatePostAttachmentFormValidator : AbstractValidator<Update
                 .Must(f => HasAllowedExtension(f.FileName))
                 .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
 
+            // Magic bytes đồng bộ — tương thích AddFluentValidationAutoValidation (không MustAsync).
             RuleFor(x => x.File!)
-                .MustAsync(async (f, ct) => await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+                .Must(AttachmentBinarySignatures.IsValidUpload)
                 .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
         });
     }

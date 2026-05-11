@@ -22,6 +22,38 @@ public class PagedResult<T>
     public int TotalPages => PageSize <= 0 ? 0 : (int)Math.Ceiling(TotalCount / (double)PageSize); // Số trang làm tròn lên.
 } // Kết thúc PagedResult.
 
+// Gói metadata cho route feedback CTE — cùng quy ước TotalCount/TotalComments/TotalNodes như CommentPagedResult (hệ CommentAPI).
+public static class FeedbackPagedResult
+{ // Mở khối FeedbackPagedResult — factory PagedResult cho GET /feedbacks/cte và tree/cte*.
+    // Mỗi phần tử trang = một dòng CTE phẳng; TotalPages theo tổng số dòng CTE sau lọc.
+    public static PagedResult<T> ForFlatFeedbackCteList<T>(List<T> items, int page, int pageSize, long totalFlatRowsMatchingCte) // Một nút một dòng.
+    { // Mở khối ForFlatFeedbackCteList.
+        return new PagedResult<T> // Shape giống CommentPagedResult.ForFlatCommentList.
+        {
+            Items = items, // Trang hiện tại.
+            Page = page, // Trang 1-based.
+            PageSize = pageSize, // Cỡ trang.
+            TotalCount = totalFlatRowsMatchingCte, // Mẫu số TotalPages.
+            TotalComments = null, // Không dùng trên route phẳng thuần.
+            TotalNodes = null,
+        };
+    } // Kết thúc ForFlatFeedbackCteList.
+
+    // Phân trang theo số gốc cây trong RAM; TotalCount = tổng gốc CTE; TotalComments = COUNT bảng khớp lọc.
+    public static PagedResult<T> ForCtePagedByRootNodes<T>(List<T> items, int page, int pageSize, long totalFeedbacksInTable, long totalRootNodesInCte) // Gốc mỗi item có thể là subtree.
+    { // Mở khối ForCtePagedByRootNodes.
+        return new PagedResult<T>
+        {
+            Items = items,
+            Page = page,
+            PageSize = pageSize,
+            TotalCount = totalRootNodesInCte,
+            TotalComments = totalFeedbacksInTable,
+            TotalNodes = totalRootNodesInCte,
+        };
+    } // Kết thúc ForCtePagedByRootNodes.
+} // Kết thúc FeedbackPagedResult.
+
 // Chuẩn hóa page/pageSize từ query; pageSize vượt Max → ApiException 400 + PAGE_SIZE_TOO_LARGE.
 public static class PaginationQuery
 { // Mở khối PaginationQuery.

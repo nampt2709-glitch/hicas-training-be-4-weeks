@@ -40,6 +40,63 @@ public class FeedbacksController : ControllerBase
         return Ok(new { message = ApiMessages.FeedbackListSuccess, data });
     }
 
+    // CTE đệ quy — danh sách phẳng có Level (SqlQueryRaw); tham số giống CommentAPI GET /comments/cte (không postId).
+    [HttpGet("cte")]
+    public async Task<IActionResult> GetCteFlat(
+        [FromQuery] Guid? userId = null,
+        [FromQuery] string? contentContains = null,
+        [FromQuery] string? page = null,
+        [FromQuery] string? pageSize = null,
+        [FromQuery] DateTime? createdAtFrom = null,
+        [FromQuery] DateTime? createdAtTo = null,
+        [FromQuery] string? sort = null,
+        [FromQuery] string? sortDir = null,
+        CancellationToken ct = default)
+    { // Mở khối GetCteFlat — một SQL CTE + phân trang dòng phẳng.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
+        var data = await _service.GetCteFlatRoutePagedAsync(p, s, createdAtFrom, createdAtTo, userId, contentContains, sort, sortDir, ct);
+        return Ok(new { message = ApiMessages.FeedbackCteFlatSuccess, data });
+    } // Kết thúc GetCteFlat.
+
+    // Cây lồng từ hàng CTE — phân trang theo số thread gốc.
+    [HttpGet("tree/cte")]
+    public async Task<IActionResult> GetTreeCte(
+        [FromQuery] Guid? userId = null,
+        [FromQuery] string? contentContains = null,
+        [FromQuery] string? page = null,
+        [FromQuery] string? pageSize = null,
+        [FromQuery] DateTime? createdAtFrom = null,
+        [FromQuery] DateTime? createdAtTo = null,
+        [FromQuery] string? sort = null,
+        [FromQuery] string? sortDir = null,
+        CancellationToken ct = default)
+    { // Mở khối GetTreeCte — BuildFeedbackTreeCte rồi cắt trang theo gốc.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
+        var data = await _service.GetTreeCteRoutePagedAsync(p, s, createdAtFrom, createdAtTo, userId, contentContains, sort, sortDir, ct);
+        return Ok(new { message = ApiMessages.FeedbackCteTreeSuccess, data });
+    } // Kết thúc GetTreeCte.
+
+    // Preorder flatten sau tree/cte — mỗi trang gốc mở rộng thành nhiều dòng phẳng.
+    [HttpGet("tree/cte/flatten")]
+    public async Task<IActionResult> GetTreeCteFlatten(
+        [FromQuery] Guid? userId = null,
+        [FromQuery] string? contentContains = null,
+        [FromQuery] string? page = null,
+        [FromQuery] string? pageSize = null,
+        [FromQuery] DateTime? createdAtFrom = null,
+        [FromQuery] DateTime? createdAtTo = null,
+        [FromQuery] string? sort = null,
+        [FromQuery] string? sortDir = null,
+        CancellationToken ct = default)
+    { // Mở khối GetTreeCteFlatten — flatten giữ Level từ cây CTE.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
+        var data = await _service.GetTreeCteFlattenRoutePagedAsync(p, s, createdAtFrom, createdAtTo, userId, contentContains, sort, sortDir, ct);
+        return Ok(new { message = ApiMessages.FeedbackCteFlattenSuccess, data });
+    } // Kết thúc GetTreeCteFlatten.
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {
