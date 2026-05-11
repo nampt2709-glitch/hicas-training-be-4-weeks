@@ -13,6 +13,7 @@ public class User : IdentityUser<Guid>
 
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>(); // Phiên đăng nhập kéo dài.
     public ICollection<Feedback> Feedbacks { get; set; } = new List<Feedback>(); // Phản hồi do user gửi.
+    public ICollection<Post> Posts { get; set; } = new List<Post>(); // Bài đăng / thông báo do user tạo.
     public ICollection<Attachment> Uploads { get; set; } = new List<Attachment>(); // File user tải lên.
     public ICollection<Resident> Residents { get; set; } = new List<Resident>(); // Hồ sơ cư dân liên kết.
 } // Kết thúc User.

@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase.
 
 namespace ApartmentAPI.V2.Controllers;
 
-// V2 — đầy đủ route so với V1: GET avatars, users/{id}, feedbacks/{id}, PUT avatar/feedback; segment /api/v2/. Admin hoặc User.
+// V2 — phiên bản đầy đủ: GET theo user/feedback/post/avatar, POST upload (avatar, feedback, post), PUT đổi file/FK (avatar, feedback, post), xóa mềm.
 [ApiController]
 [ApiVersion("2.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]
@@ -38,7 +38,7 @@ public class AttachmentsController : ControllerBase
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
         var data = await _service.GetPagedAsync(
-            p, s, createdAtFrom, createdAtTo, null, null, null, originalFileNameContains, sort, sortDir, ct);
+            p, s, createdAtFrom, createdAtTo, null, null, null, null, originalFileNameContains, sort, sortDir, ct);
         return Ok(new { message = ApiMessages.AttachmentListSuccess, data });
     }
 
@@ -56,7 +56,7 @@ public class AttachmentsController : ControllerBase
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
         var data = await _service.GetPagedAsync(
-            p, s, createdAtFrom, createdAtTo, null, null, AttachmentScope.Avatar, originalFileNameContains, sort, sortDir, ct);
+            p, s, createdAtFrom, createdAtTo, null, null, null, AttachmentScope.Avatar, originalFileNameContains, sort, sortDir, ct);
         return Ok(new { message = ApiMessages.AttachmentListSuccess, data });
     }
 
@@ -75,7 +75,7 @@ public class AttachmentsController : ControllerBase
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
         var data = await _service.GetPagedAsync(
-            p, s, createdAtFrom, createdAtTo, userId, null, null, originalFileNameContains, sort, sortDir, ct);
+            p, s, createdAtFrom, createdAtTo, userId, null, null, null, originalFileNameContains, sort, sortDir, ct);
         return Ok(new { message = ApiMessages.AttachmentListSuccess, data });
     }
 
@@ -94,7 +94,27 @@ public class AttachmentsController : ControllerBase
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
         var data = await _service.GetPagedAsync(
-            p, s, createdAtFrom, createdAtTo, null, feedbackId, null, originalFileNameContains, sort, sortDir, ct);
+            p, s, createdAtFrom, createdAtTo, null, feedbackId, null, null, originalFileNameContains, sort, sortDir, ct);
+        return Ok(new { message = ApiMessages.AttachmentListSuccess, data });
+    }
+
+    // GET .../attachments/posts/{postId} — mọi đính kèm scope Post của một bài đăng (phân trang).
+    [HttpGet("posts/{postId:guid}")]
+    public async Task<IActionResult> GetByPost(
+        Guid postId,
+        [FromQuery] string? page,
+        [FromQuery] string? pageSize,
+        [FromQuery] DateTime? createdAtFrom = null,
+        [FromQuery] DateTime? createdAtTo = null,
+        [FromQuery] string? originalFileNameContains = null,
+        [FromQuery] string? sort = null,
+        [FromQuery] string? sortDir = null,
+        CancellationToken ct = default)
+    {
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
+        var data = await _service.GetPagedAsync(
+            p, s, createdAtFrom, createdAtTo, null, null, postId, AttachmentScope.Post, originalFileNameContains, sort, sortDir, ct);
         return Ok(new { message = ApiMessages.AttachmentListSuccess, data });
     }
 
@@ -125,6 +145,17 @@ public class AttachmentsController : ControllerBase
         return CreatedAtAction(nameof(GetById), ApiVersionRouteValues.WithVersion(this, new { id = data.Id }), new { message = ApiMessages.Ok, data });
     }
 
+    // POST .../attachments/posts/{postId}/files — tạo đính kèm bài đăng; UserId = tác giả Post (server).
+    [HttpPost("posts/{postId:guid}/files")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(35 * 1024 * 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 35 * 1024 * 1024)]
+    public async Task<IActionResult> CreateForPost(Guid postId, [FromForm] PostAttachmentUploadModel model, CancellationToken ct)
+    {
+        var data = await _service.CreateForPostAsync(postId, model.File, ct);
+        return CreatedAtAction(nameof(GetById), ApiVersionRouteValues.WithVersion(this, new { id = data.Id }), new { message = ApiMessages.Ok, data });
+    }
+
     [HttpPut("{id:guid}/avatar")]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(35 * 1024 * 1024)]
@@ -142,6 +173,17 @@ public class AttachmentsController : ControllerBase
     public async Task<IActionResult> UpdateFeedbackAttachment(Guid id, [FromForm] UpdateFeedbackAttachmentFormModel model, CancellationToken ct)
     {
         await _service.UpdateFeedbackAttachmentAsync(id, model.FeedbackId!.Value, model.File, ct);
+        return Ok(new { message = ApiMessages.Ok });
+    }
+
+    // PUT .../attachments/{id}/post — đổi file (tuỳ chọn) và FK Post + đồng bộ UserId theo tác giả bài đăng.
+    [HttpPut("{id:guid}/post")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(35 * 1024 * 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 35 * 1024 * 1024)]
+    public async Task<IActionResult> UpdatePostAttachment(Guid id, [FromForm] UpdatePostAttachmentFormModel model, CancellationToken ct)
+    {
+        await _service.UpdatePostAttachmentAsync(id, model.PostId!.Value, model.File, ct);
         return Ok(new { message = ApiMessages.Ok });
     }
 

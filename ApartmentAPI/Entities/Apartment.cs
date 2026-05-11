@@ -14,4 +14,5 @@ public class Apartment : BaseEntity
 
     public ICollection<Resident> Residents { get; set; } = new List<Resident>(); // Cư dân thuộc phòng.
     public ICollection<Invoice> Invoices { get; set; } = new List<Invoice>(); // Hóa đơn theo phòng.
+    public ICollection<Post> Posts { get; set; } = new List<Post>(); // Thông báo / bài đăng gắn căn (tuỳ chọn).
 } // Kết thúc Apartment.

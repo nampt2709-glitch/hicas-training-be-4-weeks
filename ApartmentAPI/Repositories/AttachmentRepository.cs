@@ -16,6 +16,7 @@ public interface IAttachmentRepository
         DateTime? createdAtTo,
         Guid? userId, // Lọc người tải.
         Guid? feedbackId, // Lọc feedback đính kèm.
+        Guid? postId, // Lọc bài đăng đính kèm.
         AttachmentScope? scope, // Lọc phạ vi đính kèm.
         string? originalFileNameContains, // Tìm theo tên file gốc.
         AttachmentListSort sort,
@@ -25,6 +26,9 @@ public interface IAttachmentRepository
     Task<Attachment?> GetByIdTrackedAsync(Guid id, CancellationToken ct = default); // Track để sửa/xóa mềm.
 
     Task<List<Attachment>> GetByUserIdAsync(Guid userId, CancellationToken ct = default); // Mọi file của user.
+
+    // Mọi đính kèm scope Avatar còn hiệu lực của user — phục vụ thay avatar mới (xóa mềm + xóa file đĩa).
+    Task<List<(Guid Id, string FilePath)>> GetActiveAvatarIdAndPathsForUserAsync(Guid userId, CancellationToken ct = default);
     Task<List<Attachment>> GetByFeedbackIdAsync(Guid feedbackId, CancellationToken ct = default); // Theo feedback.
     Task<List<Attachment>> GetByScopeAsync(AttachmentScope scope, CancellationToken ct = default); // Theo scope.
 
@@ -57,6 +61,7 @@ public sealed class AttachmentRepository : RepositoryBase<Attachment>, IAttachme
         DateTime? createdAtTo,
         Guid? userId,
         Guid? feedbackId,
+        Guid? postId,
         AttachmentScope? scope,
         string? originalFileNameContains,
         AttachmentListSort sort,
@@ -78,6 +83,10 @@ public sealed class AttachmentRepository : RepositoryBase<Attachment>, IAttachme
         // BƯỚC 5 — Lọc FeedbackId nếu có.
         if (feedbackId is { } fid)
             q = q.Where(a => a.FeedbackId == fid);
+
+        // BƯỚC 5b — Lọc PostId nếu có.
+        if (postId is { } pid)
+            q = q.Where(a => a.PostId == pid);
 
         // BƯỚC 6 — Lọc Scope nếu có.
         if (scope is { } sc)
@@ -110,6 +119,7 @@ public sealed class AttachmentRepository : RepositoryBase<Attachment>, IAttachme
             AttachmentSortColumn.Scope => desc ? q.OrderByDescending(a => a.Scope) : q.OrderBy(a => a.Scope),
             AttachmentSortColumn.UserId => desc ? q.OrderByDescending(a => a.UserId) : q.OrderBy(a => a.UserId),
             AttachmentSortColumn.FeedbackId => desc ? q.OrderByDescending(a => a.FeedbackId) : q.OrderBy(a => a.FeedbackId),
+            AttachmentSortColumn.PostId => desc ? q.OrderByDescending(a => a.PostId) : q.OrderBy(a => a.PostId),
             AttachmentSortColumn.OriginalFileName => desc ? q.OrderByDescending(a => a.OriginalFileName) : q.OrderBy(a => a.OriginalFileName),
             AttachmentSortColumn.CreatedAt => desc ? q.OrderByDescending(a => a.CreatedAt) : q.OrderBy(a => a.CreatedAt),
             _ => desc ? q.OrderByDescending(a => a.CreatedAt) : q.OrderBy(a => a.CreatedAt),
@@ -132,6 +142,14 @@ public sealed class AttachmentRepository : RepositoryBase<Attachment>, IAttachme
         return await Set.AsNoTracking().Where(a => a.UserId == userId).ToListAsync(ct);
     } // Kết thúc GetByUserIdAsync.
 
+    public async Task<List<(Guid Id, string FilePath)>> GetActiveAvatarIdAndPathsForUserAsync(Guid userId, CancellationToken ct = default)
+    { // Mở khối GetActiveAvatarIdAndPathsForUserAsync — global filter đã loại IsDeleted.
+        return await Set.AsNoTracking()
+            .Where(a => a.UserId == userId && a.Scope == AttachmentScope.Avatar)
+            .Select(a => new ValueTuple<Guid, string>(a.Id, a.FilePath))
+            .ToListAsync(ct);
+    } // Kết thúc GetActiveAvatarIdAndPathsForUserAsync.
+
     public async Task<List<Attachment>> GetByFeedbackIdAsync(Guid feedbackId, CancellationToken ct = default)
     { // Mở khối GetByFeedbackIdAsync.
         // BƯỚC 1 — Mọi attachment thuộc một feedback.
@@ -140,7 +158,7 @@ public sealed class AttachmentRepository : RepositoryBase<Attachment>, IAttachme
 
     public async Task<List<Attachment>> GetByScopeAsync(AttachmentScope scope, CancellationToken ct = default)
     { // Mở khối GetByScopeAsync.
-        // BƯỚC 1 — Lọc enum scope (Avatar / Feedback).
+        // BƯỚC 1 — Lọc enum scope (Avatar / Feedback / Post).
         return await Set.AsNoTracking().Where(a => a.Scope == scope).ToListAsync(ct);
     } // Kết thúc GetByScopeAsync.
 

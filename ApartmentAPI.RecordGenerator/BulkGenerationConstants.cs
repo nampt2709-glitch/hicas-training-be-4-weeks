@@ -30,7 +30,12 @@ internal static class BulkGenerationConstants
     internal const int ResidentCount = 3200;
     internal const int InvoiceCount = 8000;
     internal const int InvoiceItemTotal = 24_600;
-    internal const int FeedbackCount = 50_960;
+    /// <summary>Phản hồi — giảm một phần so với trước để giữ tổng ~100k khi thêm Post.</summary>
+    internal const int FeedbackCount = 48_960;
+
+    /// <summary>Bài đăng / thông báo bulk — bù vào tổng hàng nghiệp vụ.</summary>
+    internal const int PostCount = 2000;
+
     internal const int AttachmentCount = 5000;
     internal const int RefreshTokenCount = 4000;
 }

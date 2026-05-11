@@ -143,6 +143,23 @@ public static class ListSortParsing
         return new FeedbackListSort(col, desc);
     } // Kết thúc ParseFeedbackSort.
 
+    // Bài đăng / thông báo.
+    public static PostListSort ParsePostSort(string? sort, string? sortDir)
+    { // Mở khối ParsePostSort.
+        var desc = ParseDescending(sortDir);
+        if (string.IsNullOrWhiteSpace(sort))
+            return new PostListSort(PostSortColumn.CreatedAt, desc);
+        var c = sort.Trim();
+        var col = c.Equals("id", StringComparison.OrdinalIgnoreCase) ? PostSortColumn.Id
+            : c.Equals("userId", StringComparison.OrdinalIgnoreCase) ? PostSortColumn.UserId
+            : c.Equals("apartmentId", StringComparison.OrdinalIgnoreCase) ? PostSortColumn.ApartmentId
+            : c.Equals("title", StringComparison.OrdinalIgnoreCase) ? PostSortColumn.Title
+            : c.Equals("isPublished", StringComparison.OrdinalIgnoreCase) ? PostSortColumn.IsPublished
+            : c.Equals("createdAt", StringComparison.OrdinalIgnoreCase) ? PostSortColumn.CreatedAt
+            : throw InvalidSort("Id, UserId, ApartmentId, Title, IsPublished, CreatedAt");
+        return new PostListSort(col, desc);
+    } // Kết thúc ParsePostSort.
+
     // Đính kèm.
     public static AttachmentListSort ParseAttachmentSort(string? sort, string? sortDir)
     { // Mở khối ParseAttachmentSort.
@@ -154,9 +171,10 @@ public static class ListSortParsing
             : c.Equals("scope", StringComparison.OrdinalIgnoreCase) ? AttachmentSortColumn.Scope
             : c.Equals("userId", StringComparison.OrdinalIgnoreCase) ? AttachmentSortColumn.UserId
             : c.Equals("feedbackId", StringComparison.OrdinalIgnoreCase) ? AttachmentSortColumn.FeedbackId
+            : c.Equals("postId", StringComparison.OrdinalIgnoreCase) ? AttachmentSortColumn.PostId
             : c.Equals("originalFileName", StringComparison.OrdinalIgnoreCase) ? AttachmentSortColumn.OriginalFileName
             : c.Equals("createdAt", StringComparison.OrdinalIgnoreCase) ? AttachmentSortColumn.CreatedAt
-            : throw InvalidSort("Id, Scope, UserId, FeedbackId, OriginalFileName, CreatedAt");
+            : throw InvalidSort("Id, Scope, UserId, FeedbackId, PostId, OriginalFileName, CreatedAt");
         return new AttachmentListSort(col, desc);
     } // Kết thúc ParseAttachmentSort.
 
@@ -301,6 +319,21 @@ public readonly record struct FeedbackListSort(FeedbackSortColumn Column, bool D
     public int CacheSegment => (int)Column;
 }
 
+public enum PostSortColumn
+{
+    CreatedAt = 0,
+    Id = 1,
+    UserId = 2,
+    ApartmentId = 3,
+    Title = 4,
+    IsPublished = 5,
+}
+
+public readonly record struct PostListSort(PostSortColumn Column, bool Descending)
+{
+    public int CacheSegment => (int)Column;
+}
+
 public enum AttachmentSortColumn
 {
     CreatedAt = 0,
@@ -308,7 +341,8 @@ public enum AttachmentSortColumn
     Scope = 2,
     UserId = 3,
     FeedbackId = 4,
-    OriginalFileName = 5,
+    PostId = 5,
+    OriginalFileName = 6,
 }
 
 public readonly record struct AttachmentListSort(AttachmentSortColumn Column, bool Descending)

@@ -18,4 +18,7 @@ public class Attachment : BaseEntity
 
     public Guid? FeedbackId { get; set; } // FK feedback (nullable nếu scope khác).
     public Feedback? Feedback { get; set; } // Navigation Feedback.
+
+    public Guid? PostId { get; set; } // FK bài đăng khi Scope = Post.
+    public Post? Post { get; set; } // Navigation Post.
 } // Kết thúc Attachment.

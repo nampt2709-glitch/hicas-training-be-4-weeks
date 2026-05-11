@@ -24,6 +24,11 @@ public static class RouteRateLimitConfiguration
         [BuildRouteKey("POST", "api/auth/login")] = ScaleRule("POST api/auth/login", 10, 60, 0),
         [BuildRouteKey("POST", "api/auth/refresh")] = ScaleRule("POST api/auth/refresh", 20, 60, 0),
         [BuildRouteKey("POST", "api/auth/logout")] = ScaleRule("POST api/auth/logout", 60, 60, 0),
+        // Cùng hạn mức cho bản có segment phiên bản (V1/V2).
+        [BuildRouteKey("POST", "api/v{version:apiVersion}/auth/signup")] = ScaleRule("POST api/v{version:apiVersion}/auth/signup", 5, 60, 0),
+        [BuildRouteKey("POST", "api/v{version:apiVersion}/auth/login")] = ScaleRule("POST api/v{version:apiVersion}/auth/login", 10, 60, 0),
+        [BuildRouteKey("POST", "api/v{version:apiVersion}/auth/refresh")] = ScaleRule("POST api/v{version:apiVersion}/auth/refresh", 20, 60, 0),
+        [BuildRouteKey("POST", "api/v{version:apiVersion}/auth/logout")] = ScaleRule("POST api/v{version:apiVersion}/auth/logout", 60, 60, 0),
     }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
     // Tra rule theo method + route pattern endpoint hiện tại — fallback DefaultRule.

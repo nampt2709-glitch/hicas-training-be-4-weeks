@@ -18,9 +18,10 @@ public enum InvoiceStatus
     Cancelled = 3, // Đã hủy.
 } // Kết thúc InvoiceStatus.
 
-// Phạm vi file đính kèm — chỉ avatar hoặc file gắn feedback (không có thực thể Post trong ApartmentAPI).
+// Phạm vi file đính kèm — avatar, phản hồi hoặc bài đăng (Post).
 public enum AttachmentScope
 { // Mở khối AttachmentScope.
     Avatar = 0, // Ảnh đại diện user.
     Feedback = 1, // Đính kèm phản hồi.
+    Post = 2, // Đính kèm bài đăng / thông báo.
 } // Kết thúc AttachmentScope.

@@ -152,6 +152,27 @@ public sealed class UpdateFeedbackValidator : AbstractValidator<UpdateFeedbackDt
     }
 }
 
+// Validator bài đăng: tiêu đề, nội dung, tác giả.
+public sealed class CreatePostValidator : AbstractValidator<CreatePostDto>
+{
+    public CreatePostValidator()
+    {
+        RuleFor(x => x.Title).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.Content).NotEmpty().MaximumLength(12000);
+        RuleFor(x => x.UserId).NotEmpty();
+    }
+}
+
+// Cập nhật bài đăng: không đổi UserId qua PUT cơ bản.
+public sealed class UpdatePostValidator : AbstractValidator<UpdatePostDto>
+{
+    public UpdatePostValidator()
+    {
+        RuleFor(x => x.Title).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.Content).NotEmpty().MaximumLength(12000);
+    }
+}
+
 // Admin PUT feedback: đủ scalar; UserId không được Guid.Empty; ParentId tuỳ chọn (null = gốc).
 public sealed class AdminUpdateFeedbackValidator : AbstractValidator<AdminUpdateFeedbackDto>
 {
@@ -211,6 +232,55 @@ public sealed class CreateAvatarAttachmentUploadValidator : AbstractValidator<Av
     }
 }
 
+// Validator POST .../uploads/avatar — cùng quy tắc file với avatar; message client = ApiMessages (English).
+public sealed class UploadsAvatarUploadValidator : AbstractValidator<UploadsAvatarUploadModel>
+{
+    private static readonly HashSet<string> AllowedExt =
+        new(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf" };
+
+    public UploadsAvatarUploadValidator(IOptions<AttachmentStorageOptions> opt)
+    {
+        var max = opt.Value.MaxFileSizeBytes;
+
+        RuleFor(x => x.File).NotNull().WithMessage(ApiMessages.UploadAvatarNoFile);
+
+        RuleFor(x => x.File)
+            .Must(f => f is { Length: > 0 })
+            .When(x => x.File != null)
+            .WithMessage(ApiMessages.UploadAvatarNoFile);
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || f!.Length <= max)
+            .WithMessage(string.Format(CultureInfo.InvariantCulture, ApiMessages.AttachmentUploadFileTooLarge, max));
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || UploadsAvatarIsAllowedContentType(f!))
+            .WithMessage(ApiMessages.AttachmentUploadContentTypeNotAllowed);
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || UploadsAvatarHasAllowedExtension(f!.FileName))
+            .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
+
+        RuleFor(x => x.File)
+            .MustAsync(async (f, ct) => f != null && await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+            .When(x => x.File != null)
+            .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
+    }
+
+    private static bool UploadsAvatarIsAllowedContentType(IFormFile f)
+    {
+        var ct = f.ContentType ?? "";
+        return ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+               || ct.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool UploadsAvatarHasAllowedExtension(string? fileName)
+    {
+        var ext = Path.GetExtension(fileName ?? "");
+        return AllowedExt.Contains(ext);
+    }
+}
+
 // Validator multipart tạo file gắn feedback: cùng quy tắc file với avatar.
 public sealed class CreateFeedbackAttachmentUploadValidator : AbstractValidator<FeedbackAttachmentUploadModel>
 {
@@ -218,6 +288,55 @@ public sealed class CreateFeedbackAttachmentUploadValidator : AbstractValidator<
         new(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf" };
 
     public CreateFeedbackAttachmentUploadValidator(IOptions<AttachmentStorageOptions> opt)
+    {
+        var max = opt.Value.MaxFileSizeBytes;
+
+        RuleFor(x => x.File).NotNull().WithMessage(ApiMessages.AttachmentUploadFileRequired);
+
+        RuleFor(x => x.File)
+            .Must(f => f is { Length: > 0 })
+            .When(x => x.File != null)
+            .WithMessage(ApiMessages.AttachmentUploadFileEmpty);
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || f!.Length <= max)
+            .WithMessage(string.Format(CultureInfo.InvariantCulture, ApiMessages.AttachmentUploadFileTooLarge, max));
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || IsAllowedContentType(f!))
+            .WithMessage(ApiMessages.AttachmentUploadContentTypeNotAllowed);
+
+        RuleFor(x => x.File)
+            .Must(f => f == null || HasAllowedExtension(f!.FileName))
+            .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
+
+        RuleFor(x => x.File)
+            .MustAsync(async (f, ct) => f != null && await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+            .When(x => x.File != null)
+            .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
+    }
+
+    private static bool IsAllowedContentType(IFormFile f)
+    {
+        var ct = f.ContentType ?? "";
+        return ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+               || ct.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasAllowedExtension(string? fileName)
+    {
+        var ext = Path.GetExtension(fileName ?? "");
+        return AllowedExt.Contains(ext);
+    }
+}
+
+// Validator multipart tạo file gắn bài đăng: cùng quy tắc file với avatar/feedback.
+public sealed class CreatePostAttachmentUploadValidator : AbstractValidator<PostAttachmentUploadModel>
+{
+    private static readonly HashSet<string> AllowedExt =
+        new(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf" };
+
+    public CreatePostAttachmentUploadValidator(IOptions<AttachmentStorageOptions> opt)
     {
         var max = opt.Value.MaxFileSizeBytes;
 
@@ -321,6 +440,58 @@ public sealed class UpdateFeedbackAttachmentFormValidator : AbstractValidator<Up
         RuleFor(x => x.FeedbackId)
             .Must(id => id.HasValue && id.Value != Guid.Empty)
             .WithMessage(ApiMessages.AttachmentFeedbackIdRequired);
+
+        When(x => x.File != null, () =>
+        {
+            RuleFor(x => x.File!)
+                .Must(f => f.Length > 0)
+                .WithMessage(ApiMessages.AttachmentUploadFileEmpty);
+
+            RuleFor(x => x.File!)
+                .Must(f => f.Length <= max)
+                .WithMessage(string.Format(CultureInfo.InvariantCulture, ApiMessages.AttachmentUploadFileTooLarge, max));
+
+            RuleFor(x => x.File!)
+                .Must(IsAllowedContentType)
+                .WithMessage(ApiMessages.AttachmentUploadContentTypeNotAllowed);
+
+            RuleFor(x => x.File!)
+                .Must(f => HasAllowedExtension(f.FileName))
+                .WithMessage(ApiMessages.AttachmentUploadExtensionNotAllowed);
+
+            RuleFor(x => x.File!)
+                .MustAsync(async (f, ct) => await AttachmentBinarySignatures.IsValidUploadAsync(f, ct))
+                .WithMessage(ApiMessages.AttachmentUploadBinaryInvalid);
+        });
+    }
+
+    private static bool IsAllowedContentType(IFormFile f)
+    {
+        var ct = f.ContentType ?? "";
+        return ct.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+               || ct.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasAllowedExtension(string? fileName)
+    {
+        var ext = Path.GetExtension(fileName ?? "");
+        return AllowedExt.Contains(ext);
+    }
+}
+
+// Cập nhật attachment gắn bài đăng: bắt buộc postId hợp lệ + quy tắc file nếu gửi file mới.
+public sealed class UpdatePostAttachmentFormValidator : AbstractValidator<UpdatePostAttachmentFormModel>
+{
+    private static readonly HashSet<string> AllowedExt =
+        new(StringComparer.OrdinalIgnoreCase) { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf" };
+
+    public UpdatePostAttachmentFormValidator(IOptions<AttachmentStorageOptions> opt)
+    {
+        var max = opt.Value.MaxFileSizeBytes;
+
+        RuleFor(x => x.PostId)
+            .Must(id => id.HasValue && id.Value != Guid.Empty)
+            .WithMessage(ApiMessages.AttachmentPostIdRequired);
 
         When(x => x.File != null, () =>
         {

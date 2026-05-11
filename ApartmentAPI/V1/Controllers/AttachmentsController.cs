@@ -1,16 +1,14 @@
 using ApartmentAPI.DTOs; // ApiMessages, PaginationQuery.
 using ApartmentAPI.Services; // IAttachmentService — CRUD đính kèm.
 using ApartmentAPI.Validators; // CreatedAtRangeQuery.
-using ApartmentAPI.V1.DTOs; // Multipart model theo scope.
-using ApartmentAPI.Versioning; // ApiVersionRouteValues.WithVersion.
 using Asp.Versioning; // [ApiVersion].
 using ApartmentAPI.Authorization; // ApiAuthorization — chuỗi role thống nhất với seed Identity.
 using Microsoft.AspNetCore.Authorization; // [Authorize(Roles = ...)] — Admin hoặc User.
-using Microsoft.AspNetCore.Mvc; // ControllerBase, FromForm.
+using Microsoft.AspNetCore.Mvc; // ControllerBase.
 
 namespace ApartmentAPI.V1.Controllers;
 
-// V1 — CRUD cơ bản: danh sách/ chi tiết, POST avatar hoặc file feedback, xóa mềm. GET lọc theo user/feedback/avatars, PUT chuyên biệt → API v2.0.
+// V1 — chỉ CRUD cơ bản entity Attachment: danh sách phân trang, chi tiết theo Id, xóa mềm. Upload/PUT theo scope → V2.
 [ApiController]
 [ApiVersion("1.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]
@@ -39,7 +37,7 @@ public class AttachmentsController : ControllerBase
         CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
         var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
         var data = await _service.GetPagedAsync(
-            p, s, createdAtFrom, createdAtTo, null, null, null, originalFileNameContains, sort, sortDir, ct);
+            p, s, createdAtFrom, createdAtTo, null, null, null, null, originalFileNameContains, sort, sortDir, ct);
         return Ok(new { message = ApiMessages.AttachmentListSuccess, data });
     }
 
@@ -48,26 +46,6 @@ public class AttachmentsController : ControllerBase
     { // Mở action — chi tiết một attachment.
         var data = await _service.GetByIdAsync(id, ct);
         return Ok(new { message = ApiMessages.AttachmentGetSuccess, data });
-    }
-
-    [HttpPost("users/{userId:guid}/avatar")]
-    [Consumes("multipart/form-data")]
-    [RequestSizeLimit(35 * 1024 * 1024)]
-    [RequestFormLimits(MultipartBodyLengthLimit = 35 * 1024 * 1024)]
-    public async Task<IActionResult> CreateAvatarForUser(Guid userId, [FromForm] AvatarAttachmentUploadModel model, CancellationToken ct)
-    { // Mở action — tạo avatar cho user (UserId trong route; form chỉ có file).
-        var data = await _service.CreateAvatarForUserAsync(userId, model.File, ct);
-        return CreatedAtAction(nameof(GetById), ApiVersionRouteValues.WithVersion(this, new { id = data.Id }), new { message = ApiMessages.Ok, data });
-    }
-
-    [HttpPost("feedbacks/{feedbackId:guid}/files")]
-    [Consumes("multipart/form-data")]
-    [RequestSizeLimit(35 * 1024 * 1024)]
-    [RequestFormLimits(MultipartBodyLengthLimit = 35 * 1024 * 1024)]
-    public async Task<IActionResult> CreateForFeedback(Guid feedbackId, [FromForm] FeedbackAttachmentUploadModel model, CancellationToken ct)
-    { // Mở action — tạo file đính kèm một feedback (tác giả file lấy từ feedback).
-        var data = await _service.CreateForFeedbackAsync(feedbackId, model.File, ct);
-        return CreatedAtAction(nameof(GetById), ApiVersionRouteValues.WithVersion(this, new { id = data.Id }), new { message = ApiMessages.Ok, data });
     }
 
     [HttpDelete("{id:guid}")]

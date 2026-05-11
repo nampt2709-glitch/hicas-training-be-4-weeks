@@ -14,6 +14,7 @@ internal static class CacheEpochKeys
     internal const string InvoiceItems = "__epoch:list:apt:invoiceitems"; // Epoch dòng hóa đơn.
     internal const string Feedbacks = "__epoch:list:apt:feedbacks"; // Epoch phản hồi.
     internal const string Attachments = "__epoch:list:apt:attachments"; // Epoch đính kèm.
+    internal const string Posts = "__epoch:list:apt:posts"; // Epoch bài đăng / thông báo.
     internal const string RefreshTokens = "__epoch:list:apt:refreshtokens"; // Epoch refresh token.
     internal const string Users = "__epoch:list:apt:users"; // Epoch user.
     internal const string Roles = "__epoch:list:apt:roles"; // Epoch role.
@@ -38,6 +39,8 @@ public interface ICacheListEpochStore
     Task InvalidateFeedbacksListsAsync(CancellationToken cancellationToken = default);
     Task<long> GetAttachmentsListEpochAsync(CancellationToken cancellationToken = default);
     Task InvalidateAttachmentsListsAsync(CancellationToken cancellationToken = default);
+    Task<long> GetPostsListEpochAsync(CancellationToken cancellationToken = default);
+    Task InvalidatePostsListsAsync(CancellationToken cancellationToken = default);
     Task<long> GetRefreshTokensListEpochAsync(CancellationToken cancellationToken = default);
     Task InvalidateRefreshTokensListsAsync(CancellationToken cancellationToken = default);
     Task<long> GetUsersListEpochAsync(CancellationToken cancellationToken = default);
@@ -105,6 +108,12 @@ public sealed class CacheListEpochStore : ICacheListEpochStore
 
     public Task InvalidateAttachmentsListsAsync(CancellationToken cancellationToken = default) =>
         BumpEpochAsync(CacheEpochKeys.Attachments, cancellationToken);
+
+    public Task<long> GetPostsListEpochAsync(CancellationToken cancellationToken = default) =>
+        ReadEpochAsync(CacheEpochKeys.Posts, cancellationToken);
+
+    public Task InvalidatePostsListsAsync(CancellationToken cancellationToken = default) =>
+        BumpEpochAsync(CacheEpochKeys.Posts, cancellationToken);
 
     public Task<long> GetRefreshTokensListEpochAsync(CancellationToken cancellationToken = default) =>
         ReadEpochAsync(CacheEpochKeys.RefreshTokens, cancellationToken);

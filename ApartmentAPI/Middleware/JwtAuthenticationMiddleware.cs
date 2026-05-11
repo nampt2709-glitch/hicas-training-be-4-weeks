@@ -15,6 +15,16 @@ public sealed class JwtAuthenticationMiddleware
         "/api/auth/refresh"
     };
 
+    // Cho phép signup/login/refresh trên mọi segment phiên bản: /api/v1.0/auth/... và /api/v2.0/auth/... (ApiVersioning).
+    private static bool IsVersionedAuthAnonymousPath(string normalizedPath)
+    {
+        if (!normalizedPath.StartsWith("/api/v", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return normalizedPath.EndsWith("/auth/signup", StringComparison.OrdinalIgnoreCase)
+               || normalizedPath.EndsWith("/auth/login", StringComparison.OrdinalIgnoreCase)
+               || normalizedPath.EndsWith("/auth/refresh", StringComparison.OrdinalIgnoreCase);
+    }
+
     private readonly RequestDelegate _next; // Delegate pipeline kế tiếp.
 
     public JwtAuthenticationMiddleware(RequestDelegate next) => _next = next; // Tiêm bởi UseMiddleware.
@@ -29,7 +39,7 @@ public sealed class JwtAuthenticationMiddleware
             return;
         }
 
-        if (AnonymousApiPaths.Contains(path))
+        if (AnonymousApiPaths.Contains(path) || IsVersionedAuthAnonymousPath(path))
         {
             await _next(context);
             return;

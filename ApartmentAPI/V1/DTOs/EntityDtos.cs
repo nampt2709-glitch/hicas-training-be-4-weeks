@@ -219,12 +219,44 @@ public class AdminUpdateFeedbackDto
 
 #endregion
 
+#region Post — bài đăng / thông báo
+
+public class PostDto
+{
+    public Guid Id { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
+    public Guid UserId { get; set; }
+    public Guid? ApartmentId { get; set; }
+    public bool IsPublished { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class CreatePostDto
+{
+    public string Title { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
+    public Guid UserId { get; set; }
+    public Guid? ApartmentId { get; set; }
+    public bool IsPublished { get; set; } = true;
+}
+
+public class UpdatePostDto
+{
+    public string Title { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
+    public Guid? ApartmentId { get; set; }
+    public bool IsPublished { get; set; }
+}
+
+#endregion
+
 #region Attachment — tệp đính kèm
 
 public class AttachmentDto
 {
     public Guid Id { get; set; } // Khóa file.
-    public AttachmentScope Scope { get; set; } // Phạm vi: avatar hoặc feedback.
+    public AttachmentScope Scope { get; set; } // Phạm vi: avatar, feedback hoặc bài đăng.
     public string OriginalFileName { get; set; } = string.Empty; // Tên gốc client.
     public string StoredFileName { get; set; } = string.Empty; // Tên lưu trên đĩa.
     public string FilePath { get; set; } = string.Empty; // Đường dẫn tương đối/tuyệt đối máy chủ.
@@ -233,6 +265,7 @@ public class AttachmentDto
     public string? FileHash { get; set; } // Hash kiểm toàn (nếu có).
     public Guid? UserId { get; set; } // Chủ sở hữu (nếu scope user).
     public Guid? FeedbackId { get; set; } // Gắn feedback.
+    public Guid? PostId { get; set; } // Gắn bài đăng (Scope = Post).
     public DateTime CreatedAt { get; set; } // Upload lúc nào.
 }
 

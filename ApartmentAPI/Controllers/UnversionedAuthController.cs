@@ -1,21 +1,21 @@
 using ApartmentAPI.Authorization; // ApiAuthorization.
 using ApartmentAPI.DTOs; // SignUpRequestDto, LoginRequestDto, RefreshRequestDto.
 using ApartmentAPI.Services; // IAuthenticationService.
-using Asp.Versioning; // Phiên bản 1.0 + 2.0 trên cùng lớp — Swagger mỗi doc chỉ thấy đúng một prefix /api/v1|v2/auth.
+using Asp.Versioning; // ApiVersionNeutral — không thuộc doc V1/V2.
 using Microsoft.AspNetCore.Authorization; // AllowAnonymous, Authorize.
-using Microsoft.AspNetCore.Mvc; // ApiController.
+using Microsoft.AspNetCore.Mvc; // ApiController, ApiExplorerSettings.
 
 namespace ApartmentAPI.Controllers;
 
-// Một controller duy nhất cho V1 và V2 — không tạo hai file Auth trùng lặp; route chỉ khác segment version.
+// Tương thích client gọi /api/auth không có segment version; không đưa vào Swagger để tránh trùng với nhóm Auth đã version (ảnh chụp Swagger).
 [AllowAnonymous]
 [ApiController]
-[ApiVersion("1.0")]
-[ApiVersion("2.0")]
-[Route("api/v{version:apiVersion}/auth")]
-public sealed class AuthController : AuthControllerBase
+[ApiVersionNeutral]
+[ApiExplorerSettings(IgnoreApi = true)]
+[Route("api/auth")]
+public sealed class UnversionedAuthController : AuthControllerBase
 {
-    public AuthController(IAuthenticationService authenticationService)
+    public UnversionedAuthController(IAuthenticationService authenticationService)
         : base(authenticationService)
     {
     }

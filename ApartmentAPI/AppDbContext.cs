@@ -21,6 +21,7 @@ public class AppDbContext : IdentityDbContext<User, Role, Guid>
     public DbSet<Invoice> Invoices => Set<Invoice>(); // Hóa đơn.
     public DbSet<InvoiceItem> InvoiceItems => Set<InvoiceItem>(); // Dòng hóa đơn.
     public DbSet<Feedback> Feedbacks => Set<Feedback>(); // Phản hồi (cây).
+    public DbSet<Post> Posts => Set<Post>(); // Bài đăng / thông báo.
     public DbSet<Attachment> Attachments => Set<Attachment>(); // Tệp đính kèm.
 
     protected override void OnModelCreating(ModelBuilder builder)
@@ -47,6 +48,26 @@ public class AppDbContext : IdentityDbContext<User, Role, Guid>
         builder.Entity<Apartment>()
             .HasIndex(a => new { a.Floor, a.RoomNumber })
             .IsUnique();
+
+        // BƯỚC 5 — Post: tác giả User (Restrict); căn hộ tuỳ chọn (SetNull khi xóa căn — tránh mất bài).
+        builder.Entity<Post>()
+            .HasOne(p => p.User)
+            .WithMany(u => u.Posts)
+            .HasForeignKey(p => p.UserId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.Entity<Post>()
+            .HasOne(p => p.Apartment)
+            .WithMany(a => a.Posts)
+            .HasForeignKey(p => p.ApartmentId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // BƯỚC 6 — Attachment → Post: một bài nhiều file; Restrict khi xóa vật lý Post (ở đây chỉ soft delete).
+        builder.Entity<Attachment>()
+            .HasOne(a => a.Post)
+            .WithMany(p => p.Attachments)
+            .HasForeignKey(a => a.PostId)
+            .OnDelete(DeleteBehavior.Restrict);
     } // Kết thúc OnModelCreating.
 
     // Gắn HasQueryFilter cho mọi kiểu assignable-to-BaseEntity (không gồm abstract/BaseEntity nếu không có DbSet).

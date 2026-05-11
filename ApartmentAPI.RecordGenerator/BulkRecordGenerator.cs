@@ -364,7 +364,38 @@ internal sealed class BulkRecordGenerator
             await _db.SaveChangesAsync(ct);
         }
 
-        Console.WriteLine($"Đã tạo {BulkGenerationConstants.FeedbackCount} phản hồi. Đang tạo file đính kèm + refresh token…");
+        Console.WriteLine($"Đã tạo {BulkGenerationConstants.FeedbackCount} phản hồi. Đang tạo bài đăng…");
+
+        // BƯỚC G2 — Post — tác giả từ authorIds, một phần gắn căn hộ để có FK ApartmentId đa dạng.
+        var postBuffer = new List<Post>(500);
+        for (var p = 0; p < BulkGenerationConstants.PostCount; p++)
+        {
+            postBuffer.Add(new Post
+            {
+                Id = Guid.NewGuid(),
+                Title = $"[BULK] Thông báo / bài đăng #{p + 1:N0}",
+                Content = BuildPostBody(rnd, p),
+                UserId = authorIds[p % authorIds.Count],
+                ApartmentId = p % 3 == 0 ? apartmentIds[p % apartmentIds.Count] : null,
+                IsPublished = p % 7 != 0,
+                CreatedAt = DateTime.UtcNow.AddHours(-rnd.Next(0, 3000)),
+                CreatedBy = markerUserName,
+            });
+            if (postBuffer.Count >= 500)
+            {
+                _db.Posts.AddRange(postBuffer);
+                await _db.SaveChangesAsync(ct);
+                postBuffer.Clear();
+            }
+        }
+
+        if (postBuffer.Count > 0)
+        {
+            _db.Posts.AddRange(postBuffer);
+            await _db.SaveChangesAsync(ct);
+        }
+
+        Console.WriteLine($"Đã tạo {BulkGenerationConstants.PostCount} bài đăng. Đang tạo file đính kèm + refresh token…");
 
         // BƯỚC H — Attachment (một phần feedback) + RefreshToken.
         var feedbackIdsForAttach = await _db.Feedbacks.AsNoTracking()
@@ -482,6 +513,12 @@ internal sealed class BulkRecordGenerator
             """,
             cancellationToken: ct);
 
+        var delPosts = await _db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            DELETE FROM Posts WHERE CreatedBy = {m}
+            """,
+            cancellationToken: ct);
+
         var delFb = await _db.Database.ExecuteSqlInterpolatedAsync(
             $"""
             DELETE FROM Feedbacks WHERE CreatedBy = {m}
@@ -519,7 +556,13 @@ internal sealed class BulkRecordGenerator
             cancellationToken: ct);
 
         Console.WriteLine(
-            $"Cleanup: InvoiceItems={delItems}, Invoices={delInv}, Residents={delRes}, Attachments={delAtt}, Feedbacks={delFb}, RefreshTokens={delRt}, Apartments={delApt}, UtilityServices={delUtil}, AspNetUsers={delUsers}.");
+            $"Cleanup: InvoiceItems={delItems}, Invoices={delInv}, Residents={delRes}, Attachments={delAtt}, Posts={delPosts}, Feedbacks={delFb}, RefreshTokens={delRt}, Apartments={delApt}, UtilityServices={delUtil}, AspNetUsers={delUsers}.");
+    }
+
+    private static string BuildPostBody(Random rnd, int index)
+    {
+        var phrase = FeedbackBodies[rnd.Next(FeedbackBodies.Length)];
+        return $"{phrase} — nội dung bài đăng bulk #{index + 1} (rnd {rnd.Next(1000, 9999)}).";
     }
 
     private static string BuildFeedbackBody(Random rnd, int index, bool isReply)

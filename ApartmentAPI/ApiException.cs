@@ -81,6 +81,7 @@ public static class ApiMessages
     public const string InvoiceListSuccess = "Invoices retrieved successfully."; // Danh sách hóa đơn.
     public const string InvoiceItemListSuccess = "Invoice items retrieved successfully."; // Dòng hóa đơn.
     public const string FeedbackListSuccess = "Feedbacks retrieved successfully."; // Phản hồi.
+    public const string PostListSuccess = "Posts retrieved successfully."; // Bài đăng / thông báo.
     public const string AttachmentListSuccess = "Attachments retrieved successfully."; // Đính kèm.
     public const string RefreshTokenListSuccess = "Refresh tokens retrieved successfully."; // Token làm mới (admin).
     public const string UserListSuccess = "Users retrieved successfully."; // Người dùng.
@@ -92,6 +93,7 @@ public static class ApiMessages
     public const string InvoiceGetSuccess = "Invoice retrieved successfully."; // Chi tiết hóa đơn.
     public const string InvoiceItemGetSuccess = "Invoice item retrieved successfully."; // Chi tiết dòng hóa đơn.
     public const string FeedbackGetSuccess = "Feedback retrieved successfully."; // Chi tiết phản hồi.
+    public const string PostGetSuccess = "Post retrieved successfully."; // Chi tiết bài đăng.
     public const string AttachmentGetSuccess = "Attachment retrieved successfully."; // Chi tiết đính kèm.
     public const string RefreshTokenGetSuccess = "Refresh token retrieved successfully."; // Chi tiết refresh token.
     public const string UserGetSuccess = "User retrieved successfully."; // Chi tiết user.
@@ -108,6 +110,10 @@ public static class ApiMessages
     public const string InvalidSortColumnGeneric = "Invalid sort column for this list. Use a column name from the API response."; // sort column.
 
     public const string AttachmentUploadFileRequired = "A file is required (form field 'file')."; // Multipart thiếu file.
+
+    /// <summary>No multipart file on POST .../uploads/avatar (same tone as other ApiMessages).</summary>
+    public const string UploadAvatarNoFile =
+        "No file was submitted for upload. Please choose a file using the form field \"file\".";
     public const string AttachmentUploadFileEmpty = "The uploaded file is empty."; // File rỗng.
     public const string AttachmentUploadFileTooLarge = "The file exceeds the maximum allowed size ({0} bytes)."; // Vượt kích thước.
     public const string AttachmentUploadContentTypeNotAllowed = "Only image/* or application/pdf content types are allowed."; // Content-Type.
@@ -117,6 +123,8 @@ public static class ApiMessages
         "File content is not a valid image or PDF, or the extension does not match the actual file type."; // Magic bytes không khớp.
     public const string AttachmentFeedbackIdRequired =
         "Form field 'feedbackId' is required and must be a non-empty GUID when updating a feedback-scoped attachment."; // PUT .../feedback.
+    public const string AttachmentPostIdRequired =
+        "Form field 'postId' is required and must be a non-empty GUID when updating a post-scoped attachment."; // PUT .../post.
     public const string AttachmentStoragePathOutsideRoot =
         "Resolved storage path is outside the application content root."; // Path traversal / cấu hình sai.
 

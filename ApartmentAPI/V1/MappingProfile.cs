@@ -39,6 +39,11 @@ public class MappingProfile : Profile // Profile được AddAutoMapper trong Pr
         CreateMap<CreateFeedbackDto, Feedback>();
         CreateMap<UpdateFeedbackDto, Feedback>();
 
+        // --- Bài đăng / thông báo ---
+        CreateMap<Post, PostDto>();
+        CreateMap<CreatePostDto, Post>();
+        CreateMap<UpdatePostDto, Post>();
+
         // --- Đính kèm ---
         CreateMap<Attachment, AttachmentDto>(); // PUT multipart có logic map thủ công phần file trong AttachmentService.
 

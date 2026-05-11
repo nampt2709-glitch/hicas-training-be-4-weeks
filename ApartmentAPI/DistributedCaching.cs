@@ -56,6 +56,7 @@ public static class EntityCacheKeys
     public static string Invoice(Guid id) => $"apt:inv:{id:N}"; // Hóa đơn.
     public static string InvoiceItem(Guid id) => $"apt:invit:{id:N}"; // Dòng hóa đơn.
     public static string Feedback(Guid id) => $"apt:fb:{id:N}"; // Phản hồi.
+    public static string Post(Guid id) => $"apt:post:{id:N}"; // Bài đăng.
     public static string Attachment(Guid id) => $"apt:att:{id:N}"; // Đính kèm.
     public static string RefreshToken(Guid id) => $"apt:rt:{id:N}"; // Refresh token.
     public static string Role(Guid id) => $"apt:role:{id:N}"; // Role.
@@ -78,6 +79,9 @@ public static class EntityCacheKeys
 
     public static string FeedbacksPaged(long epoch, int page, int pageSize, int sortSeg, bool desc) =>
         $"apt:{epoch}:l:f:{page}:{pageSize}:s{sortSeg}:{(desc ? 1 : 0)}";
+
+    public static string PostsPaged(long epoch, int page, int pageSize, int sortSeg, bool desc) =>
+        $"apt:{epoch}:l:pst:{page}:{pageSize}:s{sortSeg}:{(desc ? 1 : 0)}";
 
     public static string AttachmentsPaged(long epoch, int page, int pageSize, int sortSeg, bool desc) =>
         $"apt:{epoch}:l:at:{page}:{pageSize}:s{sortSeg}:{(desc ? 1 : 0)}";
