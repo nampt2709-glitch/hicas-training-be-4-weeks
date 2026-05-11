@@ -12,7 +12,7 @@ public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
     // Bảng bài viết — tên bảng mặc định theo convention trừ khi ToTable ở entity.
     public DbSet<Post> Posts => Set<Post>();
 
-    // Bảng bình luận — quan hệ cây Parent/Children cấu hình dưới OnModelCreating.
+    // Bảng bình luận — quan hệ cây Parent/Reply cấu hình dưới OnModelCreating.
     public DbSet<Comment> Comments => Set<Comment>();
 
     // BƯỚC 1 — Gọi base(options) để khởi tạo IdentityDbContext với provider SQL Server từ Program.
@@ -65,7 +65,7 @@ public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
                 .OnDelete(DeleteBehavior.Cascade); // Xóa post thì xóa mọi comment thuộc post đó.
 
             entity.HasOne(x => x.Parent) // Tự 1 — n, cha là cùng bảng Comment, cột ParentId nullable, — HasOne, navigation Parent, optional.
-                .WithMany(x => x.Children) // Tập con tên Children, ở entity, — WithMany, — collection con.
+                .WithMany(x => x.Reply) // Tập trả lời trực tiếp (Reply) trên entity, — WithMany, — collection con.
                 .HasForeignKey(x => x.ParentId) // Cột ngoại ParentId tự bảng, tree adjacency, — có ràng buộc trigger ngoài migration nếu cần.
                 .OnDelete(DeleteBehavior.Restrict); // SQL Server tránh multiple cascade paths; xóa hậu duệ xử lý ở service.
 

@@ -7,7 +7,9 @@ using CommentAPI.Validators; // FluentValidation cho body comment.
 using Microsoft.AspNetCore.Authorization; // [Authorize(Roles = "...")].
 using Microsoft.AspNetCore.Http; // StatusCodes trong một số phản hồi lỗi có chủ đích.
 using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult, FromQuery/FromBody.
-namespace CommentAPI.V2.Controllers; 
+namespace CommentAPI.V2.Controllers;
+
+// V2 — đầy đủ route so với V1: admin, lọc theo user, flat/CTE/tree, demo loading, v.v. (V1 chỉ CRUD + phân trang cơ bản).
 
 [ApiController] // Web API.
 [ApiVersion("2.0")] // Phiên bản 2.0 trong URL.

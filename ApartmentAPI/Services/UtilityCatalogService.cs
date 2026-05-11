@@ -26,23 +26,20 @@ public interface IUtilityCatalogService
     Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default);
 }
 
-public sealed class UtilityCatalogService : IUtilityCatalogService
+public sealed class UtilityCatalogService : ServiceBase, IUtilityCatalogService
 {
     private readonly IUtilityServiceRepository _repository; // Danh mục dịch vụ.
     private readonly IMapper _mapper; // Map UtilityService ↔ DTO.
-    private readonly IEntityResponseCache _cache;
-    private readonly ICacheListEpochStore _listEpoch; // Epoch danh mục tiện ích.
 
     public UtilityCatalogService(
         IUtilityServiceRepository repository,
         IMapper mapper,
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch)
+        : base(cache, listEpoch)
     { // Mở khối constructor.
         _repository = repository;
         _mapper = mapper;
-        _cache = cache;
-        _listEpoch = listEpoch;
     } // Kết thúc constructor.
 
     private static bool HasUtilityListFilter(
@@ -50,7 +47,7 @@ public sealed class UtilityCatalogService : IUtilityCatalogService
         DateTime? createdAtTo,
         bool? isActive,
         string? nameContains) =>
-        createdAtFrom.HasValue || createdAtTo.HasValue || isActive.HasValue || !string.IsNullOrWhiteSpace(nameContains);
+        HasCreatedAtFilter(createdAtFrom, createdAtTo) || isActive.HasValue || HasTextFilter(nameContains);
 
     public async Task<PagedResult<UtilityServiceDto>> GetPagedAsync(
         int page,
@@ -67,10 +64,10 @@ public sealed class UtilityCatalogService : IUtilityCatalogService
 
         if (!HasUtilityListFilter(createdAtFrom, createdAtTo, isActive, nameContains))
         {
-            var epoch = await _listEpoch.GetUtilitiesListEpochAsync(ct);
+            var epoch = await ListEpoch.GetUtilitiesListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.UtilitiesPaged(
                 epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            var cached = await _cache.GetJsonAsync<PagedResult<UtilityServiceDto>>(cacheKey, ct);
+            var cached = await Cache.GetJsonAsync<PagedResult<UtilityServiceDto>>(cacheKey, ct);
             if (cached is not null)
                 return cached;
         }
@@ -89,10 +86,10 @@ public sealed class UtilityCatalogService : IUtilityCatalogService
 
         if (!HasUtilityListFilter(createdAtFrom, createdAtTo, isActive, nameContains))
         {
-            var epoch = await _listEpoch.GetUtilitiesListEpochAsync(ct);
+            var epoch = await ListEpoch.GetUtilitiesListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.UtilitiesPaged(
                 epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            await _cache.SetJsonAsync(cacheKey, result, ct);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
         }
 
         return result;
@@ -101,7 +98,7 @@ public sealed class UtilityCatalogService : IUtilityCatalogService
     public async Task<UtilityServiceDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.
         var key = EntityCacheKeys.UtilityService(id);
-        var cached = await _cache.GetJsonAsync<UtilityServiceDto>(key, ct);
+        var cached = await Cache.GetJsonAsync<UtilityServiceDto>(key, ct);
         if (cached is not null)
             return cached;
 
@@ -109,7 +106,7 @@ public sealed class UtilityCatalogService : IUtilityCatalogService
         if (entity is null)
             throw ApiException.NotFound(ApiErrorCodes.NotFound, "Utility service not found.");
         var dto = _mapper.Map<UtilityServiceDto>(entity);
-        await _cache.SetJsonAsync(key, dto, ct);
+        await Cache.SetJsonAsync(key, dto, ct);
         return dto;
     } // Kết thúc GetByIdAsync.
 
@@ -119,8 +116,8 @@ public sealed class UtilityCatalogService : IUtilityCatalogService
         await _repository.AddAsync(entity, ct);
         await _repository.SaveChangesAsync(ct);
         var dtoOut = _mapper.Map<UtilityServiceDto>(entity);
-        await _cache.SetJsonAsync(EntityCacheKeys.UtilityService(entity.Id), dtoOut, ct);
-        await _listEpoch.InvalidateUtilitiesListsAsync(ct);
+        await Cache.SetJsonAsync(EntityCacheKeys.UtilityService(entity.Id), dtoOut, ct);
+        await ListEpoch.InvalidateUtilitiesListsAsync(ct);
         return dtoOut;
     } // Kết thúc CreateAsync.
 
@@ -132,15 +129,15 @@ public sealed class UtilityCatalogService : IUtilityCatalogService
         _mapper.Map(dto, tracked);
         _repository.Update(tracked);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.UtilityService(id), ct);
-        await _listEpoch.InvalidateUtilitiesListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.UtilityService(id), ct);
+        await ListEpoch.InvalidateUtilitiesListsAsync(ct);
     } // Kết thúc UpdateAsync.
 
     public async Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default)
     { // Mở khối SoftDeleteAsync.
         await _repository.SoftDeleteAsync(id, deletedBy, ct);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.UtilityService(id), ct);
-        await _listEpoch.InvalidateUtilitiesListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.UtilityService(id), ct);
+        await ListEpoch.InvalidateUtilitiesListsAsync(ct);
     } // Kết thúc SoftDeleteAsync.
 }

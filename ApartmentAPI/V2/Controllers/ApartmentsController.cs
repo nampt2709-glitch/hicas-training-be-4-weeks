@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, route, HTTP verbs.
 
 namespace ApartmentAPI.V2.Controllers;
 
-// Căn hộ V2 — cùng IApartmentService và DTO V1; khác chỉ nhánh URL /api/v2/ và document Swagger nhóm V2. Admin hoặc User.
+// V2 — đầy đủ route so với V1: có GET by-status/...; cùng service/DTO, segment /api/v2/ (minh họa versioning). Admin hoặc User.
 [ApiController]
 [ApiVersion("2.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]

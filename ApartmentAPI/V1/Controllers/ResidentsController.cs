@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult, FromQuery, att
 
 namespace ApartmentAPI.V1.Controllers;
 
-// Cư dân — danh sách phân trang, một bản ghi theo Id, và theo căn (một căn có nhiều cư dân), tạo/sửa/xóa mềm. Admin hoặc User.
+// V1 — CRUD cư dân + danh sách phân trang. GET by-apartment → API v2.0.
 [ApiController]
 [ApiVersion("1.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]
@@ -46,25 +46,6 @@ public class ResidentsController : ControllerBase
     {
         var data = await _service.GetByIdAsync(id, ct);
         return Ok(new { message = ApiMessages.ResidentGetSuccess, data });
-    }
-
-    [HttpGet("by-apartment/{apartmentId:guid}")]
-    public async Task<IActionResult> GetByApartment(
-        Guid apartmentId,
-        [FromQuery] string? page,
-        [FromQuery] string? pageSize,
-        [FromQuery] DateTime? createdAtFrom = null,
-        [FromQuery] DateTime? createdAtTo = null,
-        [FromQuery] string? fullName = null,
-        [FromQuery] string? identityNumber = null,
-        [FromQuery] string? sort = null,
-        [FromQuery] string? sortDir = null,
-        CancellationToken ct = default)
-    {
-        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
-        var data = await _service.GetPagedAsync(p, s, createdAtFrom, createdAtTo, apartmentId, fullName, identityNumber, sort, sortDir, ct);
-        return Ok(new { message = ApiMessages.ResidentListSuccess, data });
     }
 
     [HttpPost]

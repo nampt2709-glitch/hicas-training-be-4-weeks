@@ -3,7 +3,7 @@ using System.Security.Claims; // ClaimTypes để đọc user Id từ principal 
 using ApartmentAPI; // ApiMessages, ApiErrorCodes, ApiException.
 using ApartmentAPI.DTOs; // SignUpRequestDto, LoginRequestDto, RefreshRequestDto.
 using ApartmentAPI.Authorization; // ApiAuthorization — chuỗi role Admin/User thống nhất.
-using ApartmentAPI.Interfaces; // IAuthenticationService: SignUpAsync, LoginAsync, RefreshAsync, LogoutAsync.
+using ApartmentAPI.Services; // IAuthenticationService: SignUpAsync, LoginAsync, RefreshAsync, LogoutAsync.
 using Microsoft.AspNetCore.Authorization; // [AllowAnonymous], [Authorize].
 using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult, FromBody.
 

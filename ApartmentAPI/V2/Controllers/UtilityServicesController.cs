@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V2.Controllers;
 
-// Dịch vụ tiện ích — bảng giá tham chiếu; route “active” trả subset isActive = true; CRUD mềm. Admin hoặc User.
+// V2 — đầy đủ route so với V1: có GET .../active (isActive = true); CRUD mềm. Admin hoặc User.
 [ApiController]
 [ApiVersion("2.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]

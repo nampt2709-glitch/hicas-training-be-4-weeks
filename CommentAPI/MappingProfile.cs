@@ -54,8 +54,9 @@ public class MappingProfile : Profile // Kế thừa Profile: định nghĩa t�
         CreateMap<Comment, CommentFlatDto>()
             .ForMember(d => d.Level, o => o.MapFrom(_ => 0)); // Route phẳng EF, không CTE.
 
-        // Cây: Children map đệ quy khi navigation Children đã Include.
-        CreateMap<Comment, CommentTreeDto>();
+        // Cây: DTO vẫn dùng Children (JSON); entity dùng Reply — map đệ quy khi navigation Reply đã Include.
+        CreateMap<Comment, CommentTreeDto>()
+            .ForMember(d => d.Children, o => o.MapFrom(s => s.Reply));
 
         // Tạo comment: chuyển từ body request sang entity, Id/CreatedAt do service bổ sung.
         CreateMap<CreateCommentDto, Comment>();

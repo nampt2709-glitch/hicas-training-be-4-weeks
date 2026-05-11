@@ -27,23 +27,20 @@ public interface IApartmentService
 }
 
 // Triển khai CRUD căn hộ qua IApartmentRepository + AutoMapper + cache list/chi tiết.
-public sealed class ApartmentService : IApartmentService
+public sealed class ApartmentService : ServiceBase, IApartmentService
 {
     private readonly IApartmentRepository _repository; // Truy vấn Apartment.
     private readonly IMapper _mapper; // Map DTO ↔ entity.
-    private readonly IEntityResponseCache _cache; // JSON cache.
-    private readonly ICacheListEpochStore _listEpoch; // Epoch danh sách căn hộ.
 
     public ApartmentService(
         IApartmentRepository repository,
         IMapper mapper,
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch)
+        : base(cache, listEpoch)
     { // Mở khối constructor.
         _repository = repository;
         _mapper = mapper;
-        _cache = cache;
-        _listEpoch = listEpoch;
     } // Kết thúc constructor.
 
     private static bool HasApartmentListFilter(
@@ -51,10 +48,9 @@ public sealed class ApartmentService : IApartmentService
         DateTime? createdAtTo,
         ApartmentStatus? status,
         string? roomNumberContains) =>
-        createdAtFrom.HasValue
-        || createdAtTo.HasValue
+        HasCreatedAtFilter(createdAtFrom, createdAtTo)
         || status.HasValue
-        || !string.IsNullOrWhiteSpace(roomNumberContains);
+        || HasTextFilter(roomNumberContains);
 
     public async Task<PagedResult<ApartmentDto>> GetPagedAsync(
         int page,
@@ -71,10 +67,10 @@ public sealed class ApartmentService : IApartmentService
 
         if (!HasApartmentListFilter(createdAtFrom, createdAtTo, status, roomNumberContains))
         {
-            var epoch = await _listEpoch.GetApartmentsListEpochAsync(ct);
+            var epoch = await ListEpoch.GetApartmentsListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.ApartmentsPaged(
                 epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            var cached = await _cache.GetJsonAsync<PagedResult<ApartmentDto>>(cacheKey, ct);
+            var cached = await Cache.GetJsonAsync<PagedResult<ApartmentDto>>(cacheKey, ct);
             if (cached is not null)
                 return cached;
         }
@@ -100,10 +96,10 @@ public sealed class ApartmentService : IApartmentService
 
         if (!HasApartmentListFilter(createdAtFrom, createdAtTo, status, roomNumberContains))
         {
-            var epoch = await _listEpoch.GetApartmentsListEpochAsync(ct);
+            var epoch = await ListEpoch.GetApartmentsListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.ApartmentsPaged(
                 epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            await _cache.SetJsonAsync(cacheKey, result, ct);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
         }
 
         return result;
@@ -112,7 +108,7 @@ public sealed class ApartmentService : IApartmentService
     public async Task<ApartmentDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.
         var key = EntityCacheKeys.Apartment(id);
-        var cached = await _cache.GetJsonAsync<ApartmentDto>(key, ct);
+        var cached = await Cache.GetJsonAsync<ApartmentDto>(key, ct);
         if (cached is not null)
             return cached;
 
@@ -120,7 +116,7 @@ public sealed class ApartmentService : IApartmentService
         if (entity is null)
             throw ApiException.NotFound(ApiErrorCodes.NotFound, "Apartment not found.");
         var dto = _mapper.Map<ApartmentDto>(entity);
-        await _cache.SetJsonAsync(key, dto, ct);
+        await Cache.SetJsonAsync(key, dto, ct);
         return dto;
     } // Kết thúc GetByIdAsync.
 
@@ -130,8 +126,8 @@ public sealed class ApartmentService : IApartmentService
         await _repository.AddAsync(entity, ct);
         await _repository.SaveChangesAsync(ct);
         var createdDto = _mapper.Map<ApartmentDto>(entity);
-        await _cache.SetJsonAsync(EntityCacheKeys.Apartment(entity.Id), createdDto, ct);
-        await _listEpoch.InvalidateApartmentsListsAsync(ct);
+        await Cache.SetJsonAsync(EntityCacheKeys.Apartment(entity.Id), createdDto, ct);
+        await ListEpoch.InvalidateApartmentsListsAsync(ct);
         return createdDto;
     } // Kết thúc CreateAsync.
 
@@ -143,15 +139,15 @@ public sealed class ApartmentService : IApartmentService
         _mapper.Map(dto, tracked);
         _repository.Update(tracked);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Apartment(id), ct);
-        await _listEpoch.InvalidateApartmentsListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Apartment(id), ct);
+        await ListEpoch.InvalidateApartmentsListsAsync(ct);
     } // Kết thúc UpdateAsync.
 
     public async Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default)
     { // Mở khối SoftDeleteAsync.
         await _repository.SoftDeleteAsync(id, deletedBy, ct);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Apartment(id), ct);
-        await _listEpoch.InvalidateApartmentsListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Apartment(id), ct);
+        await ListEpoch.InvalidateApartmentsListsAsync(ct);
     } // Kết thúc SoftDeleteAsync.
 }

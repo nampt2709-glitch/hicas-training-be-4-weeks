@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore; // AsNoTracking, ToListAsync, LongCountAsyn
 namespace ApartmentAPI.Services;
 
 // Vai trò Identity (Role): danh sách phân trang + cache khi không filter; CRUD.
-public interface IRoleAppService
+public interface IRoleService
 {
     Task<PagedResult<RoleDto>> GetPagedAsync(
         int page,
@@ -25,26 +25,23 @@ public interface IRoleAppService
 }
 
 // RoleManager<Role>: tạo/xóa role; cập nhật Description trên entity Role tùy chỉnh.
-public sealed class RoleAppService : IRoleAppService
+public sealed class RoleService : ServiceBase, IRoleService
 {
     private readonly RoleManager<Role> _roles; // Truy cập bảng Roles qua Identity.
     private readonly IMapper _mapper; // Role ↔ RoleDto.
-    private readonly IEntityResponseCache _cache; // Cache list/chi tiết.
-    private readonly ICacheListEpochStore _listEpoch; // Epoch danh sách role.
 
-    public RoleAppService(
+    public RoleService(
         RoleManager<Role> roles,
         IMapper mapper,
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch)
+        : base(cache, listEpoch)
     { // Mở khối constructor.
         _roles = roles;
         _mapper = mapper;
-        _cache = cache;
-        _listEpoch = listEpoch;
     } // Kết thúc constructor.
 
-    private static bool HasRoleListFilter(string? nameContains) => !string.IsNullOrWhiteSpace(nameContains);
+    private static bool HasRoleListFilter(string? nameContains) => HasTextFilter(nameContains);
 
     public async Task<PagedResult<RoleDto>> GetPagedAsync(
         int page,
@@ -58,9 +55,9 @@ public sealed class RoleAppService : IRoleAppService
 
         if (!HasRoleListFilter(nameContains))
         {
-            var epoch = await _listEpoch.GetRolesListEpochAsync(ct);
+            var epoch = await ListEpoch.GetRolesListEpochAsync(ct);
             var key = EntityCacheKeys.RolesPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            var cached = await _cache.GetJsonAsync<PagedResult<RoleDto>>(key, ct);
+            var cached = await Cache.GetJsonAsync<PagedResult<RoleDto>>(key, ct);
             if (cached is not null)
                 return cached;
         }
@@ -79,9 +76,9 @@ public sealed class RoleAppService : IRoleAppService
 
         if (!HasRoleListFilter(nameContains))
         {
-            var epoch = await _listEpoch.GetRolesListEpochAsync(ct);
+            var epoch = await ListEpoch.GetRolesListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.RolesPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            await _cache.SetJsonAsync(cacheKey, result, ct);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
         }
 
         return result;
@@ -104,7 +101,7 @@ public sealed class RoleAppService : IRoleAppService
     public async Task<RoleDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.
         var key = EntityCacheKeys.Role(id);
-        var cached = await _cache.GetJsonAsync<RoleDto>(key, ct);
+        var cached = await Cache.GetJsonAsync<RoleDto>(key, ct);
         if (cached is not null)
             return cached;
 
@@ -112,7 +109,7 @@ public sealed class RoleAppService : IRoleAppService
         if (role is null)
             throw ApiException.NotFound(ApiErrorCodes.NotFound, "Role not found.");
         var dto = _mapper.Map<RoleDto>(role);
-        await _cache.SetJsonAsync(key, dto, ct);
+        await Cache.SetJsonAsync(key, dto, ct);
         return dto;
     } // Kết thúc GetByIdAsync.
 
@@ -127,8 +124,8 @@ public sealed class RoleAppService : IRoleAppService
         }
 
         var roleDto = _mapper.Map<RoleDto>(role);
-        await _cache.SetJsonAsync(EntityCacheKeys.Role(role.Id), roleDto, ct);
-        await _listEpoch.InvalidateRolesListsAsync(ct);
+        await Cache.SetJsonAsync(EntityCacheKeys.Role(role.Id), roleDto, ct);
+        await ListEpoch.InvalidateRolesListsAsync(ct);
         return roleDto;
     } // Kết thúc CreateAsync.
 
@@ -146,8 +143,8 @@ public sealed class RoleAppService : IRoleAppService
             throw ApiException.BadRequest(ApiErrorCodes.Validation, msg);
         }
 
-        await _cache.RemoveAsync(EntityCacheKeys.Role(id), ct);
-        await _listEpoch.InvalidateRolesListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Role(id), ct);
+        await ListEpoch.InvalidateRolesListsAsync(ct);
     } // Kết thúc UpdateAsync.
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
@@ -163,7 +160,7 @@ public sealed class RoleAppService : IRoleAppService
             throw ApiException.BadRequest(ApiErrorCodes.Validation, msg);
         }
 
-        await _cache.RemoveAsync(EntityCacheKeys.Role(id), ct);
-        await _listEpoch.InvalidateRolesListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Role(id), ct);
+        await ListEpoch.InvalidateRolesListsAsync(ct);
     } // Kết thúc DeleteAsync.
 }

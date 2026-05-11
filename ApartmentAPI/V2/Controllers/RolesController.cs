@@ -9,16 +9,16 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V2.Controllers;
 
-// Vai trò Identity — CRUD không lọc theo CreatedAt (role ít): phân trang theo NameContains. Chỉ Admin.
+// V2 — CRUD Role Identity trên /api/v2/ (cùng V1; minh họa versioning). Phân trang theo NameContains. Chỉ Admin.
 [ApiController]
 [ApiVersion("2.0")]
 [Authorize(Roles = ApiAuthorization.AdminOnly)]
 [Route("api/v{version:apiVersion}/roles")]
 public class RolesController : ControllerBase
 {
-    private readonly IRoleAppService _service;
+    private readonly IRoleService _service;
 
-    public RolesController(IRoleAppService service) => _service = service;
+    public RolesController(IRoleService service) => _service = service;
 
     [HttpGet]
     public async Task<IActionResult> GetAll(

@@ -18,7 +18,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, binding, IActionResult.
 
 namespace CommentAPI.V2.Controllers;
 
-
+// V2 — user đầy đủ: self CRUD + PUT admin; minh họa versioning (V1 không có route admin).
 
 [ApiController] // Controller kiểu API (binding, lỗi validation chuẩn).
 [ApiVersion("2.0")] // Phiên bản API 2.0 (segment URL api/v2/...).

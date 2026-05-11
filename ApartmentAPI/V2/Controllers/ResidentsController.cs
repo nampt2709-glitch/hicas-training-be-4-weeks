@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult, FromQuery, att
 
 namespace ApartmentAPI.V2.Controllers;
 
-// Cư dân — danh sách phân trang, một bản ghi theo Id, và theo căn (một căn có nhiều cư dân), tạo/sửa/xóa mềm. Admin hoặc User.
+// V2 — đầy đủ route so với V1: có GET by-apartment/{id} (một căn nhiều cư dân); CRUD mềm. Admin hoặc User.
 [ApiController]
 [ApiVersion("2.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]

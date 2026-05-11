@@ -1,150 +1,127 @@
-using Asp.Versioning; // [ApiVersion]: khai báo 1.0 trên URI api/v1/...
-using CommentAPI; // ApiException xử lý lỗi nghiệp vụ nhất quán.
-using CommentAPI.Controllers; // HttpContextUserId khi action cần user id từ JWT.
-using CommentAPI.Versioning; // ApiVersionRouteValues.WithVersion cho CreatedAtRoute.
+using Asp.Versioning;
+using CommentAPI;
+using CommentAPI.Controllers;
+using CommentAPI.Versioning;
 
-using CommentAPI.DTOs; // CreateUserDto, UpdateUserDto, AdminUpdateUserDto, UserDto.
-using CommentAPI.Validators; // FluentValidation cho body user.
+using CommentAPI.DTOs;
+using CommentAPI.Validators;
 
-using CommentAPI.Interfaces; // IUserService, IUserRepository.
+using CommentAPI.Interfaces;
 
-using Microsoft.AspNetCore.Authorization; // [Authorize], [AllowAnonymous] nếu có.
+using Microsoft.AspNetCore.Authorization;
 
-using Microsoft.AspNetCore.Http; // StatusCodes (403, v.v.) trong phản hồi có chủ đích.
+using Microsoft.AspNetCore.Http;
 
-using Microsoft.AspNetCore.Mvc; // ControllerBase, binding, IActionResult.
-
-
+using Microsoft.AspNetCore.Mvc;
 
 namespace CommentAPI.V1.Controllers;
 
+// =============================================================================
+// V1 — chỉ CRUD user cơ bản. PUT /admin/users/... → API v2.0.
+// =============================================================================
 
+[ApiController]
+[ApiVersion("1.0")]
 
-[ApiController] // Controller kiểu API (binding, lỗi validation chuẩn).
-[ApiVersion("1.0")] // Phiên bản API 1.0 (segment URL api/v1/...).
+[Authorize]
 
-[Authorize] // Mặc định mọi action cần đã xác thực (trừ khi ghi đè).
+[Route("api/v{version:apiVersion}/users")]
 
-[Route("api/v{version:apiVersion}/users")] // Tiền tố URI cho tài nguyên User.
-
-public class UsersController : ControllerBase // Không trả view Razor.
-
+public class UsersController : ControllerBase
 {
 
-    private readonly IUserService _service; // Dịch vụ tầng ứng dụng cho user.
+    private readonly IUserService _service;
 
-    private readonly IUserRepository _userRepository; // Parse sort list.
+    private readonly IUserRepository _userRepository;
 
-    public UsersController(IUserService service, IUserRepository userRepository) // DI container inject IUserService + IUserRepository.
-
+    public UsersController(IUserService service, IUserRepository userRepository)
     {
 
-        _service = service; // Lưu tham chiếu phục vụ các action.
+        _service = service;
 
         _userRepository = userRepository;
 
     }
 
+    [HttpGet]
 
+    [Authorize(Roles = "Admin,User")]
 
-    // [1] GET /api/users
-    // Danh sách user phân trang; name / userName / email là filter Contains tuỳ chọn (query).
+    public async Task<IActionResult> GetAll(
 
-    [HttpGet] // GET danh sách có phân trang.
+        [FromQuery] string? page,
 
-    [Authorize(Roles = "Admin,User")] // Cả Admin và User được xem danh sách (theo chính sách nghiệp vụ).
+        [FromQuery] string? pageSize,
 
-    public async Task<IActionResult> GetAll( // Trả về trang user và tổng số bản ghi.
+        [FromQuery] string? name = null,
 
-        [FromQuery] string? page, // Chuỗi số trang từ query (parse ở PaginationQuery).
+        [FromQuery] string? userName = null,
 
-        [FromQuery] string? pageSize, // Chuỗi kích thước trang.
+        [FromQuery] string? email = null,
 
-        [FromQuery] string? name = null, // Filter: Name chứa chuỗi.
+        [FromQuery] DateTime? createdAtFrom = null,
 
-        [FromQuery] string? userName = null, // Filter: UserName chứa chuỗi.
+        [FromQuery] DateTime? createdAtTo = null,
 
-        [FromQuery] string? email = null, // Filter: Email chứa chuỗi.
-
-        [FromQuery] DateTime? createdAtFrom = null, // Lọc CreatedAt.
-
-        [FromQuery] DateTime? createdAtTo = null, // Lọc CreatedAt.
-
-        [FromQuery] string? sort = null, // Cột UserDto.
+        [FromQuery] string? sort = null,
 
         [FromQuery] string? sortDir = null,
 
-        CancellationToken cancellationToken = default) // Hủy khi client đóng kết nối.
-
+        CancellationToken cancellationToken = default)
     {
 
-        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo); // 400 nếu from > to.
+        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
 
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize); // Chuẩn hóa page/pageSize an toàn.
+        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
 
         var sortSpec = _userRepository.ParseUserListSortOrThrow(sort, sortDir);
 
-        var result = await _service.GetPagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo, name, userName, email, sortSpec); // DB/cache qua service.
+        var result = await _service.GetPagedAsync(p, s, cancellationToken, createdAtFrom, createdAtTo, name, userName, email, sortSpec);
 
-        return Ok(new { message = ApiMessages.UserListSuccess, data = result }); // 200 kèm message và dữ liệu phân trang.
-
-    }
-
-
-
-    // [2] GET /api/users/{id}
-    [HttpGet("{id:guid}")] // GET một user theo id — GET /api/users/{id}.
-
-    [Authorize(Roles = "Admin,User")] // Đọc chi tiết.
-
-    public async Task<IActionResult> GetById(Guid id) // Guid trong route template.
-
-    {
-
-        var result = await _service.GetByIdAsync(id); // Cache-aside + DB trong service.
-
-        return Ok(new { message = ApiMessages.UserGetSuccess, data = result }); // 200.
+        return Ok(new { message = ApiMessages.UserListSuccess, data = result });
 
     }
 
+    [HttpGet("{id:guid}")]
 
+    [Authorize(Roles = "Admin,User")]
 
-    // [3] POST /api/users
-    [HttpPost] // POST tạo user mới (Admin).
-
-    [Authorize(Roles = "Admin")] // Chỉ quản trị tạo tài khoản, còn nếu user muốn tạo tài khoản thì phải sign up
-
-    public async Task<IActionResult> Create([FromBody] CreateUserDto dto) // Body validation FluentValidation.
-
+    public async Task<IActionResult> GetById(Guid id)
     {
 
-        var result = await _service.CreateAsync(dto); // Identity UserManager + role mặc định.
+        var result = await _service.GetByIdAsync(id);
 
-        return CreatedAtAction( // 201 Location trỏ tới GetById.
-
-            nameof(GetById), // Tên action để build URL.
-
-            ApiVersionRouteValues.WithVersion(this, new { id = result.Id }), // Route values kèm segment version.
-
-            new { message = ApiMessages.UserCreateSuccess, data = result }); // Payload phản hồi.
+        return Ok(new { message = ApiMessages.UserGetSuccess, data = result });
 
     }
 
+    [HttpPost]
 
+    [Authorize(Roles = "Admin")]
 
-    // [4] PUT /api/users/{id}
-    // User (không phải Admin): chỉ sửa Name của chính mình; Admin phải dùng PUT /api/admin/users/{id}.
-
-    [HttpPut("{id:guid}")] // PUT cập nhật Name cho tài khoản hiện tại.
-
-    [Authorize(Roles = "Admin,User")] // User đổi tên hiển thị; Admin bị chặn và được hướng dẫn endpoint admin.
-
-    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateUserDto dto) // Id phải trùng user trong JWT.
-
+    public async Task<IActionResult> Create([FromBody] CreateUserDto dto)
     {
 
-        if (User.IsInRole("Admin")) // Admin không được dùng endpoint hồ sơ giới hạn.
+        var result = await _service.CreateAsync(dto);
 
+        return CreatedAtAction(
+
+            nameof(GetById),
+
+            ApiVersionRouteValues.WithVersion(this, new { id = result.Id }),
+
+            new { message = ApiMessages.UserCreateSuccess, data = result });
+
+    }
+
+    [HttpPut("{id:guid}")]
+
+    [Authorize(Roles = "Admin,User")]
+
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateUserDto dto)
+    {
+
+        if (User.IsInRole("Admin"))
         {
 
             return StatusCode(
@@ -163,52 +140,25 @@ public class UsersController : ControllerBase // Không trả view Razor.
 
         }
 
+        var userId = HttpContextUserId.GetRequiredUserId(User);
 
+        await _service.UpdateAsSelfAsync(id, dto, userId);
 
-        var userId = HttpContextUserId.GetRequiredUserId(User); // Guid từ JWT.
-
-        await _service.UpdateAsSelfAsync(id, dto, userId); // Kiểm tra id == userId trong service.
-
-        return Ok(new { message = ApiMessages.UserUpdateSuccess }); // 200.
+        return Ok(new { message = ApiMessages.UserUpdateSuccess });
 
     }
 
-
-
-    // [5] PUT /api/admin/users/{id}
-    // Admin: cập nhật đầy đủ UserName, Email, Name, roles (không đổi mật khẩu ở route này).
-
-    [HttpPut("~/api/v{version:apiVersion}/admin/users/{id:guid}")] // PUT .../api/v{version}/admin/users/{id}
+    [HttpDelete("{id:guid}")]
 
     [Authorize(Roles = "Admin")]
 
-    public async Task<IActionResult> UpdateAsAdmin(Guid id, [FromBody] AdminUpdateUserDto dto)
-
+    public async Task<IActionResult> Delete(Guid id)
     {
 
-        await _service.UpdateAsAdminAsync(id, dto); // Trùng username/email và admin cuối xử lý trong service.
+        await _service.DeleteAsync(id);
 
-        return Ok(new { message = ApiMessages.UserAdminUpdateSuccess }); // 200.
-
-    }
-
-
-
-    // [6] DELETE /api/users/{id}
-    [HttpDelete("{id:guid}")] // DELETE xóa user khỏi Identity/DB.
-
-    [Authorize(Roles = "Admin")] // Chỉ Admin.
-
-    public async Task<IActionResult> Delete(Guid id) // Xóa cứng theo id.
-
-    {
-
-        await _service.DeleteAsync(id); // UserManager.Delete + xóa cache.
-
-        return Ok(new { message = ApiMessages.UserDeleteSuccess }); // 200 xác nhận.
+        return Ok(new { message = ApiMessages.UserDeleteSuccess });
 
     }
 
 }
-
-

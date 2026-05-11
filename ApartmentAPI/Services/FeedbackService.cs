@@ -31,13 +31,11 @@ public interface IFeedbackService
 }
 
 // CRUD Feedback: UserId và ParentId (nếu có) phải hợp lệ.
-public sealed class FeedbackService : IFeedbackService
+public sealed class FeedbackService : ServiceBase, IFeedbackService
 {
     private readonly IFeedbackRepository _repository; // Truy vấn Feedback + Exists parent.
     private readonly UserManager<User> _users; // Kiểm tra UserId.
     private readonly IMapper _mapper; // Map entity ↔ DTO.
-    private readonly IEntityResponseCache _cache; // Cache chi tiết/trang.
-    private readonly ICacheListEpochStore _listEpoch; // Epoch danh sách feedback.
 
     public FeedbackService(
         IFeedbackRepository repository,
@@ -45,12 +43,11 @@ public sealed class FeedbackService : IFeedbackService
         IMapper mapper,
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch)
+        : base(cache, listEpoch)
     { // Mở khối constructor.
         _repository = repository;
         _users = users;
         _mapper = mapper;
-        _cache = cache;
-        _listEpoch = listEpoch;
     } // Kết thúc constructor.
 
     // BFS trên danh sách phẳng (Id, ParentId): tập Id gồm root và mọi hậu duệ — chặn đặt cha trùng cây con (chu trình khi duyệt).
@@ -77,11 +74,10 @@ public sealed class FeedbackService : IFeedbackService
         Guid? userId,
         bool rootsOnly,
         string? contentContains) =>
-        createdAtFrom.HasValue
-        || createdAtTo.HasValue
+        HasCreatedAtFilter(createdAtFrom, createdAtTo)
         || userId.HasValue
         || rootsOnly
-        || !string.IsNullOrWhiteSpace(contentContains);
+        || HasTextFilter(contentContains);
 
     public async Task<PagedResult<FeedbackDto>> GetPagedAsync(
         int page,
@@ -99,9 +95,9 @@ public sealed class FeedbackService : IFeedbackService
 
         if (!HasListFilter(createdAtFrom, createdAtTo, userId, rootsOnly, contentContains))
         {
-            var epoch = await _listEpoch.GetFeedbacksListEpochAsync(ct);
+            var epoch = await ListEpoch.GetFeedbacksListEpochAsync(ct);
             var key = EntityCacheKeys.FeedbacksPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            var cached = await _cache.GetJsonAsync<PagedResult<FeedbackDto>>(key, ct);
+            var cached = await Cache.GetJsonAsync<PagedResult<FeedbackDto>>(key, ct);
             if (cached is not null)
                 return cached;
         }
@@ -114,9 +110,9 @@ public sealed class FeedbackService : IFeedbackService
 
         if (!HasListFilter(createdAtFrom, createdAtTo, userId, rootsOnly, contentContains))
         {
-            var epoch = await _listEpoch.GetFeedbacksListEpochAsync(ct);
+            var epoch = await ListEpoch.GetFeedbacksListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.FeedbacksPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            await _cache.SetJsonAsync(cacheKey, result, ct);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
         }
 
         return result;
@@ -125,7 +121,7 @@ public sealed class FeedbackService : IFeedbackService
     public async Task<FeedbackDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.
         var key = EntityCacheKeys.Feedback(id);
-        var cached = await _cache.GetJsonAsync<FeedbackDto>(key, ct);
+        var cached = await Cache.GetJsonAsync<FeedbackDto>(key, ct);
         if (cached is not null)
             return cached;
 
@@ -133,7 +129,7 @@ public sealed class FeedbackService : IFeedbackService
         if (entity is null)
             throw ApiException.NotFound(ApiErrorCodes.NotFound, "Feedback not found.");
         var dto = _mapper.Map<FeedbackDto>(entity);
-        await _cache.SetJsonAsync(key, dto, ct);
+        await Cache.SetJsonAsync(key, dto, ct);
         return dto;
     } // Kết thúc GetByIdAsync.
 
@@ -150,8 +146,8 @@ public sealed class FeedbackService : IFeedbackService
         await _repository.AddAsync(entity, ct);
         await _repository.SaveChangesAsync(ct);
         var dtoOut = _mapper.Map<FeedbackDto>(entity);
-        await _cache.SetJsonAsync(EntityCacheKeys.Feedback(entity.Id), dtoOut, ct);
-        await _listEpoch.InvalidateFeedbacksListsAsync(ct);
+        await Cache.SetJsonAsync(EntityCacheKeys.Feedback(entity.Id), dtoOut, ct);
+        await ListEpoch.InvalidateFeedbacksListsAsync(ct);
         return dtoOut;
     } // Kết thúc CreateAsync.
 
@@ -163,8 +159,8 @@ public sealed class FeedbackService : IFeedbackService
         _mapper.Map(dto, tracked);
         _repository.Update(tracked);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Feedback(id), ct);
-        await _listEpoch.InvalidateFeedbacksListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Feedback(id), ct);
+        await ListEpoch.InvalidateFeedbacksListsAsync(ct);
     } // Kết thúc UpdateAsync.
 
     // Admin — cập nhật đầy đủ quan hệ cây và tác giả; chặn gán cha = chính nó hoặc hậu duệ (chu trình vô hạn khi đọc cây).
@@ -202,15 +198,15 @@ public sealed class FeedbackService : IFeedbackService
         root.ParentId = dto.ParentId;
         _repository.Update(root);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Feedback(id), ct);
-        await _listEpoch.InvalidateFeedbacksListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Feedback(id), ct);
+        await ListEpoch.InvalidateFeedbacksListsAsync(ct);
     } // Kết thúc UpdateAsAdminAsync.
 
     public async Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default)
     { // Mở khối SoftDeleteAsync.
         await _repository.SoftDeleteAsync(id, deletedBy, ct);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Feedback(id), ct);
-        await _listEpoch.InvalidateFeedbacksListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Feedback(id), ct);
+        await ListEpoch.InvalidateFeedbacksListsAsync(ct);
     } // Kết thúc SoftDeleteAsync.
 }

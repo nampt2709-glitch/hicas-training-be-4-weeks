@@ -1,5 +1,4 @@
 using ApartmentAPI.DTOs; // ApiMessages, PaginationQuery.
-using ApartmentAPI.Entities; // ApartmentStatus cho route by-status.
 using ApartmentAPI.Services; // IApartmentService CRUD + phân trang.
 using ApartmentAPI.Validators; // CreatedAtRangeQuery, PaginationQuery.
 using ApartmentAPI.V1.DTOs; // ApartmentDto Create/Update.
@@ -11,7 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, route, HTTP verbs.
 
 namespace ApartmentAPI.V1.Controllers;
 
-// Căn hộ V1 — danh sách phân trang (cache trong service/repo), chi tiết, theo trạng thái, CRUD mềm. Admin hoặc User.
+// V1 — chỉ CRUD căn hộ cơ bản. Lọc theo trạng thái (by-status) → API v2.0.
 [ApiController]
 [ApiVersion("1.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]
@@ -46,24 +45,6 @@ public class ApartmentsController : ControllerBase
     {
         var data = await _service.GetByIdAsync(id, ct);
         return Ok(new { message = ApiMessages.ApartmentGetSuccess, data });
-    }
-
-    [HttpGet("by-status/{status}")]
-    public async Task<IActionResult> GetByStatus(
-        ApartmentStatus status,
-        [FromQuery] string? page,
-        [FromQuery] string? pageSize,
-        [FromQuery] DateTime? createdAtFrom = null,
-        [FromQuery] DateTime? createdAtTo = null,
-        [FromQuery] string? roomNumber = null,
-        [FromQuery] string? sort = null,
-        [FromQuery] string? sortDir = null,
-        CancellationToken ct = default)
-    {
-        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
-        var data = await _service.GetPagedAsync(p, s, createdAtFrom, createdAtTo, status, roomNumber, sort, sortDir, ct);
-        return Ok(new { message = ApiMessages.ApartmentListSuccess, data });
     }
 
     [HttpPost]

@@ -4,11 +4,24 @@ using System.Text; // Encoding.UTF8 cho signing key.
 using ApartmentAPI; // ApiException, ApiErrorCodes, ApiMessages.
 using ApartmentAPI.DTOs; // SignUpRequestDto, LoginRequestDto, RefreshRequestDto, TokenResponseDto.
 using ApartmentAPI.Entities; // User.
-using ApartmentAPI.Interfaces; // IAuthenticationService, IAuthenticationRepository (qua ctor).
+using ApartmentAPI.Repositories; // IAuthenticationRepository (hợp đồng cùng assembly; triển khai AuthenticationRepository).
 using Microsoft.AspNetCore.Http; // StatusCodes cho ApiException.
 using Microsoft.IdentityModel.Tokens; // JwtSecurityToken, TokenValidationParameters.
 
 namespace ApartmentAPI.Services;
+
+// Nghiệp vụ đăng ký / đăng nhập / refresh / đăng xuất — orchestration repository + JWT.
+public interface IAuthenticationService
+{ // Mở khối IAuthenticationService.
+    // Tạo user + phát hành cặp token ban đầu hoặc throw ApiException validation/conflict.
+    Task<TokenResponseDto> SignUpAsync(SignUpRequestDto request, CancellationToken cancellationToken = default);
+    // Xác thực UserName/Password — thành công trả TokenResponseDto; sai → LOGIN_FAILED.
+    Task<TokenResponseDto> LoginAsync(LoginRequestDto request, CancellationToken cancellationToken = default);
+    // Đổi refresh hợp lệ lấy access mới (và có thể rotation refresh).
+    Task<TokenResponseDto> RefreshAsync(RefreshRequestDto request, CancellationToken cancellationToken = default);
+    // Vô hiệu hóa session theo userId (revoke tokens lưu DB).
+    Task LogoutAsync(Guid userId, CancellationToken cancellationToken = default);
+} // Kết thúc IAuthenticationService.
 
 // JWT access/refresh + security stamp (đồng bộ với CommentAPI; không ghi Serilog file).
 public sealed class AuthenticationService : IAuthenticationService
@@ -18,23 +31,23 @@ public sealed class AuthenticationService : IAuthenticationService
     private const string RefreshTokenType = "refresh"; // Token chỉ mang sub + stamp + jti.
 
     private readonly IAuthenticationRepository _authRepository; // User, password, stamp, revoke.
-    private readonly IUserAppService _userAppService; // Đăng ký + gán role mặc định.
+    private readonly IUserService _userService; // Đăng ký + gán role mặc định.
     private readonly JwtOptions _jwt; // Issuer, audience, key, TTL.
 
     public AuthenticationService(
         IAuthenticationRepository authRepository,
-        IUserAppService userAppService,
+        IUserService userService,
         Microsoft.Extensions.Options.IOptions<JwtOptions> jwtOptions)
     { // Mở khối constructor.
         _authRepository = authRepository;
-        _userAppService = userAppService;
+        _userService = userService;
         _jwt = jwtOptions.Value;
     } // Kết thúc constructor.
 
     public async Task<TokenResponseDto> SignUpAsync(SignUpRequestDto request, CancellationToken cancellationToken = default)
     { // Mở khối SignUpAsync.
-        // BƯỚC 1 — Tạo user + role User qua UserAppService.
-        var created = await _userAppService.SignUpWithDefaultUserRoleAsync(request, cancellationToken);
+        // BƯỚC 1 — Tạo user + role User qua UserService.
+        var created = await _userService.SignUpWithDefaultUserRoleAsync(request, cancellationToken);
         // BƯỚC 2 — Nạp lại entity đầy đủ từ auth repo (đảm bảo có cho issuing token).
         var user = await _authRepository.GetByIdAsync(created.Id, cancellationToken);
         if (user is null)

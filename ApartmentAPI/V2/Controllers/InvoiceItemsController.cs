@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V2.Controllers;
 
-// Dòng hóa đơn — phân trang chung / theo một hóa đơn (một invoice nhiều dòng), CRUD mềm. Admin hoặc User.
+// V2 — đầy đủ route so với V1: có GET by-invoice/{id} (một invoice nhiều dòng); CRUD mềm. Admin hoặc User.
 [ApiController]
 [ApiVersion("2.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]

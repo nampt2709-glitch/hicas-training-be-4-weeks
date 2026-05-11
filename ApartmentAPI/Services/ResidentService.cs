@@ -28,14 +28,12 @@ public interface IResidentService
     Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default);
 }
 
-public sealed class ResidentService : IResidentService
+public sealed class ResidentService : ServiceBase, IResidentService
 {
     private readonly IResidentRepository _repository; // Cư dân.
     private readonly IApartmentRepository _apartments; // Kiểm tra căn hộ tuỳ chọn.
     private readonly UserManager<User> _users; // Kiểm tra user tuỳ chọn.
     private readonly IMapper _mapper; // Map Resident ↔ DTO.
-    private readonly IEntityResponseCache _cache;
-    private readonly ICacheListEpochStore _listEpoch; // Epoch danh sách cư dân.
 
     public ResidentService(
         IResidentRepository repository,
@@ -44,13 +42,12 @@ public sealed class ResidentService : IResidentService
         IMapper mapper,
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch)
+        : base(cache, listEpoch)
     { // Mở khối constructor.
         _repository = repository;
         _apartments = apartments;
         _users = users;
         _mapper = mapper;
-        _cache = cache;
-        _listEpoch = listEpoch;
     } // Kết thúc constructor.
 
     private static bool HasResidentListFilter(
@@ -59,11 +56,10 @@ public sealed class ResidentService : IResidentService
         Guid? apartmentId,
         string? fullNameContains,
         string? identityContains) =>
-        createdAtFrom.HasValue
-        || createdAtTo.HasValue
+        HasCreatedAtFilter(createdAtFrom, createdAtTo)
         || apartmentId.HasValue
-        || !string.IsNullOrWhiteSpace(fullNameContains)
-        || !string.IsNullOrWhiteSpace(identityContains);
+        || HasTextFilter(fullNameContains)
+        || HasTextFilter(identityContains);
 
     public async Task<PagedResult<ResidentDto>> GetPagedAsync(
         int page,
@@ -81,10 +77,10 @@ public sealed class ResidentService : IResidentService
 
         if (!HasResidentListFilter(createdAtFrom, createdAtTo, apartmentId, fullNameContains, identityContains))
         {
-            var epoch = await _listEpoch.GetResidentsListEpochAsync(ct);
+            var epoch = await ListEpoch.GetResidentsListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.ResidentsPaged(
                 epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            var cached = await _cache.GetJsonAsync<PagedResult<ResidentDto>>(cacheKey, ct);
+            var cached = await Cache.GetJsonAsync<PagedResult<ResidentDto>>(cacheKey, ct);
             if (cached is not null)
                 return cached;
         }
@@ -111,10 +107,10 @@ public sealed class ResidentService : IResidentService
 
         if (!HasResidentListFilter(createdAtFrom, createdAtTo, apartmentId, fullNameContains, identityContains))
         {
-            var epoch = await _listEpoch.GetResidentsListEpochAsync(ct);
+            var epoch = await ListEpoch.GetResidentsListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.ResidentsPaged(
                 epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            await _cache.SetJsonAsync(cacheKey, result, ct);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
         }
 
         return result;
@@ -123,7 +119,7 @@ public sealed class ResidentService : IResidentService
     public async Task<ResidentDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.
         var key = EntityCacheKeys.Resident(id);
-        var cached = await _cache.GetJsonAsync<ResidentDto>(key, ct);
+        var cached = await Cache.GetJsonAsync<ResidentDto>(key, ct);
         if (cached is not null)
             return cached;
 
@@ -131,7 +127,7 @@ public sealed class ResidentService : IResidentService
         if (entity is null)
             throw ApiException.NotFound(ApiErrorCodes.NotFound, "Resident not found.");
         var dto = _mapper.Map<ResidentDto>(entity);
-        await _cache.SetJsonAsync(key, dto, ct);
+        await Cache.SetJsonAsync(key, dto, ct);
         return dto;
     } // Kết thúc GetByIdAsync.
 
@@ -143,8 +139,8 @@ public sealed class ResidentService : IResidentService
         await _repository.AddAsync(entity, ct);
         await _repository.SaveChangesAsync(ct);
         var dtoOut = _mapper.Map<ResidentDto>(entity);
-        await _cache.SetJsonAsync(EntityCacheKeys.Resident(entity.Id), dtoOut, ct);
-        await _listEpoch.InvalidateResidentsListsAsync(ct);
+        await Cache.SetJsonAsync(EntityCacheKeys.Resident(entity.Id), dtoOut, ct);
+        await ListEpoch.InvalidateResidentsListsAsync(ct);
         return dtoOut;
     } // Kết thúc CreateAsync.
 
@@ -158,16 +154,16 @@ public sealed class ResidentService : IResidentService
         _mapper.Map(dto, tracked);
         _repository.Update(tracked);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Resident(id), ct);
-        await _listEpoch.InvalidateResidentsListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Resident(id), ct);
+        await ListEpoch.InvalidateResidentsListsAsync(ct);
     } // Kết thúc UpdateAsync.
 
     public async Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default)
     { // Mở khối SoftDeleteAsync.
         await _repository.SoftDeleteAsync(id, deletedBy, ct);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Resident(id), ct);
-        await _listEpoch.InvalidateResidentsListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Resident(id), ct);
+        await ListEpoch.InvalidateResidentsListsAsync(ct);
     } // Kết thúc SoftDeleteAsync.
 
     private async Task EnsureForeignKeysAsync(Guid? apartmentId, Guid? userId, CancellationToken ct)

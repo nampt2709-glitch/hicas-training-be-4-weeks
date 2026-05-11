@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V2.Controllers;
 
-// Hóa đơn — phân trang tổng / theo căn (một căn nhiều hóa đơn), chi tiết, tạo/sửa/xóa mềm. Admin hoặc User.
+// V2 — đầy đủ route so với V1: có GET by-apartment/{id}; phân trang tổng + theo căn. Admin hoặc User.
 [ApiController]
 [ApiVersion("2.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]

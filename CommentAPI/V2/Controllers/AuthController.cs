@@ -10,11 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase.
 
 namespace CommentAPI.V2.Controllers;
 
-// =============================================================================
-// File V2/AuthController.cs: cùng hành vi V1 — URL /api/v2.0/auth/... (segment version).
-// =============================================================================
-
-// Bản 2.0: cùng hành vi 1.0; endpoint /api/v2/auth/... (versioning URL segment).
+// V2 — xác thực đầy đủ: signup, login, refresh, logout (V1 chỉ signup + login); minh họa API versioning trên segment URL.
 [ApiController]
 [ApiVersion("2.0")]
 [Route("api/v{version:apiVersion}/auth")]

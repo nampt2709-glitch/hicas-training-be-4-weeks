@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V1.Controllers;
 
-// Dòng hóa đơn — phân trang chung / theo một hóa đơn (một invoice nhiều dòng), CRUD mềm. Admin hoặc User.
+// V1 — CRUD dòng hóa đơn + GET phân trang (query invoiceId). GET by-invoice/{id} → API v2.0.
 [ApiController]
 [ApiVersion("1.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]
@@ -46,24 +46,6 @@ public class InvoiceItemsController : ControllerBase
     {
         var data = await _service.GetByIdAsync(id, ct);
         return Ok(new { message = ApiMessages.InvoiceItemGetSuccess, data });
-    }
-
-    [HttpGet("by-invoice/{invoiceId:guid}")]
-    public async Task<IActionResult> GetByInvoice(
-        Guid invoiceId,
-        [FromQuery] string? page,
-        [FromQuery] string? pageSize,
-        [FromQuery] DateTime? createdAtFrom = null,
-        [FromQuery] DateTime? createdAtTo = null,
-        [FromQuery] Guid? serviceId = null,
-        [FromQuery] string? sort = null,
-        [FromQuery] string? sortDir = null,
-        CancellationToken ct = default)
-    {
-        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
-        var data = await _service.GetPagedAsync(p, s, createdAtFrom, createdAtTo, invoiceId, serviceId, sort, sortDir, ct);
-        return Ok(new { message = ApiMessages.InvoiceItemListSuccess, data });
     }
 
     [HttpPost]

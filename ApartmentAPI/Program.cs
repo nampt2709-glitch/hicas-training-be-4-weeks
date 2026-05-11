@@ -5,12 +5,11 @@ using System.Threading.RateLimiting; // FixedWindowRateLimiter, token bucket cho
 using ApartmentAPI; // ApiException, EnvLoader, RouteRateLimitOptions binding.
 using ApartmentAPI.Configuration; // JwtSettings, AttachmentStorageOptions, Serilog path options.
 using ApartmentAPI.Data; // AppDbContext, SeedData.
-using ApartmentAPI.Entities; // UserApp — kiểu generic IdentityUser trong DI.
-using ApartmentAPI.Interfaces; // Hợp đồng repository/service nếu đăng ký qua interface.
+using ApartmentAPI.Entities; // User, Role — entity Identity trong DI.
 using ApartmentAPI.Logging; // StructuredFileLogger đa sink tùy chỉnh.
 using ApartmentAPI.Middleware; // ActivityId, exception handler, 403 JSON.
 using ApartmentAPI.Repositories; // Đăng ký repository cụ thể vào DI.
-using ApartmentAPI.Services; // UserAppService, apartment services.
+using ApartmentAPI.Services; // UserService, RoleService, apartment services.
 using ApartmentAPI.V1.Validators; // FluentValidation validators assembly (CreateApartmentValidator, …).
 using Asp.Versioning; // AddApiVersioning, báo cáo phiên bản API.
 using Asp.Versioning.ApiExplorer; // AddApiExplorer cho Swagger theo version.
@@ -316,8 +315,8 @@ builder.Services.AddScoped<IInvoiceItemService, InvoiceItemService>();
 builder.Services.AddScoped<IFeedbackService, FeedbackService>();
 builder.Services.AddScoped<IAttachmentService, AttachmentService>();
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
-builder.Services.AddScoped<IUserAppService, UserAppService>();
-builder.Services.AddScoped<IRoleAppService, RoleAppService>();
+builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<IRoleService, RoleService>();
 
 builder.Services.AddControllers(options =>
 {

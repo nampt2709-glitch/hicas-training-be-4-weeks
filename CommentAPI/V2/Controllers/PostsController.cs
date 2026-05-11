@@ -16,9 +16,9 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult, routing attrib
 
 
 
-namespace CommentAPI.V2.Controllers; 
+namespace CommentAPI.V2.Controllers;
 
-
+// V2 — đầy đủ route so với V1: cây/flat comment theo post, sửa bởi admin, v.v. (V1 chỉ CRUD post cơ bản).
 
 [ApiController] // API controller.
 [ApiVersion("2.0")] // Phiên bản 2.0 trong URL (api/v2/...).

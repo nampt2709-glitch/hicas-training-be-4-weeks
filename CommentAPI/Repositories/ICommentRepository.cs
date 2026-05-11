@@ -130,7 +130,7 @@ public interface ICommentRepository
         string? contentContains = null, // Lọc Content.
         SortByColumn? sort = null); // Sort.
 
-    // Demo eager: Include Post/User/Children + AsSplitQuery.
+    // Demo eager: Include Post/User/Reply + AsSplitQuery.
     Task<(List<CommentLoadingDemoDto> Items, long TotalCount)> GetCommentsEagerLoadingDemoRouteAsync(
         bool paginationEnabled, // Bật/tắt phân trang.
         int page, // Trang.

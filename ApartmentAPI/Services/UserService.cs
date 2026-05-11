@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore; // AsNoTracking, Where, ToListAsync.
 namespace ApartmentAPI.Services;
 
 // Nghiệp vụ người dùng Identity: CRUD tối giản (không xóa mềm — User không kế thừa BaseEntity).
-public interface IUserAppService
+public interface IUserService
 {
     Task<PagedResult<UserListDto>> GetPagedAsync(
         int page,
@@ -32,23 +32,20 @@ public interface IUserAppService
 }
 
 // UserManager<User>: tạo có mật khẩu băm; cập nhật FullName / AvatarUrl / IsActive.
-public sealed class UserAppService : IUserAppService
+public sealed class UserService : ServiceBase, IUserService
 {
     private readonly UserManager<User> _users; // Identity CRUD user.
     private readonly IMapper _mapper; // Map User ↔ UserListDto.
-    private readonly IEntityResponseCache _cache;
-    private readonly ICacheListEpochStore _listEpoch; // Epoch danh sách user.
 
-    public UserAppService(
+    public UserService(
         UserManager<User> users,
         IMapper mapper,
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch)
+        : base(cache, listEpoch)
     { // Mở khối constructor.
         _users = users;
         _mapper = mapper;
-        _cache = cache;
-        _listEpoch = listEpoch;
     } // Kết thúc constructor.
 
     private static bool HasUserListFilter(
@@ -58,11 +55,10 @@ public sealed class UserAppService : IUserAppService
         string? emailContains,
         string? fullNameContains,
         bool? isActive) =>
-        createdAtFrom.HasValue
-        || createdAtTo.HasValue
-        || !string.IsNullOrWhiteSpace(userNameContains)
-        || !string.IsNullOrWhiteSpace(emailContains)
-        || !string.IsNullOrWhiteSpace(fullNameContains)
+        HasCreatedAtFilter(createdAtFrom, createdAtTo)
+        || HasTextFilter(userNameContains)
+        || HasTextFilter(emailContains)
+        || HasTextFilter(fullNameContains)
         || isActive.HasValue;
 
     public async Task<PagedResult<UserListDto>> GetPagedAsync(
@@ -82,9 +78,9 @@ public sealed class UserAppService : IUserAppService
 
         if (!HasUserListFilter(createdAtFrom, createdAtTo, userNameContains, emailContains, fullNameContains, isActive))
         {
-            var epoch = await _listEpoch.GetUsersListEpochAsync(ct);
+            var epoch = await ListEpoch.GetUsersListEpochAsync(ct);
             var key = EntityCacheKeys.UsersPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            var cached = await _cache.GetJsonAsync<PagedResult<UserListDto>>(key, ct);
+            var cached = await Cache.GetJsonAsync<PagedResult<UserListDto>>(key, ct);
             if (cached is not null)
                 return cached;
         }
@@ -115,9 +111,9 @@ public sealed class UserAppService : IUserAppService
 
         if (!HasUserListFilter(createdAtFrom, createdAtTo, userNameContains, emailContains, fullNameContains, isActive))
         {
-            var epoch = await _listEpoch.GetUsersListEpochAsync(ct);
+            var epoch = await ListEpoch.GetUsersListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.UsersPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            await _cache.SetJsonAsync(cacheKey, result, ct);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
         }
 
         return result;
@@ -141,7 +137,7 @@ public sealed class UserAppService : IUserAppService
     public async Task<UserListDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.
         var cacheKey = EntityCacheKeys.User(id);
-        var cached = await _cache.GetJsonAsync<UserListDto>(cacheKey, ct);
+        var cached = await Cache.GetJsonAsync<UserListDto>(cacheKey, ct);
         if (cached is not null)
             return cached;
 
@@ -149,7 +145,7 @@ public sealed class UserAppService : IUserAppService
         if (user is null)
             throw ApiException.NotFound(ApiErrorCodes.NotFound, "User not found.");
         var dto = _mapper.Map<UserListDto>(user);
-        await _cache.SetJsonAsync(cacheKey, dto, ct);
+        await Cache.SetJsonAsync(cacheKey, dto, ct);
         return dto;
     } // Kết thúc GetByIdAsync.
 
@@ -184,7 +180,7 @@ public sealed class UserAppService : IUserAppService
         }
 
         await _users.AddToRoleAsync(user, "User");
-        await _listEpoch.InvalidateUsersListsAsync(ct);
+        await ListEpoch.InvalidateUsersListsAsync(ct);
         return _mapper.Map<UserListDto>(user);
     } // Kết thúc SignUpWithDefaultUserRoleAsync.
 
@@ -203,8 +199,8 @@ public sealed class UserAppService : IUserAppService
             throw ApiException.BadRequest(ApiErrorCodes.Validation, msg);
         }
 
-        await _cache.RemoveAsync(EntityCacheKeys.User(user.Id), ct);
-        await _listEpoch.InvalidateUsersListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.User(user.Id), ct);
+        await ListEpoch.InvalidateUsersListsAsync(ct);
         return _mapper.Map<UserListDto>(user);
     } // Kết thúc CreateAsync.
 
@@ -224,8 +220,8 @@ public sealed class UserAppService : IUserAppService
             throw ApiException.BadRequest(ApiErrorCodes.Validation, msg);
         }
 
-        await _cache.RemoveAsync(EntityCacheKeys.User(id), ct);
-        await _listEpoch.InvalidateUsersListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.User(id), ct);
+        await ListEpoch.InvalidateUsersListsAsync(ct);
     } // Kết thúc UpdateAsync.
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
@@ -241,7 +237,7 @@ public sealed class UserAppService : IUserAppService
             throw ApiException.BadRequest(ApiErrorCodes.Validation, msg);
         }
 
-        await _cache.RemoveAsync(EntityCacheKeys.User(id), ct);
-        await _listEpoch.InvalidateUsersListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.User(id), ct);
+        await ListEpoch.InvalidateUsersListsAsync(ct);
     } // Kết thúc DeleteAsync.
 }

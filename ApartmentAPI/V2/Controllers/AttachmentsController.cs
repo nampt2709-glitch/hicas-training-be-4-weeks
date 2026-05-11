@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase.
 
 namespace ApartmentAPI.V2.Controllers;
 
-// Đính kèm V2 — cùng layout route với V1; chỉ khác segment api/v2/... trong URL. Admin hoặc User.
+// V2 — đầy đủ route so với V1: GET avatars, users/{id}, feedbacks/{id}, PUT avatar/feedback; segment /api/v2/. Admin hoặc User.
 [ApiController]
 [ApiVersion("2.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]

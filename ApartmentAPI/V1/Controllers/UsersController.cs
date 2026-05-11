@@ -10,16 +10,16 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, action results.
 
 namespace ApartmentAPI.V1.Controllers;
 
-// Người dùng Identity — UserAppService: phân trang đa điều kiện; DeleteAsync xóa cứng (khác soft delete entity nghiệp vụ). Chỉ Admin quản lý tài khoản.
+// V1 — CRUD User Identity trên /api/v1/ (cùng tập route V2; minh họa versioning). Phân trang đa điều kiện; DeleteAsync xóa cứng. Chỉ Admin.
 [ApiController]
 [ApiVersion("1.0")]
 [Authorize(Roles = ApiAuthorization.AdminOnly)]
 [Route("api/v{version:apiVersion}/users")]
 public class UsersController : ControllerBase
 {
-    private readonly IUserAppService _service;
+    private readonly IUserService _service;
 
-    public UsersController(IUserAppService service) => _service = service;
+    public UsersController(IUserService service) => _service = service;
 
     [HttpGet]
     public async Task<IActionResult> GetAll(

@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V1.Controllers;
 
-// Dịch vụ tiện ích — bảng giá tham chiếu; route “active” trả subset isActive = true; CRUD mềm. Admin hoặc User.
+// V1 — CRUD dịch vụ tiện ích + GET phân trang (query isActive). GET …/active → API v2.0.
 [ApiController]
 [ApiVersion("1.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]
@@ -46,23 +46,6 @@ public class UtilityServicesController : ControllerBase
     {
         var data = await _service.GetByIdAsync(id, ct);
         return Ok(new { message = ApiMessages.UtilityGetSuccess, data });
-    }
-
-    [HttpGet("active")]
-    public async Task<IActionResult> GetActive(
-        [FromQuery] string? page,
-        [FromQuery] string? pageSize,
-        [FromQuery] DateTime? createdAtFrom = null,
-        [FromQuery] DateTime? createdAtTo = null,
-        [FromQuery] string? nameContains = null,
-        [FromQuery] string? sort = null,
-        [FromQuery] string? sortDir = null,
-        CancellationToken ct = default)
-    {
-        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
-        var data = await _service.GetPagedAsync(p, s, createdAtFrom, createdAtTo, true, nameContains, sort, sortDir, ct);
-        return Ok(new { message = ApiMessages.UtilityListSuccess, data });
     }
 
     [HttpPost]

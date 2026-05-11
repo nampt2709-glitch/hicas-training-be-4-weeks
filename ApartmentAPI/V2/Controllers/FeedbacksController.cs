@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V2.Controllers;
 
-// Phản hồi — có cây: route “roots” chỉ nút không cha; có thể lọc theo user. Admin hoặc User; riêng PUT .../admin chỉ Admin.
+// V2 — đầy đủ route so với V1: by-user, roots, PUT .../admin; có cây phản hồi. Admin hoặc User; PUT admin chỉ Admin.
 [ApiController]
 [ApiVersion("2.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]

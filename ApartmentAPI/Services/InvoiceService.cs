@@ -27,13 +27,11 @@ public interface IInvoiceService
     Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default);
 }
 
-public sealed class InvoiceService : IInvoiceService
+public sealed class InvoiceService : ServiceBase, IInvoiceService
 {
     private readonly IInvoiceRepository _repository; // Hóa đơn.
     private readonly IApartmentRepository _apartments; // FK căn hộ.
     private readonly IMapper _mapper; // Map Invoice ↔ DTO.
-    private readonly IEntityResponseCache _cache;
-    private readonly ICacheListEpochStore _listEpoch; // Epoch danh sách hóa đơn.
 
     public InvoiceService(
         IInvoiceRepository repository,
@@ -41,12 +39,11 @@ public sealed class InvoiceService : IInvoiceService
         IMapper mapper,
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch)
+        : base(cache, listEpoch)
     { // Mở khối constructor.
         _repository = repository;
         _apartments = apartments;
         _mapper = mapper;
-        _cache = cache;
-        _listEpoch = listEpoch;
     } // Kết thúc constructor.
 
     private static bool HasInvoiceListFilter(
@@ -55,11 +52,10 @@ public sealed class InvoiceService : IInvoiceService
         Guid? apartmentId,
         InvoiceStatus? status,
         string? invoiceCode) =>
-        createdAtFrom.HasValue
-        || createdAtTo.HasValue
+        HasCreatedAtFilter(createdAtFrom, createdAtTo)
         || apartmentId.HasValue
         || status.HasValue
-        || !string.IsNullOrWhiteSpace(invoiceCode);
+        || HasTextFilter(invoiceCode);
 
     public async Task<PagedResult<InvoiceDto>> GetPagedAsync(
         int page,
@@ -77,9 +73,9 @@ public sealed class InvoiceService : IInvoiceService
 
         if (!HasInvoiceListFilter(createdAtFrom, createdAtTo, apartmentId, status, invoiceCode))
         {
-            var epoch = await _listEpoch.GetInvoicesListEpochAsync(ct);
+            var epoch = await ListEpoch.GetInvoicesListEpochAsync(ct);
             var key = EntityCacheKeys.InvoicesPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            var cached = await _cache.GetJsonAsync<PagedResult<InvoiceDto>>(key, ct);
+            var cached = await Cache.GetJsonAsync<PagedResult<InvoiceDto>>(key, ct);
             if (cached is not null)
                 return cached;
         }
@@ -92,9 +88,9 @@ public sealed class InvoiceService : IInvoiceService
 
         if (!HasInvoiceListFilter(createdAtFrom, createdAtTo, apartmentId, status, invoiceCode))
         {
-            var epoch = await _listEpoch.GetInvoicesListEpochAsync(ct);
+            var epoch = await ListEpoch.GetInvoicesListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.InvoicesPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            await _cache.SetJsonAsync(cacheKey, result, ct);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
         }
 
         return result;
@@ -103,7 +99,7 @@ public sealed class InvoiceService : IInvoiceService
     public async Task<InvoiceDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.
         var key = EntityCacheKeys.Invoice(id);
-        var cached = await _cache.GetJsonAsync<InvoiceDto>(key, ct);
+        var cached = await Cache.GetJsonAsync<InvoiceDto>(key, ct);
         if (cached is not null)
             return cached;
 
@@ -111,7 +107,7 @@ public sealed class InvoiceService : IInvoiceService
         if (entity is null)
             throw ApiException.NotFound(ApiErrorCodes.NotFound, "Invoice not found.");
         var dto = _mapper.Map<InvoiceDto>(entity);
-        await _cache.SetJsonAsync(key, dto, ct);
+        await Cache.SetJsonAsync(key, dto, ct);
         return dto;
     } // Kết thúc GetByIdAsync.
 
@@ -124,8 +120,8 @@ public sealed class InvoiceService : IInvoiceService
         await _repository.AddAsync(entity, ct);
         await _repository.SaveChangesAsync(ct);
         var dtoOut = _mapper.Map<InvoiceDto>(entity);
-        await _cache.SetJsonAsync(EntityCacheKeys.Invoice(entity.Id), dtoOut, ct);
-        await _listEpoch.InvalidateInvoicesListsAsync(ct);
+        await Cache.SetJsonAsync(EntityCacheKeys.Invoice(entity.Id), dtoOut, ct);
+        await ListEpoch.InvalidateInvoicesListsAsync(ct);
         return dtoOut;
     } // Kết thúc CreateAsync.
 
@@ -140,15 +136,15 @@ public sealed class InvoiceService : IInvoiceService
         _mapper.Map(dto, tracked);
         _repository.Update(tracked);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Invoice(id), ct);
-        await _listEpoch.InvalidateInvoicesListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Invoice(id), ct);
+        await ListEpoch.InvalidateInvoicesListsAsync(ct);
     } // Kết thúc UpdateAsync.
 
     public async Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default)
     { // Mở khối SoftDeleteAsync.
         await _repository.SoftDeleteAsync(id, deletedBy, ct);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Invoice(id), ct);
-        await _listEpoch.InvalidateInvoicesListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Invoice(id), ct);
+        await ListEpoch.InvalidateInvoicesListsAsync(ct);
     } // Kết thúc SoftDeleteAsync.
 }

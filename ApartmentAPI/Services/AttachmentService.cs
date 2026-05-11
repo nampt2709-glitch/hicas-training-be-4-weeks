@@ -42,14 +42,12 @@ public interface IAttachmentService
 }
 
 // CRUD Attachment — không còn một POST chung với field Scope; server gán Scope/FK theo route.
-public sealed class AttachmentService : IAttachmentService
+public sealed class AttachmentService : ServiceBase, IAttachmentService
 {
     private readonly IAttachmentRepository _repository; // Truy vấn/ghi Attachment.
     private readonly UserManager<User> _users; // Kiểm tra UserId (avatar).
     private readonly IFeedbackRepository _feedbacks; // Nạp feedback + Exists.
     private readonly IMapper _mapper; // Ánh xạ entity ↔ DTO.
-    private readonly IEntityResponseCache _cache; // Cache chi tiết + trang (JSON).
-    private readonly ICacheListEpochStore _listEpoch; // Epoch làm mới key danh sách không filter.
     private readonly IAttachmentFileStorage _fileStorage; // Lưu/xóa file vật lý.
 
     public AttachmentService(
@@ -60,13 +58,12 @@ public sealed class AttachmentService : IAttachmentService
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch,
         IAttachmentFileStorage fileStorage)
+        : base(cache, listEpoch)
     { // Mở khối constructor.
         _repository = repository;
         _users = users;
         _feedbacks = feedbacks;
         _mapper = mapper;
-        _cache = cache;
-        _listEpoch = listEpoch;
         _fileStorage = fileStorage;
     } // Kết thúc constructor.
 
@@ -77,12 +74,11 @@ public sealed class AttachmentService : IAttachmentService
         Guid? feedbackId,
         AttachmentScope? scope,
         string? originalFileNameContains) =>
-        createdAtFrom.HasValue
-        || createdAtTo.HasValue
+        HasCreatedAtFilter(createdAtFrom, createdAtTo)
         || userId.HasValue
         || feedbackId.HasValue
         || scope.HasValue
-        || !string.IsNullOrWhiteSpace(originalFileNameContains);
+        || HasTextFilter(originalFileNameContains);
 
     public async Task<PagedResult<AttachmentDto>> GetPagedAsync(
         int page,
@@ -101,9 +97,9 @@ public sealed class AttachmentService : IAttachmentService
 
         if (!HasListFilter(createdAtFrom, createdAtTo, userId, feedbackId, scope, originalFileNameContains))
         {
-            var epoch = await _listEpoch.GetAttachmentsListEpochAsync(ct);
+            var epoch = await ListEpoch.GetAttachmentsListEpochAsync(ct);
             var key = EntityCacheKeys.AttachmentsPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            var cached = await _cache.GetJsonAsync<PagedResult<AttachmentDto>>(key, ct);
+            var cached = await Cache.GetJsonAsync<PagedResult<AttachmentDto>>(key, ct);
             if (cached is not null)
                 return cached;
         }
@@ -125,9 +121,9 @@ public sealed class AttachmentService : IAttachmentService
 
         if (!HasListFilter(createdAtFrom, createdAtTo, userId, feedbackId, scope, originalFileNameContains))
         {
-            var epoch = await _listEpoch.GetAttachmentsListEpochAsync(ct);
+            var epoch = await ListEpoch.GetAttachmentsListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.AttachmentsPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            await _cache.SetJsonAsync(cacheKey, result, ct);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
         }
 
         return result;
@@ -136,7 +132,7 @@ public sealed class AttachmentService : IAttachmentService
     public async Task<AttachmentDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.
         var key = EntityCacheKeys.Attachment(id);
-        var cached = await _cache.GetJsonAsync<AttachmentDto>(key, ct);
+        var cached = await Cache.GetJsonAsync<AttachmentDto>(key, ct);
         if (cached is not null)
             return cached;
 
@@ -144,7 +140,7 @@ public sealed class AttachmentService : IAttachmentService
         if (entity is null)
             throw ApiException.NotFound(ApiErrorCodes.NotFound, "Attachment not found.");
         var dto = _mapper.Map<AttachmentDto>(entity);
-        await _cache.SetJsonAsync(key, dto, ct);
+        await Cache.SetJsonAsync(key, dto, ct);
         return dto;
     } // Kết thúc GetByIdAsync.
 
@@ -171,8 +167,8 @@ public sealed class AttachmentService : IAttachmentService
         await _repository.AddAsync(entity, ct);
         await _repository.SaveChangesAsync(ct);
         var dtoOut = _mapper.Map<AttachmentDto>(entity);
-        await _cache.SetJsonAsync(EntityCacheKeys.Attachment(entity.Id), dtoOut, ct);
-        await _listEpoch.InvalidateAttachmentsListsAsync(ct);
+        await Cache.SetJsonAsync(EntityCacheKeys.Attachment(entity.Id), dtoOut, ct);
+        await ListEpoch.InvalidateAttachmentsListsAsync(ct);
         return dtoOut;
     } // Kết thúc CreateAvatarForUserAsync.
 
@@ -200,8 +196,8 @@ public sealed class AttachmentService : IAttachmentService
         await _repository.AddAsync(entity, ct);
         await _repository.SaveChangesAsync(ct);
         var dtoOut = _mapper.Map<AttachmentDto>(entity);
-        await _cache.SetJsonAsync(EntityCacheKeys.Attachment(entity.Id), dtoOut, ct);
-        await _listEpoch.InvalidateAttachmentsListsAsync(ct);
+        await Cache.SetJsonAsync(EntityCacheKeys.Attachment(entity.Id), dtoOut, ct);
+        await ListEpoch.InvalidateAttachmentsListsAsync(ct);
         return dtoOut;
     } // Kết thúc CreateForFeedbackAsync.
 
@@ -227,8 +223,8 @@ public sealed class AttachmentService : IAttachmentService
 
         _repository.Update(tracked);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Attachment(id), ct);
-        await _listEpoch.InvalidateAttachmentsListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Attachment(id), ct);
+        await ListEpoch.InvalidateAttachmentsListsAsync(ct);
     } // Kết thúc UpdateAvatarAsync.
 
     public async Task UpdateFeedbackAttachmentAsync(Guid id, Guid feedbackId, IFormFile? file, CancellationToken ct = default)
@@ -259,15 +255,15 @@ public sealed class AttachmentService : IAttachmentService
         tracked.UserId = fb.UserId;
         _repository.Update(tracked);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Attachment(id), ct);
-        await _listEpoch.InvalidateAttachmentsListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Attachment(id), ct);
+        await ListEpoch.InvalidateAttachmentsListsAsync(ct);
     } // Kết thúc UpdateFeedbackAttachmentAsync.
 
     public async Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default)
     { // Mở khối SoftDeleteAsync.
         await _repository.SoftDeleteAsync(id, deletedBy, ct);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.Attachment(id), ct);
-        await _listEpoch.InvalidateAttachmentsListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.Attachment(id), ct);
+        await ListEpoch.InvalidateAttachmentsListsAsync(ct);
     } // Kết thúc SoftDeleteAsync.
 }

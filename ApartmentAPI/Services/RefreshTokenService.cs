@@ -28,13 +28,11 @@ public interface IRefreshTokenService
 }
 
 // CRUD RefreshToken: map tạo mới; cập nhật trường điều khiển thu hồi thủ công (bảng lưu metadata; JWT refresh thực tế do AuthenticationService phát).
-public sealed class RefreshTokenService : IRefreshTokenService
+public sealed class RefreshTokenService : ServiceBase, IRefreshTokenService
 {
     private readonly IRefreshTokenRepository _repository; // Bản ghi refresh token (DB).
     private readonly UserManager<User> _users; // FK UserId khi tạo.
     private readonly IMapper _mapper; // Map RefreshToken ↔ DTO.
-    private readonly IEntityResponseCache _cache;
-    private readonly ICacheListEpochStore _listEpoch; // Epoch danh sách refresh token.
 
     public RefreshTokenService(
         IRefreshTokenRepository repository,
@@ -42,12 +40,11 @@ public sealed class RefreshTokenService : IRefreshTokenService
         IMapper mapper,
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch)
+        : base(cache, listEpoch)
     { // Mở khối constructor.
         _repository = repository;
         _users = users;
         _mapper = mapper;
-        _cache = cache;
-        _listEpoch = listEpoch;
     } // Kết thúc constructor.
 
     private static bool HasListFilter(
@@ -55,7 +52,7 @@ public sealed class RefreshTokenService : IRefreshTokenService
         DateTime? createdAtTo,
         Guid? userId,
         bool? isRevoked) =>
-        createdAtFrom.HasValue || createdAtTo.HasValue || userId.HasValue || isRevoked.HasValue;
+        HasCreatedAtFilter(createdAtFrom, createdAtTo) || userId.HasValue || isRevoked.HasValue;
 
     public async Task<PagedResult<RefreshTokenDto>> GetPagedAsync(
         int page,
@@ -72,9 +69,9 @@ public sealed class RefreshTokenService : IRefreshTokenService
 
         if (!HasListFilter(createdAtFrom, createdAtTo, userId, isRevoked))
         {
-            var epoch = await _listEpoch.GetRefreshTokensListEpochAsync(ct);
+            var epoch = await ListEpoch.GetRefreshTokensListEpochAsync(ct);
             var key = EntityCacheKeys.RefreshTokensPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            var cached = await _cache.GetJsonAsync<PagedResult<RefreshTokenDto>>(key, ct);
+            var cached = await Cache.GetJsonAsync<PagedResult<RefreshTokenDto>>(key, ct);
             if (cached is not null)
                 return cached;
         }
@@ -87,9 +84,9 @@ public sealed class RefreshTokenService : IRefreshTokenService
 
         if (!HasListFilter(createdAtFrom, createdAtTo, userId, isRevoked))
         {
-            var epoch = await _listEpoch.GetRefreshTokensListEpochAsync(ct);
+            var epoch = await ListEpoch.GetRefreshTokensListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.RefreshTokensPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            await _cache.SetJsonAsync(cacheKey, result, ct);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
         }
 
         return result;
@@ -98,7 +95,7 @@ public sealed class RefreshTokenService : IRefreshTokenService
     public async Task<RefreshTokenDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.
         var key = EntityCacheKeys.RefreshToken(id);
-        var cached = await _cache.GetJsonAsync<RefreshTokenDto>(key, ct);
+        var cached = await Cache.GetJsonAsync<RefreshTokenDto>(key, ct);
         if (cached is not null)
             return cached;
 
@@ -106,7 +103,7 @@ public sealed class RefreshTokenService : IRefreshTokenService
         if (entity is null)
             throw ApiException.NotFound(ApiErrorCodes.NotFound, "Refresh token not found.");
         var dto = _mapper.Map<RefreshTokenDto>(entity);
-        await _cache.SetJsonAsync(key, dto, ct);
+        await Cache.SetJsonAsync(key, dto, ct);
         return dto;
     } // Kết thúc GetByIdAsync.
 
@@ -119,8 +116,8 @@ public sealed class RefreshTokenService : IRefreshTokenService
         await _repository.AddAsync(entity, ct);
         await _repository.SaveChangesAsync(ct);
         var dtoOut = _mapper.Map<RefreshTokenDto>(entity);
-        await _cache.SetJsonAsync(EntityCacheKeys.RefreshToken(entity.Id), dtoOut, ct);
-        await _listEpoch.InvalidateRefreshTokensListsAsync(ct);
+        await Cache.SetJsonAsync(EntityCacheKeys.RefreshToken(entity.Id), dtoOut, ct);
+        await ListEpoch.InvalidateRefreshTokensListsAsync(ct);
         return dtoOut;
     } // Kết thúc CreateAsync.
 
@@ -135,15 +132,15 @@ public sealed class RefreshTokenService : IRefreshTokenService
         tracked.ReplacedByTokenHash = dto.ReplacedByTokenHash;
         _repository.Update(tracked);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.RefreshToken(id), ct);
-        await _listEpoch.InvalidateRefreshTokensListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.RefreshToken(id), ct);
+        await ListEpoch.InvalidateRefreshTokensListsAsync(ct);
     } // Kết thúc UpdateAsync.
 
     public async Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default)
     { // Mở khối SoftDeleteAsync.
         await _repository.SoftDeleteAsync(id, deletedBy, ct);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.RefreshToken(id), ct);
-        await _listEpoch.InvalidateRefreshTokensListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.RefreshToken(id), ct);
+        await ListEpoch.InvalidateRefreshTokensListsAsync(ct);
     } // Kết thúc SoftDeleteAsync.
 }

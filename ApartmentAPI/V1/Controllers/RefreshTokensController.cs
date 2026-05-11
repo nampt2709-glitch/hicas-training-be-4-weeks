@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V1.Controllers;
 
-// Refresh token — hỗ trợ quản trị / debug: phân trang tổng và theo user; xóa mềm bản ghi hash. Chỉ Admin.
+// V1 — CRUD refresh token + phân trang tổng. GET by-user/{id} → API v2.0. Chỉ Admin.
 [ApiController]
 [ApiVersion("1.0")]
 [Authorize(Roles = ApiAuthorization.AdminOnly)]
@@ -45,24 +45,6 @@ public class RefreshTokensController : ControllerBase
     {
         var data = await _service.GetByIdAsync(id, ct);
         return Ok(new { message = ApiMessages.RefreshTokenGetSuccess, data });
-    }
-
-    [HttpGet("by-user/{userId:guid}")]
-    public async Task<IActionResult> GetByUser(
-        Guid userId,
-        [FromQuery] string? page,
-        [FromQuery] string? pageSize,
-        [FromQuery] DateTime? createdAtFrom = null,
-        [FromQuery] DateTime? createdAtTo = null,
-        [FromQuery] bool? isRevoked = null,
-        [FromQuery] string? sort = null,
-        [FromQuery] string? sortDir = null,
-        CancellationToken ct = default)
-    {
-        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
-        var data = await _service.GetPagedAsync(p, s, createdAtFrom, createdAtTo, userId, isRevoked, sort, sortDir, ct);
-        return Ok(new { message = ApiMessages.RefreshTokenListSuccess, data });
     }
 
     [HttpPost]

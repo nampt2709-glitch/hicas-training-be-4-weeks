@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V2.Controllers;
 
-// Refresh token — hỗ trợ quản trị / debug: phân trang tổng và theo user; xóa mềm bản ghi hash. Chỉ Admin.
+// V2 — đầy đủ route so với V1: có GET by-user/{id}; phân trang tổng + theo user; xóa mềm hash. Chỉ Admin.
 [ApiController]
 [ApiVersion("2.0")]
 [Authorize(Roles = ApiAuthorization.AdminOnly)]

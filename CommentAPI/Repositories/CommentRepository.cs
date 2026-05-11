@@ -350,7 +350,7 @@ WHERE ({1} IS NULL OR CreatedAt >= {1}) AND ({2} IS NULL OR CreatedAt <= {2})
     } // Kết thúc LoadRawCteAsync.
 
     // --- Demo loading (lazy / eager / explicit / projection) ---
-    // Hợp đồng chung: cùng một CommentLoadingDemoDto — chỉ cần Post.Title, User.UserName, và số Children trực tiếp.
+    // Hợp đồng chung: cùng một CommentLoadingDemoDto — chỉ cần Post.Title, User.UserName, và số trả lời trực tiếp (Reply.Count → ChildrenCount DTO).
     // Không nạp Parent: DTO không hiển thị cha; nạp Parent ở một nhánh làm lệch số round-trip và mục tiêu so sánh.
     // Phân trang: cùng ApplyUniversalFilter, LongCount (khi paged), ApplyUniversalSorting, Skip/Take hoặc ToList — bốn demo đều nhìn thấy cùng một khung bước trong thân hàm.
 
@@ -387,7 +387,7 @@ WHERE ({1} IS NULL OR CreatedAt >= {1}) AND ({2} IS NULL OR CreatedAt <= {2})
             ? await ordered.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(cancellationToken)
             : await ordered.ToListAsync(cancellationToken);
 
-        // BƯỚC 5 — Duyệt từng comment: đọc Post?.Title, User?.UserName, Children.Count (có thể phát sinh thêm SQL lazy).
+        // BƯỚC 5 — Duyệt từng comment: đọc Post?.Title, User?.UserName, Reply.Count (có thể phát sinh thêm SQL lazy).
         var list = new List<CommentLoadingDemoDto>(rows.Count); // Cấp phát sẵn dung lượng.
         foreach (var comment in rows) // Duyệt từng comment đã nạp.
         { // Mở khối foreach.
@@ -402,7 +402,7 @@ WHERE ({1} IS NULL OR CreatedAt >= {1}) AND ({2} IS NULL OR CreatedAt <= {2})
                 UserId = comment.UserId, // User.
                 AuthorUserName = comment.User?.UserName, // Có thể lazy User.
                 ParentId = comment.ParentId, // Cha.
-                ChildrenCount = comment.Children.Count // Có thể lazy Children.
+                ChildrenCount = comment.Reply.Count // Có thể lazy collection Reply.
             }); // Kết thúc Add.
         } // Kết thúc foreach.
 
@@ -438,11 +438,11 @@ WHERE ({1} IS NULL OR CreatedAt >= {1}) AND ({2} IS NULL OR CreatedAt <= {2})
         var total = paginationEnabled // Nếu phân trang thì đếm trước trên query chưa Include (tránh đếm sai do join).
             ? await baseQuery.LongCountAsync(cancellationToken) // Tổng dòng khớp filter thuần.
             : 0L; // Unpaged: tạm 0; sẽ gán = list.Count sau khi nạp.
-        // BƯỚC 3 — Include Post/User/Children + AsSplitQuery rồi ApplyUniversalSorting trước Skip/Take.
+        // BƯỚC 3 — Include Post/User/Reply + AsSplitQuery rồi ApplyUniversalSorting trước Skip/Take.
         var withNav = baseQuery // Query đã lọc.
             .Include(c => c.Post) // Nạp Post.
             .Include(c => c.User) // Nạp User.
-            .Include(c => c.Children) // Nạp Children.
+            .Include(c => c.Reply) // Nạp tập trả lời trực tiếp (navigation Reply).
             .AsSplitQuery(); // Tách query.
         var s = sort ?? CommentListSortDefault;
         var query = ApplyUniversalSorting(withNav, s); // Sort theo cột entity sau Include (EF dịch ổn định).
@@ -463,7 +463,7 @@ WHERE ({1} IS NULL OR CreatedAt >= {1}) AND ({2} IS NULL OR CreatedAt <= {2})
             UserId = comment.UserId, // User.
             AuthorUserName = comment.User?.UserName, // Đã Include.
             ParentId = comment.ParentId, // Cha.
-            ChildrenCount = comment.Children.Count // Đã nạp collection.
+            ChildrenCount = comment.Reply.Count // Đã nạp collection Reply.
         }); // Kết thúc ConvertAll.
 
         if (!paginationEnabled) // Ở chế độ unpaged.
@@ -510,10 +510,10 @@ WHERE ({1} IS NULL OR CreatedAt >= {1}) AND ({2} IS NULL OR CreatedAt <= {2})
         var list = new List<CommentLoadingDemoDto>(rows.Count); // Danh sách đích.
         foreach (var comment in rows) // Từng dòng trang.
         { // Mở khối.
-            // 5a — Ba lần LoadAsync (Post, User, Children) — explicit loading, tách round-trip.
+            // 5a — Ba lần LoadAsync (Post, User, Reply) — explicit loading, tách round-trip.
             await _context.Entry(comment).Reference(c => c.Post).LoadAsync(cancellationToken); // SQL: nạp Post.
             await _context.Entry(comment).Reference(c => c.User).LoadAsync(cancellationToken); // SQL: nạp User.
-            await _context.Entry(comment).Collection(c => c.Children).LoadAsync(cancellationToken); // SQL: nạp Children.
+            await _context.Entry(comment).Collection(c => c.Reply).LoadAsync(cancellationToken); // SQL: nạp Reply.
 
             // 5b — Thêm CommentLoadingDemoDto (nhãn "explicit") sau khi đã nạp đủ quan hệ.
             list.Add(new CommentLoadingDemoDto // Thêm DTO sau khi nạp.
@@ -527,7 +527,7 @@ WHERE ({1} IS NULL OR CreatedAt >= {1}) AND ({2} IS NULL OR CreatedAt <= {2})
                 UserId = comment.UserId, // User.
                 AuthorUserName = comment.User?.UserName, // Đã Load.
                 ParentId = comment.ParentId, // Cha.
-                ChildrenCount = comment.Children.Count // Đã Load collection.
+                ChildrenCount = comment.Reply.Count // Đã Load collection Reply.
             }); // Kết thúc Add.
         } // Kết thúc foreach.
 
@@ -576,7 +576,7 @@ WHERE ({1} IS NULL OR CreatedAt >= {1}) AND ({2} IS NULL OR CreatedAt <= {2})
                 UserId = c.UserId, // User.
                 AuthorUserName = c.User != null ? c.User.UserName : null, // UserName trong SQL.
                 ParentId = c.ParentId, // Cha.
-                ChildrenCount = c.Children.Count() // Đếm con trong SQL.
+                ChildrenCount = c.Reply.Count() // Đếm Reply trong SQL (cùng quan hệ ParentId).
             });
         query = ApplyUniversalSorting(query, s); // OrderBy trên DTO sau Select.
         // BƯỚC 4 — Skip/Take một trang hoặc ToList toàn bộ DTO; unpaged gán total = items.Count.

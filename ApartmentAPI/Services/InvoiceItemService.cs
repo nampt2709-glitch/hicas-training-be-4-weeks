@@ -27,14 +27,12 @@ public interface IInvoiceItemService
 }
 
 // CRUD InvoiceItem: kiểm tra InvoiceId + ServiceId (UtilityService).
-public sealed class InvoiceItemService : IInvoiceItemService
+public sealed class InvoiceItemService : ServiceBase, IInvoiceItemService
 {
     private readonly IInvoiceItemRepository _repository; // Dòng hóa đơn.
     private readonly IInvoiceRepository _invoices; // FK InvoiceId.
     private readonly IUtilityServiceRepository _services; // FK dịch vụ tiện ích.
     private readonly IMapper _mapper; // Map InvoiceItem ↔ DTO.
-    private readonly IEntityResponseCache _cache; // Cache JSON.
-    private readonly ICacheListEpochStore _listEpoch; // Epoch danh sách dòng hóa đơn.
 
     public InvoiceItemService(
         IInvoiceItemRepository repository,
@@ -43,18 +41,17 @@ public sealed class InvoiceItemService : IInvoiceItemService
         IMapper mapper,
         IEntityResponseCache cache,
         ICacheListEpochStore listEpoch)
+        : base(cache, listEpoch)
     { // Mở khối constructor.
         _repository = repository;
         _invoices = invoices;
         _services = services;
         _mapper = mapper;
-        _cache = cache;
-        _listEpoch = listEpoch;
     } // Kết thúc constructor.
 
     private static bool HasListFilter(
         DateTime? createdAtFrom, DateTime? createdAtTo, Guid? invoiceId, Guid? serviceId) =>
-        createdAtFrom.HasValue || createdAtTo.HasValue || invoiceId.HasValue || serviceId.HasValue;
+        HasCreatedAtFilter(createdAtFrom, createdAtTo) || invoiceId.HasValue || serviceId.HasValue;
 
     public async Task<PagedResult<InvoiceItemDto>> GetPagedAsync(
         int page,
@@ -71,9 +68,9 @@ public sealed class InvoiceItemService : IInvoiceItemService
 
         if (!HasListFilter(createdAtFrom, createdAtTo, invoiceId, serviceId))
         {
-            var epoch = await _listEpoch.GetInvoiceItemsListEpochAsync(ct);
+            var epoch = await ListEpoch.GetInvoiceItemsListEpochAsync(ct);
             var key = EntityCacheKeys.InvoiceItemsPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            var cached = await _cache.GetJsonAsync<PagedResult<InvoiceItemDto>>(key, ct);
+            var cached = await Cache.GetJsonAsync<PagedResult<InvoiceItemDto>>(key, ct);
             if (cached is not null)
                 return cached;
         }
@@ -86,9 +83,9 @@ public sealed class InvoiceItemService : IInvoiceItemService
 
         if (!HasListFilter(createdAtFrom, createdAtTo, invoiceId, serviceId))
         {
-            var epoch = await _listEpoch.GetInvoiceItemsListEpochAsync(ct);
+            var epoch = await ListEpoch.GetInvoiceItemsListEpochAsync(ct);
             var cacheKey = EntityCacheKeys.InvoiceItemsPaged(epoch, page, pageSize, sortSpec.CacheSegment, sortSpec.Descending);
-            await _cache.SetJsonAsync(cacheKey, result, ct);
+            await Cache.SetJsonAsync(cacheKey, result, ct);
         }
 
         return result;
@@ -97,7 +94,7 @@ public sealed class InvoiceItemService : IInvoiceItemService
     public async Task<InvoiceItemDto> GetByIdAsync(Guid id, CancellationToken ct = default)
     { // Mở khối GetByIdAsync.
         var key = EntityCacheKeys.InvoiceItem(id);
-        var cached = await _cache.GetJsonAsync<InvoiceItemDto>(key, ct);
+        var cached = await Cache.GetJsonAsync<InvoiceItemDto>(key, ct);
         if (cached is not null)
             return cached;
 
@@ -105,7 +102,7 @@ public sealed class InvoiceItemService : IInvoiceItemService
         if (entity is null)
             throw ApiException.NotFound(ApiErrorCodes.NotFound, "Invoice item not found.");
         var dto = _mapper.Map<InvoiceItemDto>(entity);
-        await _cache.SetJsonAsync(key, dto, ct);
+        await Cache.SetJsonAsync(key, dto, ct);
         return dto;
     } // Kết thúc GetByIdAsync.
 
@@ -117,8 +114,8 @@ public sealed class InvoiceItemService : IInvoiceItemService
         await _repository.AddAsync(entity, ct);
         await _repository.SaveChangesAsync(ct);
         var dtoOut = _mapper.Map<InvoiceItemDto>(entity);
-        await _cache.SetJsonAsync(EntityCacheKeys.InvoiceItem(entity.Id), dtoOut, ct);
-        await _listEpoch.InvalidateInvoiceItemsListsAsync(ct);
+        await Cache.SetJsonAsync(EntityCacheKeys.InvoiceItem(entity.Id), dtoOut, ct);
+        await ListEpoch.InvalidateInvoiceItemsListsAsync(ct);
         return dtoOut;
     } // Kết thúc CreateAsync.
 
@@ -132,16 +129,16 @@ public sealed class InvoiceItemService : IInvoiceItemService
         _mapper.Map(dto, tracked);
         _repository.Update(tracked);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.InvoiceItem(id), ct);
-        await _listEpoch.InvalidateInvoiceItemsListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.InvoiceItem(id), ct);
+        await ListEpoch.InvalidateInvoiceItemsListsAsync(ct);
     } // Kết thúc UpdateAsync.
 
     public async Task SoftDeleteAsync(Guid id, string? deletedBy, CancellationToken ct = default)
     { // Mở khối SoftDeleteAsync.
         await _repository.SoftDeleteAsync(id, deletedBy, ct);
         await _repository.SaveChangesAsync(ct);
-        await _cache.RemoveAsync(EntityCacheKeys.InvoiceItem(id), ct);
-        await _listEpoch.InvalidateInvoiceItemsListsAsync(ct);
+        await Cache.RemoveAsync(EntityCacheKeys.InvoiceItem(id), ct);
+        await ListEpoch.InvalidateInvoiceItemsListsAsync(ct);
     } // Kết thúc SoftDeleteAsync.
 
     private async Task EnsureFkAsync(Guid invoiceId, Guid serviceId, CancellationToken ct)

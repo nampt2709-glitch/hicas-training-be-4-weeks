@@ -1,6 +1,6 @@
 namespace CommentAPI.Entities;
 
-// Bình luận: ForeignKey PostId, UserId; cây qua ParentId/Children; virtual cho lazy proxy khi bật UseLazyLoadingProxies.
+// Bình luận: ForeignKey PostId, UserId; cây qua ParentId/Reply; virtual cho lazy proxy khi bật UseLazyLoadingProxies.
 public class Comment
 {
     public Guid Id { get; set; } // Khóa chính comment, Guid tạo khi insert.
@@ -16,5 +16,5 @@ public class Comment
     public Guid? ParentId { get; set; } // Id comment cha, null nghĩa là gốc cây trong cùng post.
     public virtual Comment? Parent { get; set; } // Navigation tùy chọn: phía cha, virtual cho path leo cây.
 
-    public virtual ICollection<Comment> Children { get; set; } = new List<Comment>(); // Các bản ghi con (reply), tập dùng cho lazy/INCLUDE.
+    public virtual ICollection<Comment> Reply { get; set; } = new List<Comment>(); // Các bản ghi trả lời (con trực tiếp), tập dùng cho lazy/INCLUDE.
 } // Kết thúc lớp Comment.

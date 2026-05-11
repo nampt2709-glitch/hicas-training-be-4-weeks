@@ -5,12 +5,12 @@ using ApartmentAPI.V1.DTOs; // DTO feedback phiên bản 1.
 using ApartmentAPI.Versioning; // ApiVersionRouteValues.WithVersion.
 using Asp.Versioning; // [ApiVersion].
 using ApartmentAPI.Authorization; // ApiAuthorization — chuỗi role thống nhất; gộp với [Authorize] trên action admin.
-using Microsoft.AspNetCore.Authorization; // [Authorize(Roles = ...)] — lớp: Admin/User; PUT .../admin: chỉ Admin.
+using Microsoft.AspNetCore.Authorization; // [Authorize(Roles = ...)] — lớp: Admin/User.
 using Microsoft.AspNetCore.Mvc; // ControllerBase, IActionResult.
 
 namespace ApartmentAPI.V1.Controllers;
 
-// Phản hồi — có cây: route “roots” chỉ nút không cha; có thể lọc theo user. Admin hoặc User; riêng PUT .../admin chỉ Admin.
+// V1 — CRUD feedback cơ bản + danh sách phân trang. by-user, roots, PUT …/admin → API v2.0.
 [ApiController]
 [ApiVersion("1.0")]
 [Authorize(Roles = ApiAuthorization.AdminOrUser)]
@@ -47,41 +47,6 @@ public class FeedbacksController : ControllerBase
         return Ok(new { message = ApiMessages.FeedbackGetSuccess, data });
     }
 
-    [HttpGet("by-user/{userId:guid}")]
-    public async Task<IActionResult> GetByUser(
-        Guid userId,
-        [FromQuery] string? page,
-        [FromQuery] string? pageSize,
-        [FromQuery] DateTime? createdAtFrom = null,
-        [FromQuery] DateTime? createdAtTo = null,
-        [FromQuery] string? contentContains = null,
-        [FromQuery] string? sort = null,
-        [FromQuery] string? sortDir = null,
-        CancellationToken ct = default)
-    {
-        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
-        var data = await _service.GetPagedAsync(p, s, createdAtFrom, createdAtTo, userId, false, contentContains, sort, sortDir, ct);
-        return Ok(new { message = ApiMessages.FeedbackListSuccess, data });
-    }
-
-    [HttpGet("roots")]
-    public async Task<IActionResult> GetRoots(
-        [FromQuery] string? page,
-        [FromQuery] string? pageSize,
-        [FromQuery] DateTime? createdAtFrom = null,
-        [FromQuery] DateTime? createdAtTo = null,
-        [FromQuery] string? contentContains = null,
-        [FromQuery] string? sort = null,
-        [FromQuery] string? sortDir = null,
-        CancellationToken ct = default)
-    {
-        CreatedAtRangeQuery.ValidateOrThrow(createdAtFrom, createdAtTo);
-        var (p, s) = PaginationQuery.ParseFromQuery(page, pageSize);
-        var data = await _service.GetPagedAsync(p, s, createdAtFrom, createdAtTo, null, true, contentContains, sort, sortDir, ct);
-        return Ok(new { message = ApiMessages.FeedbackListSuccess, data });
-    }
-
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateFeedbackDto dto, CancellationToken ct)
     {
@@ -93,15 +58,6 @@ public class FeedbacksController : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateFeedbackDto dto, CancellationToken ct)
     {
         await _service.UpdateAsync(id, dto, ct);
-        return Ok(new { message = ApiMessages.Ok });
-    }
-
-    // PUT .../feedbacks/{id}/admin — đổi UserId, ParentId, nội dung, cờ; chặn ParentId tạo chu trình (FeedbackService).
-    [HttpPut("{id:guid}/admin")]
-    [Authorize(Roles = ApiAuthorization.AdminOnly)]
-    public async Task<IActionResult> UpdateAsAdmin(Guid id, [FromBody] AdminUpdateFeedbackDto dto, CancellationToken ct)
-    {
-        await _service.UpdateAsAdminAsync(id, dto, ct);
         return Ok(new { message = ApiMessages.Ok });
     }
 
